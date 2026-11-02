@@ -14,10 +14,18 @@
 
 .dark {
   --surface-canvas: #090d16;
-  --surface-panel: #111827;
-  --surface-muted: #1e293b;
+  --surface-panel: #0f172a;
+  --surface-muted: #020617;
   --border-subtle: rgba(51, 65, 85, 0.65);
-  --text-primary: #f1f5f9;
+  --text-primary: #ffffff;
   --text-secondary: #94a3b8;
   --accent-pitch: #10b981;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent-pitch);
+  outline-offset: 2px;
 }

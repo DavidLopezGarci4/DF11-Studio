@@ -101,7 +101,7 @@ export default function RegensSyncView({ clubs, vaultDir, exportDir, storageHeal
       )}
 
       {/* Main Sync Console */}
-      <section className="rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white dark:bg-[#111827] divide-y divide-slate-200/80 dark:divide-slate-800/80">
+      <section className="rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-200/80 dark:divide-slate-800">
         <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
           <div className="space-y-1">
             <span className="font-semibold text-slate-900 dark:text-slate-100">1. Bóveda NG_Regens (Solo lectura · Cero .bak)</span>

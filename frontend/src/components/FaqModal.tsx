@@ -103,8 +103,8 @@ export default function FaqModal({ onClose }: { onClose: () => void }) {
   const setAllOpen = (val: boolean) => setOpenIds(Object.fromEntries(allItemIds.map((id) => [id, val])));
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-      <div className="w-full max-w-5xl max-h-[86vh] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] text-slate-900 dark:text-slate-100 flex flex-col overflow-hidden">
+    <div onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+      <div className="w-full max-w-5xl max-h-[86vh] rounded-xl shadow-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white flex flex-col overflow-hidden">
         <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 font-semibold text-sm">
             <HelpCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" /> Centro de Ayuda &amp; FAQ
@@ -133,7 +133,12 @@ export default function FaqModal({ onClose }: { onClose: () => void }) {
           </aside>
 
           <div className="md:col-span-8 p-5 space-y-5 max-w-3xl">
-            {filtered.map((sec) => (
+            {filtered.length === 0 ? (
+              <div className="py-10 text-center space-y-2 text-xs text-slate-600 dark:text-slate-400">
+                <p>Sin coincidencias para <strong className="text-slate-900 dark:text-white">“{query}”</strong>.</p>
+                <button type="button" onClick={() => { setQuery(''); setActiveSec('all'); }} className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium">Limpiar búsqueda</button>
+              </div>
+            ) : filtered.map((sec) => (
               <div key={sec.id} className="space-y-2">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">{sec.title}</h3>
                 <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg">
@@ -141,10 +146,10 @@ export default function FaqModal({ onClose }: { onClose: () => void }) {
                     const isOpen = Boolean(qNorm) || Boolean(openIds[it.id]);
                     return (
                       <div key={it.id} className="p-3.5 text-xs">
-                        <button type="button" onClick={() => setOpenIds((p) => ({ ...p, [it.id]: !isOpen }))} className="w-full min-h-[36px] flex items-center justify-between gap-2 text-left font-semibold text-slate-900 dark:text-slate-100">
+                        <button type="button" onClick={() => setOpenIds((p) => ({ ...p, [it.id]: !isOpen }))} className="w-full min-h-[36px] flex items-center justify-between gap-2 text-left font-semibold text-slate-900 dark:text-white">
                           <span>{it.question}</span>
                           <span className="inline-flex items-center gap-1.5 shrink-0">
-                            {it.badge && <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 text-[11px]">{it.badge}</span>}
+                            {it.badge && <span className="px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 text-[11px]">{it.badge}</span>}
                             {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                           </span>
                         </button>

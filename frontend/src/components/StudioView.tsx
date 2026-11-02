@@ -111,9 +111,9 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-      <section className="lg:col-span-5 rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white dark:bg-[#111827] p-5 flex flex-col items-center gap-4">
+      <section className="lg:col-span-5 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 flex flex-col items-center gap-4">
         <div className="w-full flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
-          <span className="font-medium text-slate-900 dark:text-slate-100">Lienzo Oficial DF11</span>
+          <span className="font-medium text-slate-900 dark:text-white">Lienzo Oficial DF11</span>
           <span className="tabular-nums font-mono">260 × 310 px</span>
         </div>
 
@@ -159,7 +159,7 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
         </div>
       </section>
 
-      <section className="lg:col-span-7 rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white dark:bg-[#111827] divide-y divide-slate-200/80 dark:divide-slate-800/80">
+      <section className="lg:col-span-7 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-200/80 dark:divide-slate-800">
         <div className="p-4 flex items-center justify-between gap-4">
           <div>
             <h2 className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">Capa 3 · Marco Maestro DF11</h2>

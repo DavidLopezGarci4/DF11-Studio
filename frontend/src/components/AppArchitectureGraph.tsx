@@ -176,8 +176,8 @@ export default function AppArchitectureGraph({ onClose }: Props) {
   const neighbors = prepared.adj.get(selectedNode.id) ?? [];
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/70 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-      <div className="w-full max-w-5xl max-h-[88vh] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] text-slate-900 dark:text-slate-100 flex flex-col overflow-hidden">
+    <div onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} className="fixed inset-0 z-50 bg-slate-950/70 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+      <div className="w-full max-w-5xl max-h-[88vh] rounded-xl shadow-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white flex flex-col overflow-hidden">
         <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <Network className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />

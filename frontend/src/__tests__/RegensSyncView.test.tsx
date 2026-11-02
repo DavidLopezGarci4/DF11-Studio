@@ -29,6 +29,7 @@ describe('RegensSyncView FM27 & NG_Regens contract', () => {
     );
     expect(screen.getByText(/--user_data_location="D:\\FM27 Data"/i)).toBeInTheDocument();
     expect(screen.getByText(/Game Pass/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/Bóveda sin regens/i)).toBeInTheDocument());
   });
 
   it('triggers 1-click jump into Studio when editing a discovered regen', async () => {

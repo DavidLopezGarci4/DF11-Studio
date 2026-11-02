@@ -29,19 +29,19 @@ export default function AboutModal({ onClose, onOpenGraph }: Props) {
   const latest = userChangelog.versions[0];
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-      <div className="w-full max-w-xl rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] text-slate-900 dark:text-slate-100 divide-y divide-slate-200 dark:divide-slate-800 overflow-hidden">
+    <div onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+      <div className="w-full max-w-xl rounded-xl shadow-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white divide-y divide-slate-200/80 dark:divide-slate-800 overflow-hidden">
         <div className="p-5 flex items-start justify-between gap-4">
           <div className="flex items-center gap-3.5">
-            <img src="./icon-128.png" alt="Logo DF11 Face Studio" className="w-12 h-12 rounded-xl border border-slate-200 dark:border-slate-700" />
+            <img src="./icon-128.png" alt="Logo DF11 Face Studio" className="w-12 h-12 rounded-xl border border-slate-200/80 dark:border-slate-800" />
             <div>
-              <h2 className="font-semibold text-base">{userChangelog.appName}</h2>
+              <h2 className="font-semibold text-base text-slate-900 dark:text-white">{userChangelog.appName}</h2>
               <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">{userChangelog.appDescription}</p>
               <div className="flex flex-wrap items-center gap-1.5 mt-2 text-[11px] tabular-nums">
-                <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-medium">v{userChangelog.currentVersion}</span>
-                <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">Build {userChangelog.buildNumber}</span>
-                <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">Windows PC</span>
-                <span className="px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-700 dark:text-sky-400 inline-flex items-center gap-1"><ShieldCheck className="w-3 h-3" /> 100% Local · 0 €</span>
+                <span className="px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 font-medium">v{userChangelog.currentVersion}</span>
+                <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-950 text-slate-700 dark:text-slate-300">Build {userChangelog.buildNumber}</span>
+                <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-950 text-slate-700 dark:text-slate-300">Windows PC</span>
+                <span className="px-2 py-0.5 rounded-full border bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/20 inline-flex items-center gap-1"><ShieldCheck className="w-3 h-3" /> 100% Local · 0 €</span>
               </div>
             </div>
           </div>
