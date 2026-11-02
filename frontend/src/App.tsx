@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { HelpCircle, Info, Moon, Sun } from 'lucide-react';
 import AboutModal from './components/AboutModal';
 import FaqModal from './components/FaqModal';
 import RegensSyncView from './components/RegensSyncView';
 import StudioView, { StudioJumpPayload } from './components/StudioView';
 import { BootstrapState, StorageHealth, callBridge } from './lib/ipc';
+
+const AppArchitectureGraph = lazy(() => import('./components/AppArchitectureGraph'));
 
 export default function App() {
   const [dark, setDark] = useState(() => localStorage.getItem('df11_theme') !== 'light');
@@ -73,6 +75,9 @@ export default function App() {
       </main>
       {modal === 'faq' && <FaqModal onClose={() => setModal(null)} />}
       {modal === 'about' && <AboutModal onClose={() => setModal(null)} onOpenGraph={() => setModal('graph')} />}
+      <Suspense fallback={null}>
+        {modal === 'graph' && <AppArchitectureGraph onClose={() => setModal(null)} />}
+      </Suspense>
     </div>
   );
 }
