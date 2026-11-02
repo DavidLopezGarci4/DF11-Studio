@@ -32,7 +32,8 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 dark:bg-[#090d16] dark:text-slate-100">
       <header className="h-14 px-5 border-b border-slate-200/80 dark:border-slate-800/80 bg-white dark:bg-[#111827] flex items-center justify-between">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
+          <img src="./icon-128.png" alt="Logo DF11 Face Studio" className="w-7 h-7 rounded-md" />
           <span className="font-semibold tracking-tight text-sm">DF11 Face Studio</span>
           <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 tabular-nums">v{boot?.version ?? '1.0.0'}</span>
         </div>
