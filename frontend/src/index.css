@@ -1,0 +1,23 @@
+@import "D:/DF11Studio/web_toolchain/node_modules/tailwindcss/index.css";
+@source "./";
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --surface-canvas: #f8fafc;
+  --surface-panel: #ffffff;
+  --surface-muted: #f1f5f9;
+  --border-subtle: rgba(148, 163, 184, 0.35);
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --accent-pitch: #059669;
+}
+
+.dark {
+  --surface-canvas: #090d16;
+  --surface-panel: #111827;
+  --surface-muted: #1e293b;
+  --border-subtle: rgba(51, 65, 85, 0.65);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --accent-pitch: #10b981;
+}
