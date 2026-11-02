@@ -13,11 +13,15 @@ def test_brand_masters_and_png_ladder_exist() -> None:
     brand_dir = WORKSPACE_ROOT / "brand"
     assert (brand_dir / "master-1024.png").is_file()
     assert (brand_dir / "mark-mono.svg").is_file()
+    assert (brand_dir / "mark-mono.png").is_file()
     palette = json.loads((brand_dir / "palette.json").read_text(encoding="utf-8"))
+    for key in ("primary", "secondary", "edge", "onDark", "onLight", "accent"):
+        assert key in palette
     assert palette["accent"] == "#10B981"
 
     master = Image.open(brand_dir / "master-1024.png")
     assert master.size == (1024, 1024) and master.mode == "RGBA"
+    assert master.getpixel((4, 4))[3] == 0 and master.getpixel((512, 512))[3] == 255
 
     for s in (16, 24, 32, 48, 64, 128, 256, 512, 1024):
         p = ASSETS_DIR / "icons" / f"icon-{s}.png"

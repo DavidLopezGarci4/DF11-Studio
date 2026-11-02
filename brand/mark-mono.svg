@@ -1,1 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none"><rect x="52" y="32" width="152" height="192" rx="22" stroke="currentColor" stroke-width="14"/><circle cx="128" cy="104" r="28" fill="currentColor"/><path d="M80 198c8-28 30-44 48-44s40 16 48 44" fill="currentColor"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <!-- Isometric 3-Layer Prism Monochrome Silhouette (A2) -->
+  <path d="M52 78 L116 42 C122 39 128 43 128 50 V162 L64 198 C58 201 52 197 52 190 Z" fill="currentColor" fill-opacity="0.45"/>
+  <path d="M88 94 L156 56 C162 53 168 57 168 64 V178 L100 216 C94 219 88 215 88 208 Z" stroke="currentColor" stroke-width="12" stroke-linejoin="round"/>
+  <circle cx="128" cy="118" r="18" fill="currentColor"/>
+  <path d="M104 176 C108 154 118 144 128 144 C138 144 148 154 152 176 Z" fill="currentColor"/>
+  <path d="M124 112 L192 74 C198 71 204 75 204 82 V194 C204 200 200 205 194 208 L136 240 C130 243 124 239 124 232 Z" stroke="currentColor" stroke-width="16" stroke-linejoin="round"/>
+</svg>

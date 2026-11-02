@@ -1,7 +1,12 @@
 {
+  "primary": "#10B981",
+  "secondary": "#38BDF8",
+  "edge": "#0C1119",
+  "onDark": "#F8FAFC",
+  "onLight": "#090D16",
+  "accent": "#10B981",
   "canvas": "#090D16",
   "surface": "#111827",
-  "accent": "#10B981",
   "frame": "#F8FAFC",
   "guide": "#38BDF8"
 }
