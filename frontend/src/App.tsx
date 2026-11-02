@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Moon, Sun } from 'lucide-react';
+import RegensSyncView from './components/RegensSyncView';
 import StudioView, { StudioJumpPayload } from './components/StudioView';
-import { BootstrapState, callBridge } from './lib/ipc';
+import { BootstrapState, StorageHealth, callBridge } from './lib/ipc';
 
 export default function App() {
   const [dark, setDark] = useState(() => localStorage.getItem('df11_theme') !== 'light');
   const [tab, setTab] = useState<'studio' | 'sync'>('studio');
   const [boot, setBoot] = useState<BootstrapState | null>(null);
+  const [vaultDir, setVaultDir] = useState('D:\\DF11Studio\\NG_Regens_Vault');
   const [exportDir, setExportDir] = useState('D:\\DF11Studio\\Exports\\000_DF11_Regens_Override');
+  const [storageHealth, setStorageHealth] = useState<StorageHealth | null>(null);
   const [studioJump, setStudioJump] = useState<StudioJumpPayload | null>(null);
 
   useEffect(() => {
@@ -18,7 +21,9 @@ export default function App() {
   useEffect(() => {
     callBridge<BootstrapState>('get_bootstrap_state').then((b) => {
       setBoot(b);
+      if (b?.vaultDir) setVaultDir(b.vaultDir);
       if (b?.exportDir) setExportDir(b.exportDir);
+      if (b?.storageHealth) setStorageHealth(b.storageHealth);
     });
   }, []);
 
@@ -43,7 +48,15 @@ export default function App() {
         {tab === 'studio' ? (
           <StudioView clubs={boot?.clubs ?? {}} exportDir={exportDir} onExportDirChange={setExportDir} initialJump={studioJump} />
         ) : (
-          <p className="text-sm text-slate-600 dark:text-slate-400" data-jump={Boolean(setStudioJump)}>Sincronizador NG_Regens listo.</p>
+          <RegensSyncView
+            clubs={boot?.clubs ?? {}}
+            vaultDir={vaultDir}
+            exportDir={exportDir}
+            storageHealth={storageHealth}
+            onVaultChange={setVaultDir}
+            onExportChange={(dir, sh) => { setExportDir(dir); if (sh) setStorageHealth(sh); }}
+            onJumpToStudio={(payload) => { setStudioJump(payload); setTab('studio'); }}
+          />
         )}
       </main>
     </div>
