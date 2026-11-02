@@ -1,0 +1,23 @@
+[project]
+name = "df11-face-studio"
+version = "1.0.0"
+description = "Lightweight offline DF11 Face Studio & FM27 NG_Regens Live Sync (DirectML)"
+requires-python = ">=3.12"
+dependencies = [
+    "pillow>=11.0.0",
+    "pillow-avif-plugin>=1.4.6",
+    "numpy>=1.26.4",
+    "onnxruntime-directml>=1.19.0",
+    "defusedxml>=0.7.1",
+    "pywebview>=5.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q -p no:cacheprovider"
