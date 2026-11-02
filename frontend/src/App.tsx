@@ -16,6 +16,7 @@ export default function App() {
   const [vaultDir, setVaultDir] = useState('D:\\DF11Studio\\NG_Regens_Vault');
   const [exportDir, setExportDir] = useState('D:\\DF11Studio\\Exports\\000_DF11_Regens_Override');
   const [storageHealth, setStorageHealth] = useState<StorageHealth | null>(null);
+  const [liveWatching, setLiveWatching] = useState(false);
   const [studioJump, setStudioJump] = useState<StudioJumpPayload | null>(null);
 
   useEffect(() => {
@@ -29,6 +30,7 @@ export default function App() {
       if (b?.vaultDir) setVaultDir(b.vaultDir);
       if (b?.exportDir) setExportDir(b.exportDir);
       if (b?.storageHealth) setStorageHealth(b.storageHealth);
+      if (typeof b?.liveWatching === 'boolean') setLiveWatching(b.liveWatching);
     });
   }, []);
 
@@ -60,13 +62,21 @@ export default function App() {
       </header>
       <main className="flex-1 p-5 max-w-6xl w-full mx-auto">
         {tab === 'studio' ? (
-          <StudioView clubs={boot?.clubs ?? {}} exportDir={exportDir} onExportDirChange={setExportDir} initialJump={studioJump} />
+          <StudioView
+            clubs={boot?.clubs ?? {}}
+            exportDir={exportDir}
+            onExportDirChange={(dir, sh) => { setExportDir(dir); if (sh) setStorageHealth(sh); }}
+            initialJump={studioJump}
+            onConsumeJump={() => setStudioJump(null)}
+          />
         ) : (
           <RegensSyncView
             clubs={boot?.clubs ?? {}}
             vaultDir={vaultDir}
             exportDir={exportDir}
             storageHealth={storageHealth}
+            liveWatch={liveWatching}
+            onLiveWatchChange={setLiveWatching}
             onVaultChange={setVaultDir}
             onExportChange={(dir, sh) => { setExportDir(dir); if (sh) setStorageHealth(sh); }}
             onJumpToStudio={(payload) => { setStudioJump(payload); setTab('studio'); }}

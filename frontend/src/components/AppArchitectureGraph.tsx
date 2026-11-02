@@ -25,8 +25,8 @@ export default function AppArchitectureGraph({ onClose }: Props) {
 
   const runHealthProbe = useCallback(async () => {
     try {
-      const res = await callBridge<HealthProbe>('probe_architecture_health');
-      if (res) setHealth(res);
+      const res = await callBridge<HealthProbe | null>('probe_architecture_health');
+      if (res && typeof res.sqliteLatencyMs === 'number') setHealth(res);
     } catch {
       setHealth(null);
     }
