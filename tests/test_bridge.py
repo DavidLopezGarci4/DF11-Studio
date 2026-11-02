@@ -47,3 +47,46 @@ def test_bridge_loads_regen_from_vault_into_studio(tmp_path: Path) -> None:
     assert bridge.scan_vault_summary()["totalFound"] == 1
     jumped = bridge.load_regen_into_studio("r-7788")
     assert jumped["uid"] == "r-7788" and jumped["previewDataUrl"].startswith("data:image/png;base64,")
+
+
+def test_bridge_kit_preview_isolation_extract_bg_and_watcher_lifecycle(tmp_path: Path) -> None:
+    from backend.services.kits import resolve_club_kit
+
+    vault, out_dir, db = tmp_path / "vault_ro", tmp_path / "out_ok", tmp_path / "state.sqlite3"
+    vault.mkdir(parents=True)
+    bridge = StudioBridge(vault_dir=vault, export_dir=out_dir, db_path=db)
+
+    with pytest.raises(ValueError):
+        bridge.export_studio_card({"uid": "29184012"})
+
+    bridge.upload_studio_image(_sample_png_data_url(), remove_bg=False, harmonize=False, params={"kitMode": "club", "clubId": "1736"})
+    # Preview with custom pattern/secondary must NOT mutate SQLite until explicit export
+    bridge.render_studio_preview({
+        "removeBg": False, "harmonize": True, "kitMode": "club", "clubId": "1736",
+        "customKitDirty": True, "customPrimary": "#112233", "customSecondary": "#AABBCC", "customPattern": "stripes",
+    })
+    assert resolve_club_kit("1736", db_path=db).tier == "seed"
+
+    # Extract clean background directly from stored raw portrait (works for paste/drop/jump)
+    ext = bridge.extract_studio_background({"removeBg": False, "harmonize": True})
+    assert ext["cleanBgDataUrl"].startswith("data:image/png;base64,") and ext["previewDataUrl"].startswith("data:image/png;base64,")
+
+    # Vault must never be writable as export target
+    with pytest.raises(CapabilityError):
+        bridge.export_studio_card({"uid": "29184012", "outDir": str(vault)})
+
+    # Explicit export persists custom kit override to SQLite
+    bridge.export_studio_card({
+        "uid": "29184012", "kitMode": "club", "clubId": "1736",
+        "customKitDirty": True, "customPrimary": "#112233", "customSecondary": "#AABBCC", "customPattern": "stripes",
+    })
+    saved_kit = resolve_club_kit("1736", db_path=db)
+    assert saved_kit.tier == "custom" and saved_kit.pattern == "stripes" and saved_kit.secondary.upper() == "#AABBCC"
+
+    # Re-toggling live watch stops prior watcher cleanly
+    bridge.toggle_live_watch(True, {"applyClubKits": False, "harmonize": False})
+    first_watcher = bridge._watcher
+    bridge.toggle_live_watch(True, {"applyClubKits": True, "harmonize": True})
+    assert first_watcher._stop.is_set()
+    bridge.toggle_live_watch(False)
+    assert bridge._watcher is None
