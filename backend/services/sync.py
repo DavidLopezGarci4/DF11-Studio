@@ -42,16 +42,14 @@ class SyncResult:
     total_found: int
     processed: int
     skipped: int
+    failed: int = 0
     cancelled: bool = False
     aborted_by_shrink_guard: bool = False
 
 
 def _ensure_sync_tables(db_path: Path | None) -> None:
-    with init_state_db(db_path) as conn:
-        conn.executescript(
-            "CREATE TABLE IF NOT EXISTS squad_map (uid TEXT PRIMARY KEY, club_id TEXT NOT NULL);"
-            "CREATE TABLE IF NOT EXISTS regen_manifest (uid TEXT PRIMARY KEY, mtime_ns INTEGER, size INTEGER, sig TEXT);"
-        )
+    with init_state_db(db_path):
+        pass
 
 
 def detect_ng_regens_app_config() -> Path:
@@ -70,21 +68,24 @@ def scan_ng_regens_vault(vault_dir: Path) -> dict[str, Path]:
         return {}
     vault_root = vault_dir.resolve()
     entries: dict[str, Path] = {}
-    for _ev, elem in SafeET.iterparse(cfg, events=("end",)):
-        if elem.tag == "record":
-            frm, to = elem.attrib.get("from", "").strip(), elem.attrib.get("to", "").strip()
-            m = _PORTRAIT_TO_RE.search(to)
-            if m and frm and not frm.startswith(("\\\\", "//")) and ":" not in frm:
-                rel = Path(frm)
-                if not rel.is_absolute() and ".." not in rel.parts:
-                    cand = (vault_dir / f"{frm}.png").resolve()
-                    try:
-                        cand.relative_to(vault_root)
-                        if cand.is_file():
-                            entries[validate_fm_uid(m.group(1))] = cand
-                    except Exception:
-                        pass
-            elem.clear()
+    try:
+        for _ev, elem in SafeET.iterparse(cfg, events=("end",)):
+            if elem.tag == "record":
+                frm, to = elem.attrib.get("from", "").strip(), elem.attrib.get("to", "").strip()
+                m = _PORTRAIT_TO_RE.search(to)
+                if m and frm and not frm.startswith(("\\\\", "//")) and ":" not in frm:
+                    rel = Path(frm)
+                    if not rel.is_absolute() and ".." not in rel.parts:
+                        cand = (vault_dir / f"{frm}.png").resolve()
+                        try:
+                            cand.relative_to(vault_root)
+                            if cand.is_file():
+                                entries[validate_fm_uid(m.group(1))] = cand
+                        except Exception:
+                            pass
+                elem.clear()
+    except Exception:
+        return {}
     return entries
 
 
@@ -193,6 +194,7 @@ def sync_ng_regens_batch(
             todo.append((uid, src_png, cid))
 
     completed_rows: list[tuple[str, int, int, str]] = []
+    failed = 0
     cancelled = False
     if todo:
         with ThreadPoolExecutor(max_workers=8) as pool:
@@ -203,46 +205,57 @@ def sync_ng_regens_batch(
                     for pending in futs:
                         pending.cancel()
                     break
-                completed_rows.append(fut.result())
+                try:
+                    completed_rows.append(fut.result())
+                except Exception:
+                    failed += 1
                 if progress_cb:
                     progress_cb(idx, len(todo))
     if completed_rows:
         with init_state_db(db_path) as conn:
             conn.executemany("INSERT OR REPLACE INTO regen_manifest VALUES (?, ?, ?, ?)", completed_rows)
-    if entries and not cancelled:
-        upsert_fm_config_xml(out_dir / "config.xml", entries.keys())
-    return SyncResult(len(entries), len(completed_rows), skipped, cancelled=cancelled)
+    exported_uids = [u for u in entries if (out_dir / f"{u}.png").is_file()]
+    if exported_uids:
+        upsert_fm_config_xml(out_dir / "config.xml", exported_uids)
+    return SyncResult(len(entries), len(completed_rows), skipped, failed=failed, cancelled=cancelled)
 
 
 class QuiescentVaultWatcher:
     """650ms Quiescence Debounce monitor preventing race reads while NG_Regens writes config.xml."""
 
-    def __init__(self, vault_dir: Path, on_quiescent: Callable[[], None], quiescence_sec: float = 0.65) -> None:
+    def __init__(self, vault_dir: Path | Callable[[], Path], on_quiescent: Callable[[], None], quiescence_sec: float = 0.65) -> None:
         self.vault_dir, self.on_quiescent, self.quiescence_sec = vault_dir, on_quiescent, quiescence_sec
-        self._pending_sig: tuple[int, int] | None = None
-        self._fired_sig: tuple[int, int] | None = None
+        self._pending_sig: tuple[Path, int, int] | None = None
+        self._fired_sig: tuple[Path, int, int] | None = None
         self._last_change_ts = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
+    def _current_vault(self) -> Path:
+        return self.vault_dir() if callable(self.vault_dir) else self.vault_dir
+
     def poll_once(self) -> bool:
-        cfg = self.vault_dir / "config.xml"
-        if not cfg.is_file() or (st := cfg.stat()).st_size < 16:
+        try:
+            vdir = self._current_vault()
+            cfg = vdir / "config.xml"
+            if not cfg.is_file() or (st := cfg.stat()).st_size < 16:
+                return False
+            sig, now = (vdir, st.st_mtime_ns, st.st_size), time.monotonic()
+            if sig == self._fired_sig:
+                return False
+            if sig != self._pending_sig:
+                self._pending_sig, self._last_change_ts = sig, now
+                return False
+            if (now - self._last_change_ts) >= self.quiescence_sec:
+                with cfg.open("rb") as fh:
+                    fh.seek(max(0, st.st_size - 64))
+                    if b"</record>" not in fh.read():
+                        return False
+                self._fired_sig = sig
+                self.on_quiescent()
+                return True
+        except OSError:
             return False
-        sig, now = (st.st_mtime_ns, st.st_size), time.monotonic()
-        if sig == self._fired_sig:
-            return False
-        if sig != self._pending_sig:
-            self._pending_sig, self._last_change_ts = sig, now
-            return False
-        if (now - self._last_change_ts) >= self.quiescence_sec:
-            with cfg.open("rb") as fh:
-                fh.seek(max(0, st.st_size - 64))
-                if b"</record>" not in fh.read():
-                    return False
-            self._fired_sig = sig
-            self.on_quiescent()
-            return True
         return False
 
     def start(self, interval_sec: float = 0.25) -> None:
@@ -253,7 +266,10 @@ class QuiescentVaultWatcher:
 
     def _loop(self, interval_sec: float) -> None:
         while not self._stop.wait(interval_sec):
-            self.poll_once()
+            try:
+                self.poll_once()
+            except Exception:
+                continue
 
     def stop(self) -> None:
         self._stop.set()

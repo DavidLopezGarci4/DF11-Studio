@@ -6,16 +6,18 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from backend.core.paths import WORKSPACE_ROOT
 from backend.services.kits import (
     calibrate_textile_albedo_rgb,
     dress_or_frame_portrait,
     index_fm_graphics_packs,
+    init_state_db,
     resolve_club_kit,
     save_kit_override,
 )
 from backend.services.vision import srgb_to_oklab
 
-SAMPLE_DF11 = Path(r"C:\Users\dace8\.gemini\antigravity\brain\dfcb63b5-d461-4041-9a3f-3dfd39556fdf\.user_uploaded\media_1793642363145_ab407598.png")
+SAMPLE_DF11 = WORKSPACE_ROOT / "tests" / "fixtures" / "sample_portrait.png"
 
 
 def test_albedo_calibration_clamps_pure_black_and_white_oklab() -> None:
@@ -71,3 +73,12 @@ def test_trapezoid_extension_reaches_y292_on_short_1to1_cutout() -> None:
     arr[35:220, 45:175], arr[35:130, 75:145] = (30, 90, 200, 255), (215, 170, 145, 255)
     out = np.asarray(dress_or_frame_portrait(Image.fromarray(arr, mode="RGBA"), kit_mode="original"), dtype=np.uint8)
     assert int(out[291, 130, 3]) == 255 and int(out[291, 130, 2]) > 150
+
+
+def test_init_state_db_closes_sqlite_handles_on_windows(tmp_path: Path) -> None:
+    db_file = tmp_path / "ephemeral_state.sqlite3"
+    with init_state_db(db_file) as conn:
+        conn.execute("INSERT OR REPLACE INTO squad_map VALUES ('r-1', '1736')")
+    # On Windows NTFS, unlink raises PermissionError if any sqlite3/WAL handle leaked
+    db_file.unlink()
+    assert not db_file.exists()

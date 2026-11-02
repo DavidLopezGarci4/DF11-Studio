@@ -8,6 +8,7 @@ import tempfile
 import time
 from collections.abc import Iterable
 from pathlib import Path
+from xml.sax.saxutils import quoteattr
 
 from defusedxml import ElementTree as SafeET
 
@@ -44,13 +45,14 @@ def upsert_fm_config_xml(config_path: Path, uids: Iterable[str]) -> int:
     validated = [validate_fm_uid(u) for u in uids]
     records: dict[str, str] = {}
 
+    target_tos = {f"graphics/pictures/person/{u}/portrait" for u in validated}
     if config_path.is_file():
         try:
             tree = SafeET.parse(config_path)
             for rec in tree.getroot().findall(".//record"):
                 frm = rec.attrib.get("from", "").strip()
                 to = rec.attrib.get("to", "").strip()
-                if frm and to:
+                if frm and to and to not in target_tos:
                     records[frm] = to
         except Exception as exc:
             raise FMConfigError(f"No se pudo leer config.xml de forma segura: {exc}") from exc
@@ -65,7 +67,7 @@ def upsert_fm_config_xml(config_path: Path, uids: Iterable[str]) -> int:
         '\t<list id="maps">',
     ]
     for frm in sorted(records.keys(), key=lambda k: (k.startswith("r-"), k)):
-        lines.append(f'\t\t<record from="{frm}" to="{records[frm]}"/>')
+        lines.append(f"\t\t<record from={quoteattr(frm)} to={quoteattr(records[frm])}/>")
     lines.extend(["\t</list>", "</record>", ""])
     payload = "\n".join(lines).encode("utf-8")
 

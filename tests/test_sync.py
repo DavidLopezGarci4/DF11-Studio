@@ -110,3 +110,21 @@ def test_quiescence_watcher_waits_for_stable_write_and_cancellation(tmp_path: Pa
     cancel.set()
     res = sync_ng_regens_batch(vault, tmp_path / "out_cancel", db_path=tmp_path / "c.db", cancel_event=cancel)
     assert res.cancelled is True and res.processed == 0
+
+
+def test_batch_sync_isolates_corrupt_regen_without_losing_valid_cards(tmp_path: Path) -> None:
+    db, vault, out_dir = tmp_path / "iso.db", tmp_path / "vault_iso", tmp_path / "out_iso"
+    _make_cutout_png(vault / "good.png")
+    (vault / "corrupt.png").write_bytes(b"not-a-valid-png")
+    (vault / "config.xml").write_text(
+        '<record><list id="maps">'
+        '<record from="good" to="graphics/pictures/person/r-501/portrait"/>'
+        '<record from="corrupt" to="graphics/pictures/person/r-502/portrait"/>'
+        "</list></record>",
+        encoding="utf-8",
+    )
+    rep = sync_ng_regens_batch(vault, out_dir, db_path=db, apply_club_kits=False)
+    assert rep.processed == 1 and rep.failed == 1
+    assert (out_dir / "r-501.png").is_file()
+    cfg_text = (out_dir / "config.xml").read_text(encoding="utf-8")
+    assert "r-501" in cfg_text and "r-502" not in cfg_text

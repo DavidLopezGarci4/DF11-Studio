@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -45,16 +48,40 @@ class KitSpec:
     crest_path: str | None = None
 
 
-def init_state_db(db_path: Path | None = None) -> sqlite3.Connection:
-    target = db_path or get_state_db_path()
+_INITIALIZED_DBS: set[Path] = set()
+_DB_INIT_LOCK = threading.Lock()
+_SCHEMA_SQL = (
+    "CREATE TABLE IF NOT EXISTS fm_assets (club_id TEXT, kind TEXT, file_path TEXT, PRIMARY KEY (club_id, kind));"
+    "CREATE TABLE IF NOT EXISTS kit_overrides (club_id TEXT PRIMARY KEY, primary_hex TEXT, secondary_hex TEXT, collar_hex TEXT, pattern TEXT);"
+    "CREATE TABLE IF NOT EXISTS squad_map (uid TEXT PRIMARY KEY, club_id TEXT NOT NULL);"
+    "CREATE TABLE IF NOT EXISTS regen_manifest (uid TEXT PRIMARY KEY, mtime_ns INTEGER, size INTEGER, sig TEXT);"
+)
+
+
+@contextmanager
+def init_state_db(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
+    target = (db_path or get_state_db_path()).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
+    with _DB_INIT_LOCK:
+        need_ddl = target not in _INITIALIZED_DBS or not target.is_file()
+        if need_ddl:
+            boot_conn = sqlite3.connect(str(target), timeout=10.0)
+            try:
+                boot_conn.execute("PRAGMA journal_mode=WAL;")
+                boot_conn.executescript(_SCHEMA_SQL)
+                boot_conn.commit()
+                _INITIALIZED_DBS.add(target)
+            finally:
+                boot_conn.close()
     conn = sqlite3.connect(str(target), timeout=10.0)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.executescript(
-        "CREATE TABLE IF NOT EXISTS fm_assets (club_id TEXT, kind TEXT, file_path TEXT, PRIMARY KEY (club_id, kind));"
-        "CREATE TABLE IF NOT EXISTS kit_overrides (club_id TEXT PRIMARY KEY, primary_hex TEXT, secondary_hex TEXT, collar_hex TEXT, pattern TEXT);"
-    )
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 @lru_cache(maxsize=1)

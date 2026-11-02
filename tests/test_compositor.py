@@ -92,3 +92,21 @@ def test_fm_config_xml_validation_and_idempotent_atomic_upsert(tmp_path: Path) -
     assert text.count('from="29184012"') == 1
     assert 'to="graphics/pictures/person/r-2002049102/portrait"' in text
     assert 'to="graphics/pictures/person/19005544/portrait"' in text
+
+
+def test_fm_config_xml_escapes_entities_and_deduplicates_subfolder_targets(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.xml"
+    cfg.write_text(
+        '<record><list id="maps">'
+        '<record from="club_a&amp;b/logo" to="graphics/pictures/club/10/logo"/>'
+        '<record from="faces/29184012" to="graphics/pictures/person/29184012/portrait"/>'
+        "</list></record>",
+        encoding="utf-8",
+    )
+    upsert_fm_config_xml(cfg, ["29184012"])
+    # Re-updating must succeed (well-formed XML with &amp; preserved) and remove stale faces/29184012
+    upsert_fm_config_xml(cfg, ["r-101"])
+    text = cfg.read_text(encoding="utf-8")
+    assert "club_a&amp;b/logo" in text
+    assert "faces/29184012" not in text
+    assert text.count("graphics/pictures/person/29184012/portrait") == 1

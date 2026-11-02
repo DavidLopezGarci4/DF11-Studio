@@ -23,9 +23,9 @@ from backend.services.vision import (
     segment_portrait_classes,
 )
 
-SAMPLE_DF11 = Path(
-    r"C:\Users\dace8\.gemini\antigravity\brain\dfcb63b5-d461-4041-9a3f-3dfd39556fdf\.user_uploaded\media_1793642363145_ab407598.png"
-)
+from backend.core.paths import WORKSPACE_ROOT
+
+SAMPLE_DF11 = WORKSPACE_ROOT / "tests" / "fixtures" / "sample_portrait.png"
 
 
 def test_sha256_guard_rejects_tampered_download_and_removes_part(tmp_path: Path) -> None:
