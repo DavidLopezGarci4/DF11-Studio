@@ -29,7 +29,7 @@ def main() -> None:
         background_color="#090d16",
     )
     bridge.attach_window(win)
-    webview.start(func=bridge.warmup_vision_async, debug=False)
+    webview.start(func=bridge.warmup_vision_async, debug=False, storage_path=str(profile_dir))
 
 
 if __name__ == "__main__":

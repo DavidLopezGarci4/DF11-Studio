@@ -30,6 +30,7 @@ export default {
     environment: 'jsdom',
     globals: true,
     pool: 'forks',
+    maxWorkers: 2,
     poolOptions: { forks: { execArgv: ['--preserve-symlinks'] } },
   },
 };

@@ -118,24 +118,40 @@ def ensure_model(
             part.unlink(missing_ok=True)
 
 
+def _build_session(model_path: Path, force_cpu: bool = False) -> ort.InferenceSession:
+    so = ort.SessionOptions()
+    so.log_severity_level = 3
+    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    so.intra_op_num_threads = 8
+    so.inter_op_num_threads = 1
+    so.enable_mem_pattern = False
+    so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    avail = ort.get_available_providers()
+    providers = ["CPUExecutionProvider"] if force_cpu or "DmlExecutionProvider" not in avail else ["DmlExecutionProvider", "CPUExecutionProvider"]
+    return ort.InferenceSession(str(model_path), sess_options=so, providers=providers)
+
+
 def _get_session(spec: ModelSpec) -> tuple[ort.InferenceSession, threading.Lock]:
     with _SESSION_INIT_LOCK:
         if spec.filename in _SESSIONS:
             return _SESSIONS[spec.filename]
-        model_path = ensure_model(spec)
-        so = ort.SessionOptions()
-        so.log_severity_level = 3
-        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
-        so.intra_op_num_threads = 8
-        so.inter_op_num_threads = 1
-        so.enable_mem_pattern = False
-        so.add_session_config_entry("session.intra_op.allow_spinning", "0")
-        avail = ort.get_available_providers()
-        providers = ["DmlExecutionProvider", "CPUExecutionProvider"] if "DmlExecutionProvider" in avail else ["CPUExecutionProvider"]
-        sess = ort.InferenceSession(str(model_path), sess_options=so, providers=providers)
+        sess = _build_session(ensure_model(spec), force_cpu=False)
         pair = (sess, threading.Lock())
         _SESSIONS[spec.filename] = pair
         return pair
+
+
+def _run_session(spec: ModelSpec, feed: dict[str, np.ndarray]) -> tuple[ort.InferenceSession, list[np.ndarray]]:
+    """Run ONNX inference; on DirectML DXGI_ERROR_DEVICE_RESET / CP1252 error, fall back cleanly to CPU."""
+    sess, lock = _get_session(spec)
+    with lock:
+        try:
+            return sess, list(sess.run(None, feed))
+        except Exception:
+            cpu_sess = _build_session(ensure_model(spec), force_cpu=True)
+            with _SESSION_INIT_LOCK:
+                _SESSIONS[spec.filename] = (cpu_sess, lock)
+            return cpu_sess, list(cpu_sess.run(None, feed))
 
 
 def detect_face_pose(img_rgba: Image.Image, score_thresh: float = 0.55) -> FacePose | None:
@@ -147,9 +163,7 @@ def detect_face_pose(img_rgba: Image.Image, score_thresh: float = 0.55) -> FaceP
     canvas.paste(img_rgba.convert("RGB").resize((nw, nh), Image.Resampling.BILINEAR), (0, 0))
     bgr = np.asarray(canvas, dtype=np.float32)[:, :, ::-1].transpose(2, 0, 1)[None, ...]
 
-    sess, lock = _get_session(YUNET_SPEC)
-    with lock:
-        raw_outs = sess.run(None, {"input": bgr})
+    sess, raw_outs = _run_session(YUNET_SPEC, {"input": bgr})
     outs = dict(zip([o.name for o in sess.get_outputs()], raw_outs))
 
     best_score = score_thresh
@@ -188,9 +202,8 @@ def segment_portrait_classes(img_rgba: Image.Image) -> np.ndarray:
     """Return (H, W, 6) softmax probabilities [bg, hair, body_skin, face_skin, clothes, others]."""
     w, h = img_rgba.size
     inp = np.asarray(img_rgba.convert("RGB").resize((256, 256), Image.Resampling.BILINEAR), dtype=np.float32)[None, ...] / 255.0
-    sess, lock = _get_session(SELFIE_SEG_SPEC)
-    with lock:
-        logits = sess.run(None, {"input_29": inp})[0][0]
+    _, raw_outs = _run_session(SELFIE_SEG_SPEC, {"input_29": inp})
+    logits = raw_outs[0][0]
     shifted = np.exp(logits - logits.max(axis=-1, keepdims=True))
     probs_256 = shifted / np.maximum(shifted.sum(axis=-1, keepdims=True), 1e-6)
     if (w, h) == (256, 256):
@@ -211,9 +224,8 @@ def remove_background_birefnet(img_rgba: Image.Image) -> Image.Image:
     std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
     inp = ((arr - mean) / std).transpose(2, 0, 1)[None, ...]
 
-    sess, lock = _get_session(BIREFNET_SPEC)
-    with lock:
-        logits = sess.run(None, {"input_image": inp})[0][0, 0]
+    _, raw_outs = _run_session(BIREFNET_SPEC, {"input_image": inp})
+    logits = raw_outs[0][0, 0]
     matte_1024 = 1.0 / (1.0 + np.exp(-np.clip(logits.astype(np.float32), -30.0, 30.0)))
     alpha_img = Image.fromarray(np.clip(np.round(matte_1024 * 255.0), 0, 255).astype(np.uint8), mode="L").resize(
         (w, h), Image.Resampling.BILINEAR
