@@ -39,9 +39,9 @@ class StudioBridge:
         self._window: Any = None
         self._raw_img: Any = None
         self._raw_is_precut: bool = False
+        self._fg_cut_cache: tuple[int, Any] | None = None
         self._cutout_key: tuple[int, bool, bool] | None = None
         self._cutout_img: Any = None
-        self._raw_cut_alpha: Any = None
         self._dressed_key: tuple[Any, ...] | None = None
         self._dressed_img: Any = None
         self._custom_bg_img: Any = None
@@ -59,11 +59,17 @@ class StudioBridge:
         return r
 
     def get_bootstrap_state(self) -> dict[str, Any]:
-        from backend.services.kits import load_seed_kits
+        from backend.services.kits import init_state_db, load_seed_kits
         from backend.services.sync import check_fm_storage_health
 
         m = get_models_dir()
         ok = all((m / f).is_file() for f in ("face_detection_yunet_2023mar.onnx", "selfie_multiclass_256x256.onnx", "birefnet-general-lite.onnx"))
+        theme = "dark"
+        if self._db_path.is_file():
+            with init_state_db(self._db_path) as c:
+                row = c.execute("SELECT pref_val FROM app_prefs WHERE pref_key='theme'").fetchone()
+                if row and row[0] in ("dark", "light"):
+                    theme = row[0]
         return {
             "version": __version__,
             "clubs": load_seed_kits(),
@@ -72,7 +78,16 @@ class StudioBridge:
             "storageHealth": asdict(check_fm_storage_health(self._export_dir)),
             "hasModels": ok,
             "liveWatching": self._watcher is not None,
+            "theme": theme,
         }
+
+    def set_ui_theme(self, theme: str) -> dict[str, str]:
+        from backend.services.kits import init_state_db
+
+        val = "light" if str(theme).lower() == "light" else "dark"
+        with init_state_db(self._db_path) as c:
+            c.execute("INSERT OR REPLACE INTO app_prefs VALUES ('theme', ?)", (val,))
+        return {"theme": val}
 
     def warmup_vision_async(self) -> bool:
         def _w() -> None:
@@ -106,15 +121,26 @@ class StudioBridge:
             self._export_dir = c
         return {"path": str(c), "storageHealth": asdict(check_fm_storage_health(c))}
 
+    def _get_fg_cutout(self) -> Any:
+        from backend.services.vision import remove_background_birefnet
+
+        if self._raw_img is None:
+            return None
+        if self._raw_is_precut:
+            return self._raw_img
+        raw_id = id(self._raw_img)
+        if self._fg_cut_cache is None or self._fg_cut_cache[0] != raw_id:
+            self._fg_cut_cache = (raw_id, remove_background_birefnet(self._raw_img))
+        return self._fg_cut_cache[1]
+
     def _ensure_cutout(self, remove_bg: bool, harmonize: bool) -> Any:
-        from backend.services.vision import harmonize_df11_studio_grade, remove_background_birefnet
+        from backend.services.vision import harmonize_df11_studio_grade
 
         if self._raw_img is None:
             return None
         key = (id(self._raw_img), bool(remove_bg), bool(harmonize))
         if self._cutout_key != key or self._cutout_img is None:
-            cut = self._raw_img if (self._raw_is_precut or not remove_bg) else remove_background_birefnet(self._raw_img)
-            self._raw_cut_alpha = cut.getchannel("A")
+            cut = self._get_fg_cutout() if (self._raw_is_precut or remove_bg) else self._raw_img
             self._cutout_img = harmonize_df11_studio_grade(cut) if harmonize else cut
             self._cutout_key = key
             self._dressed_key = None
@@ -157,32 +183,33 @@ class StudioBridge:
         self, data_url: str, remove_bg: bool = True, harmonize: bool = True, extract_bg: bool = False, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         from backend.core.image_guard import load_guarded_image
-        from backend.services.vision import extract_clean_background, remove_background_birefnet
+        from backend.services.vision import extract_clean_background
 
         g = load_guarded_image(_decode_b64(data_url))
         self._raw_img = g.image
         self._raw_is_precut = g.is_pre_cutout
+        self._fg_cut_cache = None
         self._cutout_key = None
         self._dressed_key = None
-        self._ensure_cutout(remove_bg, harmonize)
+        eff_remove = True if extract_bg else bool(remove_bg)
         bg_url = ""
         if extract_bg:
-            alpha = self._raw_cut_alpha if (g.is_pre_cutout or remove_bg) else remove_background_birefnet(g.image).getchannel("A")
+            alpha = self._get_fg_cutout().getchannel("A")
             self._custom_bg_img = extract_clean_background(g.image, alpha)
             bg_url = _to_data_url(self._custom_bg_img)
-        merged = {**(params or {}), "removeBg": remove_bg, "harmonize": harmonize}
+        merged = {**(params or {}), "removeBg": eff_remove, "harmonize": harmonize}
         if extract_bg:
             merged["bgMode"] = "custom"
         return {"isPreCutout": g.is_pre_cutout, "originalSize": list(g.original_size), "previewDataUrl": _to_data_url(self._compose(merged)), "cleanBgDataUrl": bg_url}
 
     def extract_studio_background(self, params: dict[str, Any] | None = None) -> dict[str, str]:
-        from backend.services.vision import extract_clean_background, remove_background_birefnet
+        from backend.services.vision import extract_clean_background
 
         if self._raw_img is None:
             raise ValueError("Sube o pega primero un retrato en el Estudio para extraer su fondo.")
-        alpha = self._raw_cut_alpha if self._raw_cut_alpha is not None else remove_background_birefnet(self._raw_img).getchannel("A")
+        alpha = self._get_fg_cutout().getchannel("A")
         self._custom_bg_img = extract_clean_background(self._raw_img, alpha)
-        merged = {**(params or {}), "bgMode": "custom"}
+        merged = {**(params or {}), "removeBg": True, "bgMode": "custom"}
         return {"cleanBgDataUrl": _to_data_url(self._custom_bg_img), "previewDataUrl": _to_data_url(self._compose(merged))}
 
     def upload_custom_background(self, data_url: str, params: dict[str, Any] | None = None) -> dict[str, str]:
@@ -290,7 +317,7 @@ class StudioBridge:
         if uid not in e:
             raise ValueError(f"Regen {uid} no encontrado.")
         b64 = "data:image/png;base64," + base64.b64encode(e[uid].read_bytes()).decode("ascii")
-        return {"uid": uid, **self.upload_studio_image(b64, remove_bg=False, harmonize=True, extract_bg=False, params=params)}
+        return {"uid": uid, **self.upload_studio_image(b64, remove_bg=True, harmonize=True, extract_bg=False, params=params)}
 
     def probe_architecture_health(self) -> dict[str, Any]:
         try:

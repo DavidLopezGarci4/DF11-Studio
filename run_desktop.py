@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ctypes
 import os
-import socket
 import sys
 from pathlib import Path
 
@@ -27,12 +26,6 @@ def _bind_win32_app_identity_and_icon(ico_path: Path) -> None:
                 user32.SendMessageW(hwnd, wm_seticon, 1, big)
     except Exception:
         pass
-
-
-def _pick_ephemeral_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 def main() -> None:
@@ -70,7 +63,6 @@ def main() -> None:
         func=bridge.warmup_vision_async,
         debug=False,
         private_mode=False,
-        http_port=_pick_ephemeral_port(),
         storage_path=str(profile_dir),
     )
 

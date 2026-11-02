@@ -46,3 +46,10 @@ def test_cold_start_bridge_import_budget_excludes_onnx() -> None:
     finally:
         if saved_ort is not None:
             sys.modules["onnxruntime"] = saved_ort
+
+
+def test_desktop_launcher_preserves_stable_webview_origin_and_storage() -> None:
+    src = (WORKSPACE_ROOT / "run_desktop.py").read_text(encoding="utf-8")
+    assert "private_mode=False" in src
+    assert "storage_path=str(profile_dir)" in src
+    assert "_pick_ephemeral_port" not in src and "http_port=" not in src

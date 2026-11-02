@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { HelpCircle, Info, Moon, Sun } from 'lucide-react';
 import AboutModal from './components/AboutModal';
 import FaqModal from './components/FaqModal';
@@ -9,6 +9,7 @@ import { BootstrapState, StorageHealth, callBridge } from './lib/ipc';
 const AppArchitectureGraph = lazy(() => import('./components/AppArchitectureGraph'));
 
 export default function App() {
+  const hadStoredTheme = useRef(localStorage.getItem('df11_theme') !== null);
   const [dark, setDark] = useState(() => localStorage.getItem('df11_theme') !== 'light');
   const [tab, setTab] = useState<'studio' | 'sync'>('studio');
   const [modal, setModal] = useState<'faq' | 'about' | 'graph' | null>(null);
@@ -31,6 +32,9 @@ export default function App() {
       if (b?.exportDir) setExportDir(b.exportDir);
       if (b?.storageHealth) setStorageHealth(b.storageHealth);
       if (typeof b?.liveWatching === 'boolean') setLiveWatching(b.liveWatching);
+      if (!hadStoredTheme.current && (b?.theme === 'light' || b?.theme === 'dark')) {
+        setDark(b.theme === 'dark');
+      }
     });
   }, []);
 
@@ -55,7 +59,7 @@ export default function App() {
           <button type="button" aria-label="Acerca de DF11 Face Studio" title="Acerca de" onClick={() => setModal('about')} className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
             <Info className="w-4 h-4" />
           </button>
-          <button type="button" aria-label="Cambiar tema" title="Cambiar modo claro/oscuro" onClick={() => setDark((d) => !d)} className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+          <button type="button" aria-label="Cambiar tema" title="Cambiar modo claro/oscuro" onClick={() => setDark((d) => { const next = !d; void callBridge('set_ui_theme', next ? 'dark' : 'light'); return next; })} className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
             {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
         </div>

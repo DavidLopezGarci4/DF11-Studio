@@ -66,12 +66,18 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
     setUid(initialJump.uid);
     setPreviewUrl(initialJump.previewDataUrl);
     setHasPortrait(true);
-    setRemoveBg(false);
+    setRemoveBg(true);
     setHarmonize(true);
+    setScale(1.0);
+    setOffset({ x: 0, y: 0 });
+    setBgMode('white_df11');
+    setBgBlur(0);
     if (initialJump.clubId && clubs[initialJump.clubId]) {
       setClubId(initialJump.clubId);
       syncClubDefaults(initialJump.clubId);
       setKitMode('club');
+    } else {
+      setKitMode('original');
     }
     onConsumeJump?.();
   }, [initialJump, clubs, onConsumeJump, syncClubDefaults]);
@@ -89,7 +95,7 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
       const out = await callBridge<{ previewDataUrl: string; cleanBgDataUrl: string }>('upload_studio_image', dataUrl, removeBg, harmonize, extractOriginalBg, resetParams);
       reqSeqRef.current += 1;
       if (out.previewDataUrl) { setPreviewUrl(out.previewDataUrl); setHasPortrait(true); }
-      if (extractOriginalBg && out.cleanBgDataUrl) { setHasExtractedBg(true); setBgMode('custom'); }
+      if (extractOriginalBg && out.cleanBgDataUrl) { setRemoveBg(true); setHasExtractedBg(true); setBgMode('custom'); }
       setOffset({ x: 0, y: 0 }); setScale(1.0);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'Formato o tamaño inválido (máx. 20 MB / 25 MP).');
@@ -122,9 +128,10 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
   const handleExtractBg = async () => {
     setErrorMsg(''); setBusy(true);
     try {
-      const res = await callBridge<{ cleanBgDataUrl: string; previewDataUrl: string }>('extract_studio_background', composeParams);
+      const nextParams = { ...composeParams, removeBg: true, bgMode: 'custom' as const };
+      const res = await callBridge<{ cleanBgDataUrl: string; previewDataUrl: string }>('extract_studio_background', nextParams);
       reqSeqRef.current += 1;
-      setHasExtractedBg(true); setBgMode('custom');
+      setRemoveBg(true); setHasExtractedBg(true); setBgMode('custom');
       if (res?.previewDataUrl) setPreviewUrl(res.previewDataUrl);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'Sube primero un retrato para extraer su fondo.');

@@ -1,6 +1,6 @@
 export interface ClubSeed { name: string; pattern: string; primary: string; secondary: string; collar: string; }
 export interface StorageHealth { target_path: string; in_onedrive: boolean; free_gb: number; warning: boolean; steam_launch_arg: string; gamepass_guide: string; }
-export interface BootstrapState { version: string; clubs: Record<string, ClubSeed>; vaultDir: string; exportDir: string; storageHealth: StorageHealth; hasModels: boolean; liveWatching?: boolean; }
+export interface BootstrapState { version: string; clubs: Record<string, ClubSeed>; vaultDir: string; exportDir: string; storageHealth: StorageHealth; hasModels: boolean; liveWatching?: boolean; theme?: 'dark' | 'light'; }
 
 declare global {
   interface Window { pywebview?: { api: Record<string, (...args: unknown[]) => Promise<unknown>> }; }

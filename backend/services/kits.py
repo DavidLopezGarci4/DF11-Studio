@@ -55,6 +55,7 @@ _SCHEMA_SQL = (
     "CREATE TABLE IF NOT EXISTS kit_overrides (club_id TEXT PRIMARY KEY, primary_hex TEXT, secondary_hex TEXT, collar_hex TEXT, pattern TEXT);"
     "CREATE TABLE IF NOT EXISTS squad_map (uid TEXT PRIMARY KEY, club_id TEXT NOT NULL);"
     "CREATE TABLE IF NOT EXISTS regen_manifest (uid TEXT PRIMARY KEY, mtime_ns INTEGER, size INTEGER, sig TEXT);"
+    "CREATE TABLE IF NOT EXISTS app_prefs (pref_key TEXT PRIMARY KEY, pref_val TEXT NOT NULL);"
 )
 
 

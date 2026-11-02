@@ -90,3 +90,43 @@ def test_bridge_kit_preview_isolation_extract_bg_and_watcher_lifecycle(tmp_path:
     assert first_watcher._stop.is_set()
     bridge.toggle_live_watch(False)
     assert bridge._watcher is None
+
+
+def test_bridge_extract_bg_on_opaque_portrait_with_remove_bg_false_and_theme_pref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import backend.services.vision as vision_mod
+
+    calls = 0
+
+    def _fake_birefnet(img: Image.Image) -> Image.Image:
+        nonlocal calls
+        calls += 1
+        out = img.convert("RGBA").copy()
+        alpha = Image.new("L", out.size, 0)
+        alpha.paste(255, (70, 50, 150, 200))
+        out.putalpha(alpha)
+        return out
+
+    monkeypatch.setattr(vision_mod, "remove_background_birefnet", _fake_birefnet)
+
+    opaque = Image.new("RGBA", (220, 220), (40, 85, 190, 255))
+    opaque.paste((185, 35, 35, 255), (70, 50, 150, 200))
+    buf = io.BytesIO()
+    opaque.save(buf, format="PNG")
+    opaque_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+    db = tmp_path / "prefs.sqlite3"
+    bridge = StudioBridge(vault_dir=tmp_path / "v", export_dir=tmp_path / "o", db_path=db)
+    up = bridge.upload_studio_image(opaque_url, remove_bg=False, harmonize=False)
+    assert up["isPreCutout"] is False and calls == 0
+
+    ext = bridge.extract_studio_background({"removeBg": False, "harmonize": False})
+    assert calls == 1  # Cached across both mask extraction and _compose(removeBg=True)
+    bg_img = Image.open(io.BytesIO(base64.b64decode(ext["cleanBgDataUrl"].split(",", 1)[1]))).convert("RGBA")
+    cx_r, cx_g, cx_b, _ = bg_img.getpixel((110, 120))
+    assert cx_b > 150 and cx_r < 80, f"Expected reconstructed blue wall, got {(cx_r, cx_g, cx_b)}"
+
+    assert bridge.set_ui_theme("light")["theme"] == "light"
+    reloaded = StudioBridge(vault_dir=tmp_path / "v", export_dir=tmp_path / "o", db_path=db)
+    assert reloaded.get_bootstrap_state()["theme"] == "light"
