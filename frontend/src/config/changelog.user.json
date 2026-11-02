@@ -1,0 +1,21 @@
+{
+  "currentVersion": "1.0.0",
+  "buildNumber": 10000,
+  "lastUpdated": "2026-11-02",
+  "appName": "DF11 Face Studio",
+  "appDescription": "Estudio fotográfico de 3 capas y sincronizador automático de regens con formato oficial DF11 para Football Manager.",
+  "privacyPolicy": "Tus fotos y partidas nunca salen de tu PC: procesamiento 100% local, privado y sin suscripciones ni claves API.",
+  "versions": [
+    {
+      "version": "1.0.0",
+      "build": 10000,
+      "date": "2026-11-02",
+      "title": "Estudio DF11 de 3 Capas, Equipaciones de Club y Sincronizador FM27",
+      "highlights": [
+        "🖼️ **Fichas DF11 en segundos:** Sube o pega cualquier retrato para recortar el fondo en tu PC y encuadrarlo en el marco oficial de 260 × 310 píxeles.",
+        "👕 **Equipaciones reales para jugadores y staff:** Viste tus fotos o tus regens con los colores auténticos de tu club, polo técnico o traje de entrenador sin logotipos antiguos.",
+        "⚡ **Sincronizador masivo para NG_Regens y FM27:** Convierte miles de caras nuevas en segundo plano sin tocar tus archivos originales y protege tu disco frente a OneDrive."
+      ]
+    }
+  ]
+}

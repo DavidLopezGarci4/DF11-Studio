@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Moon, Sun } from 'lucide-react';
+import { HelpCircle, Info, Moon, Sun } from 'lucide-react';
+import AboutModal from './components/AboutModal';
+import FaqModal from './components/FaqModal';
 import RegensSyncView from './components/RegensSyncView';
 import StudioView, { StudioJumpPayload } from './components/StudioView';
 import { BootstrapState, StorageHealth, callBridge } from './lib/ipc';
@@ -7,6 +9,7 @@ import { BootstrapState, StorageHealth, callBridge } from './lib/ipc';
 export default function App() {
   const [dark, setDark] = useState(() => localStorage.getItem('df11_theme') !== 'light');
   const [tab, setTab] = useState<'studio' | 'sync'>('studio');
+  const [modal, setModal] = useState<'faq' | 'about' | 'graph' | null>(null);
   const [boot, setBoot] = useState<BootstrapState | null>(null);
   const [vaultDir, setVaultDir] = useState('D:\\DF11Studio\\NG_Regens_Vault');
   const [exportDir, setExportDir] = useState('D:\\DF11Studio\\Exports\\000_DF11_Regens_Override');
@@ -41,9 +44,17 @@ export default function App() {
           <button type="button" onClick={() => setTab('studio')} className={navBtn(tab === 'studio')}>Estudio</button>
           <button type="button" onClick={() => setTab('sync')} className={navBtn(tab === 'sync')}>Sincronizador NG_Regens</button>
         </nav>
-        <button type="button" aria-label="Cambiar tema" onClick={() => setDark((d) => !d)} className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-          {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button type="button" aria-label="Centro de ayuda y FAQ" title="Ayuda y FAQ" onClick={() => setModal('faq')} className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+            <HelpCircle className="w-4 h-4" />
+          </button>
+          <button type="button" aria-label="Acerca de DF11 Face Studio" title="Acerca de" onClick={() => setModal('about')} className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+            <Info className="w-4 h-4" />
+          </button>
+          <button type="button" aria-label="Cambiar tema" title="Cambiar modo claro/oscuro" onClick={() => setDark((d) => !d)} className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+            {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
+        </div>
       </header>
       <main className="flex-1 p-5 max-w-6xl w-full mx-auto">
         {tab === 'studio' ? (
@@ -60,6 +71,8 @@ export default function App() {
           />
         )}
       </main>
+      {modal === 'faq' && <FaqModal onClose={() => setModal(null)} />}
+      {modal === 'about' && <AboutModal onClose={() => setModal(null)} onOpenGraph={() => setModal('graph')} />}
     </div>
   );
 }
