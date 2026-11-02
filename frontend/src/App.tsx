@@ -1,18 +1,26 @@
 import { useEffect, useState } from 'react';
 import { Moon, Sun } from 'lucide-react';
+import StudioView, { StudioJumpPayload } from './components/StudioView';
 import { BootstrapState, callBridge } from './lib/ipc';
 
 export default function App() {
   const [dark, setDark] = useState(() => localStorage.getItem('df11_theme') !== 'light');
   const [tab, setTab] = useState<'studio' | 'sync'>('studio');
   const [boot, setBoot] = useState<BootstrapState | null>(null);
+  const [exportDir, setExportDir] = useState('D:\\DF11Studio\\Exports\\000_DF11_Regens_Override');
+  const [studioJump, setStudioJump] = useState<StudioJumpPayload | null>(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
     localStorage.setItem('df11_theme', dark ? 'dark' : 'light');
   }, [dark]);
 
-  useEffect(() => { callBridge<BootstrapState>('get_bootstrap_state').then(setBoot); }, []);
+  useEffect(() => {
+    callBridge<BootstrapState>('get_bootstrap_state').then((b) => {
+      setBoot(b);
+      if (b?.exportDir) setExportDir(b.exportDir);
+    });
+  }, []);
 
   const navBtn = (active: boolean) => `px-3 py-1 text-xs font-medium rounded-md transition ${active ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs' : 'text-slate-600 dark:text-slate-400'}`;
 
@@ -32,7 +40,11 @@ export default function App() {
         </button>
       </header>
       <main className="flex-1 p-5 max-w-6xl w-full mx-auto">
-        <p className="text-sm text-slate-600 dark:text-slate-400">{tab === 'studio' ? 'Estudio DF11 listo.' : 'Sincronizador NG_Regens listo.'}</p>
+        {tab === 'studio' ? (
+          <StudioView clubs={boot?.clubs ?? {}} exportDir={exportDir} onExportDirChange={setExportDir} initialJump={studioJump} />
+        ) : (
+          <p className="text-sm text-slate-600 dark:text-slate-400" data-jump={Boolean(setStudioJump)}>Sincronizador NG_Regens listo.</p>
+        )}
       </main>
     </div>
   );
