@@ -9,10 +9,13 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import onnxruntime as ort
 from PIL import Image, ImageFilter
+
+if TYPE_CHECKING:
+    import onnxruntime as ort
 
 from backend.core.dsp import (
     harmonize_oklab_pure_optics as harmonize_df11_studio_grade,
@@ -125,20 +128,29 @@ def ensure_model(
             part.unlink(missing_ok=True)
 
 
+def _get_ort() -> Any:
+    import onnxruntime as ort_mod
+
+    return ort_mod
+
+
 def _build_session(model_path: Path, force_cpu: bool = False) -> ort.InferenceSession:
+    ort_mod = _get_ort()
     use_cpu = force_cpu or _DML_DISABLED
-    so = ort.SessionOptions()
+    so = ort_mod.SessionOptions()
     so.log_severity_level = 3
-    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL if use_cpu else ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    so.graph_optimization_level = (
+        ort_mod.GraphOptimizationLevel.ORT_ENABLE_ALL if use_cpu else ort_mod.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    )
     so.intra_op_num_threads = 2 if use_cpu else 8
     so.inter_op_num_threads = 1
     so.enable_mem_pattern = False
     if use_cpu:
         so.enable_cpu_mem_arena = False
     so.add_session_config_entry("session.intra_op.allow_spinning", "0")
-    avail = ort.get_available_providers()
+    avail = ort_mod.get_available_providers()
     providers = ["CPUExecutionProvider"] if use_cpu or "DmlExecutionProvider" not in avail else ["DmlExecutionProvider", "CPUExecutionProvider"]
-    return ort.InferenceSession(str(model_path), sess_options=so, providers=providers)
+    return ort_mod.InferenceSession(str(model_path), sess_options=so, providers=providers)
 
 
 def _get_spec_lock(spec: ModelSpec) -> threading.RLock:

@@ -369,19 +369,31 @@ def _place_layer(im: Image.Image, scale: float, offset_x: float, offset_y: float
             fit_mode="raw",
             dst_size=(DF11_WIDTH, DF11_HEIGHT),
         )
-    pw, ph = max(1, round(im.width * scale)), max(1, round(im.height * scale))
-    resized = im.convert("L") if (pw, ph) == im.size else im.convert("L").resize((pw, ph), Image.Resampling.BILINEAR)
-    src = np.asarray(resized, dtype=np.uint8)
-
-    x0 = round((DF11_WIDTH - pw) * 0.5 + float(offset_x))
-    y0 = round((DF11_HEIGHT - ph) * 0.5 + float(offset_y))
-    cx0, cy0 = max(0, x0), max(0, y0)
-    cx1, cy1 = min(DF11_WIDTH, x0 + pw), min(DF11_HEIGHT, y0 + ph)
-
-    canvas = np.zeros((DF11_HEIGHT, DF11_WIDTH), dtype=np.uint8)
-    if cx1 > cx0 and cy1 > cy0:
-        canvas[cy0:cy1, cx0:cx1] = src[cy0 - y0 : cy1 - y0, cx0 - x0 : cx1 - x0]
-    return canvas
+    im_l = im if im.mode == "L" else im.convert("L")
+    if im_l.width < 1 or im_l.height < 1:
+        return np.zeros((DF11_HEIGHT, DF11_WIDTH), dtype=np.uint8)
+    ox = float(offset_x)
+    oy = float(offset_y)
+    if (
+        im_l.size == (DF11_WIDTH, DF11_HEIGHT)
+        and abs(scale - 1.0) < 1e-4
+        and abs(ox) < 1e-3
+        and abs(oy) < 1e-3
+    ):
+        return np.asarray(im_l, dtype=np.uint8).copy()
+    disp_w = im_l.width * scale
+    disp_h = im_l.height * scale
+    x0 = (DF11_WIDTH - disp_w) * 0.5 + ox
+    y0 = (DF11_HEIGHT - disp_h) * 0.5 + oy
+    inv_s = 1.0 / scale
+    transformed = im_l.transform(
+        (DF11_WIDTH, DF11_HEIGHT),
+        Image.Transform.AFFINE,
+        (inv_s, 0.0, -x0 * inv_s, 0.0, inv_s, -y0 * inv_s),
+        resample=Image.Resampling.BILINEAR,
+        fillcolor=0,
+    )
+    return np.asarray(transformed, dtype=np.uint8)
 
 
 def _build_collar_funnel_mask(
@@ -648,8 +660,8 @@ def compose_modular_df11(
         placed_body = _place_layer(head_asset.body_skin_mask, f.scale, f.offset_x, f.offset_y, "L")
         placed_occ = _place_layer(head_asset.front_occluder_alpha, f.scale, f.offset_x, f.offset_y, "L")
 
-        ph = max(1, round(head_asset.rgba.height * f.scale))
-        y0_placed = (DF11_HEIGHT - ph) * 0.5 + f.offset_y
+        disp_h = head_asset.rgba.height * f.scale
+        y0_placed = (DF11_HEIGHT - disp_h) * 0.5 + f.offset_y
         chin_canvas_y = y0_placed + head_asset.chin_y * f.scale
 
         if shirt_arr is not None and collar is not None:
@@ -695,7 +707,12 @@ def compose_modular_df11(
             # Z5: Non-truncated Hair / Beard / Glasses occluders in front of collar rim
             z5 = z3.copy()
             occ_gate = ((yy >= y_rim - 8) & (yy <= y_v + 12)).astype(np.float32)
-            z5[:, :, 3] = np.clip(np.round((placed_occ.astype(np.float32) / 255.0) * funnel * occ_gate * 255.0), 0.0, 255.0).astype(np.uint8)
+            raw_z5_a = np.clip(
+                np.round((placed_occ.astype(np.float32) / 255.0) * funnel * occ_gate * 255.0),
+                0.0,
+                255.0,
+            ).astype(np.uint8)
+            z5[:, :, 3] = np.minimum(raw_z5_a, z3[:, :, 3])
             z5[:, :, :3] = np.where(z5[:, :, 3:4] > 0, z5[:, :, :3], 0)
             layer2 = premul_over(with_shirt, z5)
         else:

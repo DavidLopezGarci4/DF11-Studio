@@ -5,6 +5,7 @@ import io
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -226,3 +227,244 @@ def test_direct_photo_mode_supports_4_cardinal_pan_zoom_and_export_with_zero_ai(
                 "directPhotoId": "direct-9999",
             }
         )
+
+
+def test_studio_bridge_direct_photo_works_with_onnxruntime_blocked_in_subprocess(tmp_path: Path) -> None:
+    root_dir = Path(__file__).resolve().parents[1]
+    code = f"""
+import base64, io, sys
+from pathlib import Path
+sys.modules['onnxruntime'] = None
+from PIL import Image
+from backend.bridge import StudioBridge
+
+assert sys.modules.get('onnxruntime') is None
+tmp = Path({str(tmp_path)!r})
+im = Image.new('RGB', (360, 440), (42, 68, 108))
+buf = io.BytesIO()
+im.save(buf, format='PNG')
+durl = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
+
+bridge = StudioBridge(
+    vault_dir=tmp / 'vault',
+    export_dir=tmp / 'exports',
+    db_path=tmp / 'no_ort.sqlite3',
+    templates_dir=tmp / 'tpls',
+    raw_archive_dir=tmp / 'raw',
+    extracted_faces_dir=tmp / 'faces',
+    sample_faces_dir=tmp / 'samples',
+)
+loaded = bridge.load_direct_photo_source(durl, '19004512.png', {{'harmonize': True, 'enhanceQuality': 0.6}})
+prev = bridge.render_modular_preview({{
+    'step1Mode': 'direct_photo',
+    'directPhotoId': loaded['directPhotoId'],
+    'scale': 1.15,
+    'offsetX': 6.0,
+    'offsetY': -4.0,
+    'clampPan': True,
+    'harmonize': True,
+    'enhanceQuality': 0.7,
+    'bgMode': 'white_df11',
+}})
+raw_out = base64.b64decode(prev['previewDataUrl'].split(',', 1)[1])
+out_im = Image.open(io.BytesIO(raw_out))
+assert out_im.size == (260, 310)
+assert sys.modules.get('onnxruntime') is None
+"""
+    res = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(root_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 0, res.stderr
+
+
+def test_direct_photo_reloads_opaque_and_transparent_df11_cards_1_to_1_without_border_damage(
+    tmp_path: Path,
+) -> None:
+    from backend.core.compositor import load_df11_assets
+    from backend.core.dsp import compute_effective_scale
+
+    assert compute_effective_scale(224, 278, 1.0, "cover") == pytest.approx(1.0)
+    assert compute_effective_scale(224, 278, 1.0, "contain") == pytest.approx(1.0)
+
+    inner_mask_im, overlay_im = load_df11_assets()
+    clear_win = (np.asarray(inner_mask_im, dtype=np.uint8) == 255) & (
+        np.asarray(overlay_im, dtype=np.uint8)[:, :, 3] == 0
+    )
+    assert int(clear_win.sum()) > 30_000
+
+    bridge = StudioBridge(
+        vault_dir=tmp_path / "vault_ro",
+        export_dir=tmp_path / "exports",
+        db_path=tmp_path / "roundtrip.sqlite3",
+        templates_dir=tmp_path / "tshirt_templates",
+        raw_archive_dir=tmp_path / "raw_archive",
+        extracted_faces_dir=tmp_path / "caras_extraidas",
+        sample_faces_dir=tmp_path / "caras_prueba",
+    )
+
+    # 1. Opaque 260x310 DF11 card with distinct colored markers near all 4 inner bevel edges + 1px central grid
+    opaque_subject = np.zeros((DF11_HEIGHT, DF11_WIDTH, 4), dtype=np.uint8)
+    opaque_subject[:, :] = (36, 58, 96, 255)
+    yy, xx = np.mgrid[0:DF11_HEIGHT, 0:DF11_WIDTH]
+    grid_mask = (xx >= 70) & (xx < 190) & (yy >= 75) & (yy < 235) & (((xx + yy) % 2) == 0)
+    opaque_subject[grid_mask] = (210, 185, 145, 255)
+    opaque_subject[22:288, 22:36] = (220, 48, 52, 255)    # Left edge stripe inside 21-22px zone
+    opaque_subject[22:288, 224:238] = (44, 185, 98, 255)  # Right edge stripe inside 21-22px zone
+    opaque_subject[22:34, 40:220] = (238, 196, 42, 255)   # Top edge stripe
+    opaque_subject[276:288, 40:220] = (195, 72, 210, 255) # Bottom edge stripe
+    opaque_df11 = render_df11_card(Image.fromarray(opaque_subject, mode="RGBA"), bg_mode="white_df11")
+    opaque_orig_arr = np.asarray(opaque_df11, dtype=np.uint8)
+
+    loaded_op = bridge.load_direct_photo_source(
+        _png_data_url(opaque_df11),
+        "10002001.png",
+        {"harmonize": False, "enhanceQuality": 0.0, "bgMode": "white_df11"},
+    )
+    assert loaded_op["width"] == 224
+    assert loaded_op["height"] == 278
+    assert loaded_op["isPreCutout"] is False
+    reloaded_op_arr = _decode_data_url_rgba(loaded_op["previewDataUrl"])
+
+    # Bit-exact 1:1 fidelity across the entire clear interior (even 1px shift or 1% shrink fails the 1px grid)
+    diff_op = np.abs(reloaded_op_arr[:, :, :3].astype(np.int16) - opaque_orig_arr[:, :, :3].astype(np.int16))
+    assert int(diff_op[clear_win].max()) == 0, int(diff_op[clear_win].max())
+    # All 4 edge stripes stay razor-sharp at their exact pixel coordinates without 21-22px border smear
+    assert int(reloaded_op_arr[155, 23, 0]) > 160 and int(reloaded_op_arr[155, 36, 0]) < 50
+    assert int(reloaded_op_arr[155, 236, 1]) > 135 and int(reloaded_op_arr[155, 223, 1]) < 75
+    assert int(reloaded_op_arr[24, 130, 0]) > 175 and int(reloaded_op_arr[34, 130, 0]) < 50
+    assert int(reloaded_op_arr[285, 130, 2]) > 150 and int(reloaded_op_arr[275, 130, 2]) < 110
+
+    # Panning with clampPan=False on transparent bg must never expose alpha==0 corners from the cropped 224x278 source
+    panned_op = bridge.render_modular_preview(
+        {
+            "step1Mode": "direct_photo",
+            "directPhotoId": loaded_op["directPhotoId"],
+            "scale": 1.0,
+            "offsetX": 14.0,
+            "offsetY": 14.0,
+            "clampPan": False,
+            "harmonize": False,
+            "enhanceQuality": 0.0,
+            "bgMode": "transparent",
+        }
+    )
+    panned_op_arr = _decode_data_url_rgba(panned_op["previewDataUrl"])
+    assert int(panned_op_arr[30:36, 32:38, 3].min()) == 255
+
+    # 2. Transparent 260x310 DF11 card with shoulders touching the inner perimeter (x=19..241, y=240..293)
+    cutout_subject = np.zeros((DF11_HEIGHT, DF11_WIDTH, 4), dtype=np.uint8)
+    cutout_subject[70:245, 85:175] = (206, 162, 134, 255)   # Head/neck
+    cutout_subject[235:294, 18:242] = (28, 112, 208, 255)   # Full-width kit shoulders touching inner frame
+    trans_df11 = render_df11_card(Image.fromarray(cutout_subject, mode="RGBA"), bg_mode="transparent")
+    trans_orig_arr = np.asarray(trans_df11, dtype=np.uint8)
+
+    loaded_tr = bridge.load_direct_photo_source(
+        _png_data_url(trans_df11),
+        "10002002.png",
+        {"harmonize": False, "enhanceQuality": 0.0, "bgMode": "transparent"},
+    )
+    assert loaded_tr["width"] == 224
+    assert loaded_tr["height"] == 278
+    assert loaded_tr["isPreCutout"] is True
+    reloaded_tr_arr = _decode_data_url_rgba(loaded_tr["previewDataUrl"])
+
+    # Bit-exact 1:1 interior fidelity (scale == 1.0000, NOT 1.1151) AND zero erased 3-4px inner shoulder perimeter
+    diff_tr = np.abs(reloaded_tr_arr.astype(np.int16) - trans_orig_arr.astype(np.int16))
+    assert int(diff_tr[clear_win].max()) == 0, int(diff_tr[clear_win].max())
+    assert int(reloaded_tr_arr[255:282, 21:24, 3].min()) == 255
+    assert int(reloaded_tr_arr[255:282, 236:239, 3].min()) == 255
+
+
+def test_direct_photo_high_res_3000x4000_luz_df11_preview_is_under_150ms(tmp_path: Path) -> None:
+    # Build a dim 3000x4000 (12 MP) full-scene photo without slow Python pixel loops
+    arr_small = np.full((200, 150, 3), (38, 44, 62), dtype=np.uint8)
+    arr_small[55:145, 45:105] = (96, 78, 68)
+    hi_res = Image.fromarray(arr_small, mode="RGB").resize((3000, 4000), Image.Resampling.NEAREST)
+    buf = io.BytesIO()
+    hi_res.save(buf, format="JPEG", quality=85)
+    data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+    bridge = StudioBridge(
+        vault_dir=tmp_path / "vault_ro",
+        export_dir=tmp_path / "exports",
+        db_path=tmp_path / "perf.sqlite3",
+        templates_dir=tmp_path / "tshirt_templates",
+        raw_archive_dir=tmp_path / "raw_archive",
+        extracted_faces_dir=tmp_path / "caras_extraidas",
+        sample_faces_dir=tmp_path / "caras_prueba",
+    )
+    loaded = bridge.load_direct_photo_source(data_url, "30004000.jpg", {"harmonize": True, "enhanceQuality": 0.5})
+    direct_id = loaded["directPhotoId"]
+
+    # Warm-up call
+    bridge.render_modular_preview(
+        {
+            "step1Mode": "direct_photo",
+            "directPhotoId": direct_id,
+            "scale": 1.0,
+            "offsetX": 0.0,
+            "offsetY": 0.0,
+            "clampPan": True,
+            "harmonize": False,
+            "enhanceQuality": 0.5,
+            "bgMode": "white_df11",
+        }
+    )
+
+    t0 = time.perf_counter()
+    res_on = bridge.render_modular_preview(
+        {
+            "step1Mode": "direct_photo",
+            "directPhotoId": direct_id,
+            "scale": 1.08,
+            "offsetX": 6.0,
+            "offsetY": -5.0,
+            "clampPan": True,
+            "harmonize": True,
+            "enhanceQuality": 0.5,
+            "bgMode": "white_df11",
+        }
+    )
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    assert elapsed_ms < 150.0, f"Expected < 150ms for 3000x4000 Luz DF11 preview, got {elapsed_ms:.1f}ms"
+
+    res_off = bridge.render_modular_preview(
+        {
+            "step1Mode": "direct_photo",
+            "directPhotoId": direct_id,
+            "scale": 1.08,
+            "offsetX": 6.0,
+            "offsetY": -5.0,
+            "clampPan": True,
+            "harmonize": False,
+            "enhanceQuality": 0.5,
+            "bgMode": "white_df11",
+        }
+    )
+    arr_on = _decode_data_url_rgba(res_on["previewDataUrl"])
+    arr_off = _decode_data_url_rgba(res_off["previewDataUrl"])
+    assert float(arr_on[100:210, 80:180, :3].mean()) > float(arr_off[100:210, 80:180, :3].mean()) + 2.0
+
+
+def test_wgif_preserves_bright_semitransparent_hair_strand_on_transparent_bg() -> None:
+    portrait = np.zeros((DF11_HEIGHT, DF11_WIDTH, 4), dtype=np.uint8)
+    # Opaque head core at x=85..175
+    portrait[80:220, 85:175] = (212, 182, 128, 255)
+    # Wispy bright blonde hair strand (alpha=90) located 12px away from the core (x=71..73)
+    portrait[105:165, 71:74] = (224, 198, 142, 90)
+
+    out = np.asarray(
+        render_df11_card(
+            Image.fromarray(portrait, mode="RGBA"),
+            bg_mode="transparent",
+            enhance_quality=1.0,
+        ),
+        dtype=np.uint8,
+    )
+    strand_px = out[135, 72]
+    assert int(strand_px[3]) == 90
+    assert int(strand_px[0]) >= 200 and int(strand_px[1]) >= 175 and int(strand_px[2]) >= 120, strand_px

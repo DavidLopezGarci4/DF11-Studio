@@ -84,34 +84,86 @@ def oklab_to_srgb(lab: np.ndarray, preserve_hue_gamut: bool = False) -> np.ndarr
     return np.where(lin <= 0.0031308, 12.92 * lin, 1.055 * (np.maximum(lin, 0.0) ** (1.0 / 2.4)) - 0.055).astype(np.float32)
 
 
-def harmonize_oklab_pure_optics(img_rgba: Image.Image) -> Image.Image:
-    """Zero-AI exposure lift and indoor cast normalization in OKLab space."""
-    arr = np.asarray(img_rgba.convert("RGBA"), dtype=np.uint8).copy()
+def compute_oklab_harmonize_params(
+    img_rgba: Image.Image,
+    max_side: int = 320,
+) -> tuple[float, float, float]:
+    """Compute (lift_l, shift_a, shift_b) OKLab exposure & cast adjustments once (in < 2ms when max_side=320)."""
+    im = img_rgba if img_rgba.mode == "RGBA" else img_rgba.convert("RGBA")
+    w, h = im.size
+    if w < 1 or h < 1:
+        return (0.0, 0.0, 0.0)
+    if max_side > 0 and max(w, h) > max_side:
+        s = max_side / float(max(w, h))
+        im = im.resize((max(1, round(w * s)), max(1, round(h * s))), Image.Resampling.NEAREST)
+    arr = np.asarray(im, dtype=np.uint8)
     fg = arr[:, :, 3] > 24
     if not np.any(fg):
-        return Image.fromarray(arr, mode="RGBA")
+        return (0.0, 0.0, 0.0)
     lab = srgb_to_oklab(arr[:, :, :3].astype(np.float32) / 255.0)
+    lift_l = 0.0
+    shift_a = 0.0
+    shift_b = 0.0
     if np.all(fg):
         # Full-scene opaque photo (e.g. Direct Photo mode): preserve stadium/kit hues, lift only truly dim scenes
         p92_l = float(np.percentile(lab[:, :, 0], 92))
         if p92_l < 0.70:
-            lift = min(0.70 - p92_l, 0.12) * 0.60
-            lab[:, :, 0] = np.clip(lab[:, :, 0] + lift * (1.0 - lab[:, :, 0]), 0.0, 0.99)
-        for ch, thresh in ((1, 0.055), (2, 0.085)):
-            med_c = float(np.median(lab[:, :, ch]))
-            if abs(med_c) > thresh:
-                lab[:, :, ch] -= (med_c - math.copysign(thresh, med_c)) * 0.25
+            lift_l = min(0.70 - p92_l, 0.12) * 0.60
+        med_a = float(np.median(lab[:, :, 1]))
+        if abs(med_a) > 0.055:
+            shift_a = -(med_a - math.copysign(0.055, med_a)) * 0.25
+        med_b = float(np.median(lab[:, :, 2]))
+        if abs(med_b) > 0.085:
+            shift_b = -(med_b - math.copysign(0.085, med_b)) * 0.25
     else:
         med_l = float(np.median(lab[fg, 0]))
         if med_l < 0.62:
-            lift = min(0.62 - med_l, 0.14) * 0.75
-            lab[fg, 0] = np.clip(lab[fg, 0] + lift * (1.0 - lab[fg, 0]), 0.0, 0.99)
-        for ch, neutral in ((1, 0.025), (2, 0.045)):
-            delta = float(np.median(lab[fg, ch])) - neutral
-            if abs(delta) > 0.025:
-                lab[fg, ch] -= delta * 0.35
+            lift_l = min(0.62 - med_l, 0.14) * 0.75
+        delta_a = float(np.median(lab[fg, 1])) - 0.025
+        if abs(delta_a) > 0.025:
+            shift_a = -delta_a * 0.35
+        delta_b = float(np.median(lab[fg, 2])) - 0.045
+        if abs(delta_b) > 0.025:
+            shift_b = -delta_b * 0.35
+    return (float(lift_l), float(shift_a), float(shift_b))
+
+
+def apply_oklab_harmonize_params(
+    img_rgba: Image.Image,
+    params: tuple[float, float, float],
+) -> Image.Image:
+    """Apply precomputed (lift_l, shift_a, shift_b) OKLab adjustments to an RGBA layer (e.g. 260x310)."""
+    lift_l, shift_a, shift_b = params
+    if abs(lift_l) <= 1e-6 and abs(shift_a) <= 1e-6 and abs(shift_b) <= 1e-6:
+        return img_rgba if img_rgba.mode == "RGBA" else img_rgba.convert("RGBA")
+    arr = np.asarray(img_rgba if img_rgba.mode == "RGBA" else img_rgba.convert("RGBA"), dtype=np.uint8).copy()
+    fg = arr[:, :, 3] > 0
+    if not np.any(fg):
+        return Image.fromarray(arr, mode="RGBA")
+    lab = srgb_to_oklab(arr[:, :, :3].astype(np.float32) / 255.0)
+    if np.all(fg):
+        if lift_l > 1e-6:
+            lab[:, :, 0] = np.clip(lab[:, :, 0] + lift_l * (1.0 - lab[:, :, 0]), 0.0, 0.99)
+        if abs(shift_a) > 1e-6:
+            lab[:, :, 1] += shift_a
+        if abs(shift_b) > 1e-6:
+            lab[:, :, 2] += shift_b
+    else:
+        if lift_l > 1e-6:
+            lab[fg, 0] = np.clip(lab[fg, 0] + lift_l * (1.0 - lab[fg, 0]), 0.0, 0.99)
+        if abs(shift_a) > 1e-6:
+            lab[fg, 1] += shift_a
+        if abs(shift_b) > 1e-6:
+            lab[fg, 2] += shift_b
     arr[:, :, :3] = np.clip(np.round(oklab_to_srgb(lab, preserve_hue_gamut=True) * 255.0), 0, 255).astype(np.uint8)
+    arr[:, :, :3] = np.where(arr[:, :, 3:4] > 0, arr[:, :, :3], 0)
     return Image.fromarray(arr, mode="RGBA")
+
+
+def harmonize_oklab_pure_optics(img_rgba: Image.Image) -> Image.Image:
+    """Zero-AI exposure lift and indoor cast normalization in OKLab space."""
+    params = compute_oklab_harmonize_params(img_rgba, max_side=0)
+    return apply_oklab_harmonize_params(img_rgba, params)
 
 
 def deblock_jpeg_8x8_roi(
@@ -174,7 +226,7 @@ def compute_effective_scale(sw: int, sh: int, zoom: float, fit_mode: FitMode) ->
         return z
     if fit_mode == "cover":
         return max(INNER_WIN_W / max(sw, 1), INNER_WIN_H / max(sh, 1)) * z
-    return min(DF11_W / max(sw, 1), DF11_H / max(sh, 1)) * z
+    return min(INNER_WIN_W / max(sw, 1), INNER_WIN_H / max(sh, 1)) * z
 
 
 def clamp_direct_pan(
@@ -203,7 +255,7 @@ def resample_linear_subpixel_rgba(
     dst_size: tuple[int, int] = (DF11_W, DF11_H),
 ) -> np.ndarray:
     """O(1) ROI linear-light premultiplied subpixel resampler (zero gamma darkening, zero O(zoom^2) blowup)."""
-    rgba_im = src_rgba.convert("RGBA")
+    rgba_im = src_rgba if src_rgba.mode == "RGBA" else src_rgba.convert("RGBA")
     sw, sh = rgba_im.size
     dw_tot, dh_tot = dst_size
     if sw < 1 or sh < 1:
@@ -214,18 +266,31 @@ def resample_linear_subpixel_rgba(
         px, py = clamp_direct_pan(sw, sh, zoom, px, py, fit_mode=fit_mode)
 
     eff_scale = compute_effective_scale(sw, sh, zoom, fit_mode)
-    if (
-        (sw, sh) == (dw_tot, dh_tot)
-        and abs(eff_scale - 1.0) < 1e-4
-        and abs(px) < 1e-3
-        and abs(py) < 1e-3
-    ):
-        return np.asarray(rgba_im, dtype=np.uint8).copy()
-
     disp_w = sw * eff_scale
     disp_h = sh * eff_scale
     x0 = (dw_tot - disp_w) * 0.5 + px
     y0 = (dh_tot - disp_h) * 0.5 + py
+
+    rx0 = round(x0)
+    ry0 = round(y0)
+    if (
+        abs(eff_scale - 1.0) < 1e-4
+        and abs(x0 - rx0) < 1e-3
+        and abs(y0 - ry0) < 1e-3
+    ):
+        if (sw, sh) == (dw_tot, dh_tot) and rx0 == 0 and ry0 == 0:
+            return np.asarray(rgba_im, dtype=np.uint8).copy()
+        canvas = np.zeros((dh_tot, dw_tot, 4), dtype=np.uint8)
+        cx0 = max(0, rx0)
+        cy0 = max(0, ry0)
+        cx1 = min(dw_tot, rx0 + sw)
+        cy1 = min(dh_tot, ry0 + sh)
+        if cx1 > cx0 and cy1 > cy0:
+            src_arr = np.asarray(rgba_im, dtype=np.uint8)
+            sub = src_arr[cy0 - ry0 : cy1 - ry0, cx0 - rx0 : cx1 - rx0]
+            canvas[cy0:cy1, cx0:cx1, :3] = np.where(sub[:, :, 3:4] > 0, sub[:, :, :3], 0)
+            canvas[cy0:cy1, cx0:cx1, 3] = sub[:, :, 3]
+        return canvas
 
     dx0 = max(0, int(math.floor(x0)))
     dy0 = max(0, int(math.floor(y0)))
@@ -249,7 +314,24 @@ def resample_linear_subpixel_rgba(
     if ix1 <= ix0 or iy1 <= iy0:
         return canvas
 
-    roi_u8 = np.asarray(rgba_im.crop((ix0, iy0, ix1, iy1)), dtype=np.uint8)
+    out_size = (dx1 - dx0, dy1 - dy0)
+    rw = ix1 - ix0
+    rh = iy1 - iy0
+    if eff_scale < 0.28 and rw * rh > 650_000:
+        pre_w = min(rw, max(out_size[0] * 2, round(rw * eff_scale * 2.2)))
+        pre_h = min(rh, max(out_size[1] * 2, round(rh * eff_scale * 2.2)))
+        roi_u8 = np.asarray(
+            rgba_im.resize((pre_w, pre_h), Image.Resampling.BOX, box=(ix0, iy0, ix1, iy1)),
+            dtype=np.uint8,
+        )
+        rx_scale = pre_w / float(rw)
+        ry_scale = pre_h / float(rh)
+    else:
+        roi_u8 = np.asarray(rgba_im.crop((ix0, iy0, ix1, iy1)), dtype=np.uint8)
+        pre_w, pre_h = rw, rh
+        rx_scale = 1.0
+        ry_scale = 1.0
+
     roi_a = roi_u8[:, :, 3].astype(np.float32) / 255.0
 
     if eff_scale > 1.20:
@@ -265,22 +347,26 @@ def resample_linear_subpixel_rgba(
 
     premul_roi = roi_lin * roi_a[:, :, None]
 
-    pad_l = max(0, int(math.ceil(ix0 - sx0)) + 2)
-    pad_t = max(0, int(math.ceil(iy0 - sy0)) + 2)
-    pad_r = max(0, int(math.ceil(sx1 - ix1)) + 2)
-    pad_b = max(0, int(math.ceil(sy1 - iy1)) + 2)
+    rel_sx0 = (sx0 - ix0) * rx_scale
+    rel_sy0 = (sy0 - iy0) * ry_scale
+    rel_sx1 = (sx1 - ix0) * rx_scale
+    rel_sy1 = (sy1 - iy0) * ry_scale
+
+    pad_l = max(0, int(math.ceil(-rel_sx0)) + 2)
+    pad_t = max(0, int(math.ceil(-rel_sy0)) + 2)
+    pad_r = max(0, int(math.ceil(rel_sx1 - pre_w)) + 2)
+    pad_b = max(0, int(math.ceil(rel_sy1 - pre_h)) + 2)
 
     if pad_l or pad_t or pad_r or pad_b:
         premul_roi = np.pad(premul_roi, ((pad_t, pad_b), (pad_l, pad_r), (0, 0)), mode="constant", constant_values=0.0)
         roi_a = np.pad(roi_a, ((pad_t, pad_b), (pad_l, pad_r)), mode="constant", constant_values=0.0)
 
-    bx0 = sx0 - ix0 + pad_l
-    by0 = sy0 - iy0 + pad_t
-    bx1 = sx1 - ix0 + pad_l
-    by1 = sy1 - iy0 + pad_t
+    bx0 = rel_sx0 + pad_l
+    by0 = rel_sy0 + pad_t
+    bx1 = rel_sx1 + pad_l
+    by1 = rel_sy1 + pad_t
     box = (float(bx0), float(by0), float(bx1), float(by1))
 
-    out_size = (dx1 - dx0, dy1 - dy0)
     kernel = Image.Resampling.LANCZOS if eff_scale <= 1.35 else Image.Resampling.BICUBIC
 
     out_a = np.asarray(Image.fromarray(roi_a, mode="F").resize(out_size, kernel, box=box), dtype=np.float32)
@@ -379,16 +465,16 @@ def enhance_df11_pure_optics(
         return out
 
     rgb_u8 = roi[:, :, :3].copy()
-    # Extrapolate opaque interior colors into transparent neighbor pixels so (0,0,0,0) never darkens hair edges
-    if not np.all(fg):
-        af = (alpha_u8.astype(np.float32) / 255.0)
-        w_fg = (alpha_u8 > 180).astype(np.float32)
-        if np.any(w_fg > 0.5):
+    # Extrapolate visible foreground colors ONLY into fully transparent (alpha == 0) neighbor pixels
+    # so (0,0,0,0) never darkens hair edges while preserving 100% of semi-transparent strand RGB (alpha > 0).
+    if np.any(alpha_u8 == 0):
+        w_fg = alpha_u8.astype(np.float32) / 255.0
+        if np.any(alpha_u8 > 0):
             den = np.maximum(fast_tent_f32(w_fg, 2), 1e-4)
             for c in range(3):
                 num = fast_tent_f32(rgb_u8[:, :, c].astype(np.float32) * w_fg, 2)
                 extrap = np.clip(np.round(num / den), 0.0, 255.0).astype(np.uint8)
-                rgb_u8[:, :, c] = np.where(af > 0.85, rgb_u8[:, :, c], extrap)
+                rgb_u8[:, :, c] = np.where(alpha_u8 > 0, rgb_u8[:, :, c], extrap)
 
     lab = srgb_to_oklab(rgb_u8.astype(np.float32) / 255.0)
     l_ch = lab[:, :, 0]

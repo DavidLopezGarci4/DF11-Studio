@@ -1054,7 +1054,12 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       expect(screen.queryByAltText(/Zona de corte previa/i)).not.toBeInTheDocument();
       expect(screen.getByText(/Modo Foto Directa activo/i)).toBeInTheDocument();
 
-      // Move in all 4 cardinal points (N, S, O, E) + keyboard arrow
+      // Zoom in slightly via wheel (100% -> 110%) so 420x280 has vertical headroom (limY = 13.9px > 8px), then move in all 4 cardinal points (N, S, O, E) + keyboard arrow
+      const canvas = screen.getByTestId('df11-official-canvas');
+      fireEvent.wheel(canvas, { deltaY: -100 });
+      fireEvent.wheel(canvas, { deltaY: -100 });
+      expect(screen.getByLabelText(/Valor exacto de Zoom/i)).toHaveValue('110');
+
       fireEvent.click(screen.getByRole('button', { name: /Mover al Norte/i }));
       expect(screen.getByText(/X:0 · Y:-2/i)).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: /Mover al Sur/i }));
@@ -1067,10 +1072,10 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       fireEvent.keyDown(window, { key: 'ArrowRight' });
       expect(screen.getByText(/X:3 · Y:-8/i)).toBeInTheDocument();
 
-      // Center-pivot zoom: doubling zoom 100% -> 200% scales pan offset (3, -8) -> (6, -16) around DF11 optical center
+      // Center-pivot zoom: doubling zoom 110% -> 220% scales pan offset (3, -8) -> (6, -16) around DF11 optical center
       const zoomInput = screen.getByLabelText(/Valor exacto de Zoom/i);
       fireEvent.focus(zoomInput);
-      fireEvent.change(zoomInput, { target: { value: '200' } });
+      fireEvent.change(zoomInput, { target: { value: '220' } });
       fireEvent.blur(zoomInput);
       expect(screen.getByText(/X:6 · Y:-16/i)).toBeInTheDocument();
 
@@ -1109,7 +1114,7 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       expect(screen.getByLabelText(/Valor exacto de Zoom/i)).toHaveValue('100');
       fireEvent.click(screen.getByRole('button', { name: /Foto Directa \+ Marco DF11/i }));
       expect(screen.getByText(/X:6 · Y:-16/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/Valor exacto de Zoom/i)).toHaveValue('200');
+      expect(screen.getByLabelText(/Valor exacto de Zoom/i)).toHaveValue('220');
 
       // Reversible Delete clear in Direct Photo mode
       fireEvent.keyDown(window, { key: 'Delete' });
@@ -1123,12 +1128,197 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
         uid: '29184012',
         step1Mode: 'direct_photo',
         directPhotoId: 'direct-1',
-        scale: 2.0,
+        scale: 2.2,
         offsetX: 6,
         offsetY: -16,
         clampPan: false,
         enhanceQuality: 0.66,
       });
+    } finally {
+      delete window.pywebview;
+    }
+  });
+
+  it('clamps Foto Directa X:/Y: with Ajustar a bordes (zero windup, zero dead reverse clicks, zero duplicate preview IPC)', async () => {
+    const calls: Array<{ fn: string; args: unknown[] }> = [];
+    window.pywebview = {
+      api: {
+        list_shirt_templates: async () => [],
+        list_saved_faces: async () => [],
+        pick_direct_photo_source: async (...args: unknown[]) => {
+          calls.push({ fn: 'pick_direct_photo_source', args });
+          return {
+            directPhotoId: 'direct-clamp-1',
+            fileName: '99112233.png',
+            label: '99112233',
+            detectedUid: '99112233',
+            width: 420,
+            height: 280,
+            isPreCutout: false,
+            clampPan: true,
+            autoFit: { scale: 1.0, offsetX: 0, offsetY: 0, neckFill: 1.0 },
+            previewDataUrl: ONE_PX_PNG,
+          };
+        },
+        render_modular_preview: async (payload: unknown) => {
+          calls.push({ fn: 'render_modular_preview', args: [payload] });
+          return { previewDataUrl: ONE_PX_PNG };
+        },
+      },
+    };
+
+    try {
+      render(<StudioView clubs={CLUBS} exportDir="D:\\DF11Studio\\Exports" onExportDirChange={() => {}} initialJump={null} />);
+      fireEvent.click(screen.getByRole('button', { name: /Foto Directa \+ Marco DF11/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Subir foto directa/i }));
+      expect(await screen.findByText(/Activa: 99112233/i)).toBeInTheDocument();
+
+      // Wait > 65ms debounce: hydrated previewDataUrl from pick_direct_photo_source must NOT trigger duplicate render_modular_preview
+      await new Promise((r) => setTimeout(r, 110));
+      expect(calls.filter((c) => c.fn === 'render_modular_preview')).toHaveLength(0);
+
+      // At 100% zoom on 420x280 cover fit: dispH = 278 -> limY = 0, dispW = 417 -> limX = 96.5
+      // Vertical N/S clicks and ArrowUp/Down must NOT wind up Y or push no-op Undo snapshots
+      fireEvent.click(screen.getByRole('button', { name: /Mover al Norte/i }), { shiftKey: true });
+      fireEvent.click(screen.getByRole('button', { name: /Mover al Norte/i }), { shiftKey: true });
+      fireEvent.keyDown(window, { key: 'ArrowUp', shiftKey: true });
+      expect(screen.getByText(/X:0 · Y:0/i)).toBeInTheDocument();
+
+      // Push East well past limX = 96.5 (15 * 8px = 120px) -> clamps strictly at 96.5
+      const eastBtn = screen.getByRole('button', { name: /Mover al Este/i });
+      for (let i = 0; i < 15; i += 1) {
+        fireEvent.click(eastBtn, { shiftKey: true });
+      }
+      expect(screen.getByText(/X:96\.5 · Y:0/i)).toBeInTheDocument();
+
+      // Single normal West click (-2px) responds immediately without dead clicks!
+      fireEvent.click(screen.getByRole('button', { name: /Mover al Oeste/i }));
+      expect(screen.getByText(/X:94\.5 · Y:0/i)).toBeInTheDocument();
+
+      // Zoom to 200%, pan North (-16px), then zoom back down to 100% -> Y clamps back to 0
+      const zoomInput = screen.getByLabelText(/Valor exacto de Zoom/i);
+      fireEvent.focus(zoomInput);
+      fireEvent.change(zoomInput, { target: { value: '200' } });
+      fireEvent.blur(zoomInput);
+      fireEvent.click(screen.getByRole('button', { name: /Mover al Norte/i }), { shiftKey: true });
+      fireEvent.click(screen.getByRole('button', { name: /Mover al Norte/i }), { shiftKey: true });
+      expect(screen.getByText(/Y:-16/i)).toBeInTheDocument();
+
+      fireEvent.focus(zoomInput);
+      fireEvent.change(zoomInput, { target: { value: '100' } });
+      fireEvent.blur(zoomInput);
+      expect(screen.getByText(/X:94\.5 · Y:0/i)).toBeInTheDocument();
+
+      // Disable 'Ajustar a bordes', move North (-8px), then re-enable -> snaps Y back to 0
+      const clampCheckbox = screen.getByRole('checkbox', { name: /Ajustar a bordes/i });
+      fireEvent.click(clampCheckbox);
+      expect(clampCheckbox).not.toBeChecked();
+      fireEvent.click(screen.getByRole('button', { name: /Mover al Norte/i }), { shiftKey: true });
+      expect(screen.getByText(/X:94\.5 · Y:-8/i)).toBeInTheDocument();
+      fireEvent.click(clampCheckbox);
+      expect(clampCheckbox).toBeChecked();
+      expect(screen.getByText(/X:94\.5 · Y:0/i)).toBeInTheDocument();
+    } finally {
+      delete window.pywebview;
+    }
+  });
+
+  it('preserves Foto Directa preview & Arrow Undo purity under StrictMode and omits clampPan on load', async () => {
+    const calls: Array<{ fn: string; args: unknown[] }> = [];
+    let pickCount = 0;
+    window.pywebview = {
+      api: {
+        list_shirt_templates: async () => [],
+        list_saved_faces: async () => [],
+        pick_direct_photo_source: async (...args: unknown[]) => {
+          calls.push({ fn: 'pick_direct_photo_source', args });
+          pickCount += 1;
+          if (pickCount === 1) {
+            return {
+              directPhotoId: 'direct-strict-1',
+              fileName: '77001122.png',
+              label: '77001122',
+              detectedUid: '77001122',
+              width: 420,
+              height: 280,
+              isPreCutout: false,
+              clampPan: true,
+              autoFit: { scale: 1.0, offsetX: 0, offsetY: 0, neckFill: 1.0 },
+              previewDataUrl: ONE_PX_PNG,
+            };
+          }
+          return {
+            directPhotoId: 'direct-strict-precut',
+            fileName: '77009999.png',
+            label: '77009999',
+            detectedUid: '77009999',
+            width: 224,
+            height: 278,
+            isPreCutout: true,
+            clampPan: false,
+            autoFit: { scale: 1.0, offsetX: 0, offsetY: 0, neckFill: 1.0 },
+            previewDataUrl: ONE_PX_PNG,
+          };
+        },
+        render_modular_preview: async (payload: unknown) => {
+          calls.push({ fn: 'render_modular_preview', args: [payload] });
+          return { previewDataUrl: ONE_PX_PNG };
+        },
+      },
+    };
+
+    try {
+      render(
+        <StrictMode>
+          <StudioView clubs={CLUBS} exportDir="D:\\DF11Studio\\Exports" onExportDirChange={() => {}} initialJump={null} />
+        </StrictMode>,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Foto Directa \+ Marco DF11/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Subir foto directa/i }));
+      expect(await screen.findByText(/Activa: 77001122/i)).toBeInTheDocument();
+      expect(screen.getByAltText('Previsualización DF11 260x310')).toBeInTheDocument();
+
+      // 1. pick_direct_photo_source must NOT pass forced clampPan so backend applies !isPreCutout default
+      const firstPickOpts = calls.find((c) => c.fn === 'pick_direct_photo_source')?.args[0] as Record<string, unknown>;
+      expect(firstPickOpts).toBeDefined();
+      expect('clampPan' in firstPickOpts).toBe(false);
+
+      // 2. Zero duplicate render_modular_preview calls under StrictMode double-effect mount
+      await new Promise((r) => setTimeout(r, 110));
+      expect(calls.filter((c) => c.fn === 'render_modular_preview')).toHaveLength(0);
+
+      // 3. Switch to empty Modo Capas (clears preview) -> switch back to Foto Directa -> restores preview via IPC
+      fireEvent.click(screen.getByRole('button', { name: /Modo Capas \(Cara \+ Camiseta\)/i }));
+      expect(screen.queryByAltText('Previsualización DF11 260x310')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Foto Directa \+ Marco DF11/i }));
+      await waitFor(() => expect(calls.filter((c) => c.fn === 'render_modular_preview').length).toBeGreaterThanOrEqual(1));
+      expect(await screen.findByAltText('Previsualización DF11 260x310')).toBeInTheDocument();
+
+      // 4. Under StrictMode, ArrowRight pushes an Undo entry so Deshacer reverts X:1 -> X:0 instead of wiping the photo
+      fireEvent.keyDown(window, { key: 'ArrowRight' });
+      expect(screen.getByText(/X:1 · Y:0/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Deshacer' }));
+      expect(screen.getByText(/X:0 · Y:0/i)).toBeInTheDocument();
+      expect(screen.getByText(/Activa: 77001122/i)).toBeInTheDocument();
+
+      // 5. Undo past empty Modo Capas and Redo back to Foto Directa restores preview image cleanly
+      fireEvent.click(screen.getByRole('button', { name: 'Deshacer' })); // back to empty Modo Capas
+      expect(screen.queryByAltText('Previsualización DF11 260x310')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Rehacer' })); // back to Foto Directa
+      expect(await screen.findByAltText('Previsualización DF11 260x310')).toBeInTheDocument();
+
+      // 6. Loading a pre-cutout Direct Photo omits clampPan, leaves Ajustar a bordes unchecked, and allows free pan at 100%
+      fireEvent.click(screen.getByRole('button', { name: /Subir foto directa/i }));
+      expect(await screen.findByText(/Activa: 77009999/i)).toBeInTheDocument();
+      const pickCalls = calls.filter((c) => c.fn === 'pick_direct_photo_source');
+      expect(pickCalls).toHaveLength(2);
+      expect('clampPan' in (pickCalls[1].args[0] as Record<string, unknown>)).toBe(false);
+
+      const clampCheckbox = screen.getByRole('checkbox', { name: /Ajustar a bordes/i });
+      expect(clampCheckbox).not.toBeChecked();
+      fireEvent.click(screen.getByRole('button', { name: /Mover al Norte/i }));
+      expect(screen.getByText(/X:0 · Y:-2/i)).toBeInTheDocument();
     } finally {
       delete window.pywebview;
     }

@@ -14,7 +14,13 @@ import numpy as np
 from PIL import Image
 
 from backend.core.compositor import render_df11_card
-from backend.core.dsp import FitMode, harmonize_oklab_pure_optics
+from backend.core.dsp import (
+    FitMode,
+    apply_oklab_harmonize_params,
+    compute_effective_scale,
+    compute_oklab_harmonize_params,
+    resample_linear_subpixel_rgba,
+)
 from backend.core.fm_config import VALID_FM_UID_RE
 from backend.core.image_guard import load_guarded_image
 from backend.services.head_neck import (
@@ -37,6 +43,7 @@ from backend.services.templates import (
     CollarProfile,
     IMAGE_EXTS,
     ShirtTemplate,
+    _has_df11_outer_ring,
     delete_shirt_template,
     extract_collar_profile,
     normalize_template_category,
@@ -133,13 +140,48 @@ class ModularWorkflowSession:
 
         # Direct Photo + DF11 Frame sources (100% offline, 0% AI, LRU-bounded)
         self._direct_seq = 0
-        self._direct_photos: OrderedDict[str, tuple[Image.Image, bool, str]] = OrderedDict()
+        self._direct_photos: OrderedDict[str, tuple[Image.Image, bool, str, tuple[float, float, float]]] = OrderedDict()
 
-    def _put_direct_photo(self, rgba: Image.Image, is_precut: bool, label: str) -> str:
+    @staticmethod
+    def _extract_direct_df11_inner_crop(card_rgba: Image.Image) -> tuple[Image.Image, bool]:
+        """Crop an already-assembled 260x310 DF11 card to its exact 224x278 inner window without smearing/erasing."""
+        crop_arr = np.asarray(card_rgba.convert("RGBA").crop((18, 16, 242, 294)), dtype=np.uint8).copy()
+        interior_a = crop_arr[18:276, 20:222, 3]
+        is_precut = bool(float(np.mean(interior_a < 250)) >= 0.02)
+        if not is_precut:
+            zero_mask = crop_arr[:, :, 3] == 0
+            if np.any(zero_mask):
+                opaque = crop_arr[:, :, 3] >= 250
+                if np.any(opaque):
+                    eroded = np.zeros_like(opaque)
+                    eroded[1:-1, 1:-1] = (
+                        opaque[1:-1, 1:-1]
+                        & opaque[:-2, 1:-1]
+                        & opaque[2:, 1:-1]
+                        & opaque[1:-1, :-2]
+                        & opaque[1:-1, 2:]
+                    )
+                    boundary = opaque & ~eroded
+                    by, bx = np.nonzero(boundary)
+                    zy, zx = np.nonzero(zero_mask)
+                    if len(by) > 0:
+                        d2 = (zy[:, None] - by[None, :]) ** 2 + (zx[:, None] - bx[None, :]) ** 2
+                        nearest = np.argmin(d2, axis=1)
+                        crop_arr[zy, zx, :3] = crop_arr[by[nearest], bx[nearest], :3]
+            crop_arr[:, :, 3] = 255
+        return Image.fromarray(crop_arr, mode="RGBA"), is_precut
+
+    def _put_direct_photo(
+        self,
+        rgba: Image.Image,
+        is_precut: bool,
+        label: str,
+        harm_params: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    ) -> str:
         with self._lock:
             self._direct_seq += 1
             did = f"direct-{self._direct_seq}"
-            self._direct_photos[did] = (rgba, is_precut, label)
+            self._direct_photos[did] = (rgba, is_precut, label, harm_params)
             while len(self._direct_photos) > MAX_CACHED_HEADS:
                 self._direct_photos.popitem(last=False)
             return did
@@ -151,7 +193,9 @@ class ModularWorkflowSession:
         with self._lock:
             return did in self._direct_photos
 
-    def get_direct_photo(self, direct_photo_id: str) -> tuple[Image.Image, bool, str] | None:
+    def get_direct_photo(
+        self, direct_photo_id: str
+    ) -> tuple[Image.Image, bool, str, tuple[float, float, float]] | None:
         did = str(direct_photo_id or "").strip()
         if not did:
             return None
@@ -170,11 +214,15 @@ class ModularWorkflowSession:
     ) -> dict[str, Any]:
         """Load any image directly into a 260x310 DF11 frame with 100% offline, 0% AI optical framing."""
         g = load_guarded_image(raw_bytes)
-        prep_im, prep_precut = prepare_facepack_card_for_head_extraction(g.image, g.is_pre_cutout)
+        if _has_df11_outer_ring(g.image):
+            prep_im, prep_precut = self._extract_direct_df11_inner_crop(g.image)
+        else:
+            prep_im, prep_precut = g.image, g.is_pre_cutout
+        harm_params = compute_oklab_harmonize_params(prep_im)
         stem = Path(file_name).stem.strip() if file_name else ""
         detected_uid = stem if VALID_FM_UID_RE.fullmatch(stem) else ""
         label = stem or "Foto_Directa"
-        did = self._put_direct_photo(prep_im, prep_precut, label)
+        did = self._put_direct_photo(prep_im, prep_precut, label, harm_params)
 
         base_p = dict(extra_params or {})
         clamp_pan = bool(base_p.get("clampPan", not prep_precut))
@@ -817,20 +865,32 @@ class ModularWorkflowSession:
             entry = self.get_direct_photo(direct_id) if direct_id else None
             if entry is None:
                 return render_df11_card(None, bg_mode=bg_mode, bg_custom_rgba=custom_bg, bg_blur=bg_blur)
-            raw_im, is_precut, _lbl = entry
-            src_im = harmonize_oklab_pure_optics(raw_im) if harmonize else raw_im
+            raw_im, is_precut, _lbl, harm_params = entry
             fit_mode: FitMode = "contain" if is_precut else "cover"
             clamp_pan = bool(p.get("clampPan", not is_precut))
+            eff_s = compute_effective_scale(raw_im.width, raw_im.height, scale, fit_mode)
+            placed_arr = resample_linear_subpixel_rgba(
+                raw_im,
+                zoom=scale,
+                pan_x=ox,
+                pan_y=oy,
+                fit_mode=fit_mode,
+                clamp_to_inner=clamp_pan,
+            )
+            placed_im = Image.fromarray(placed_arr, mode="RGBA")
+            if harmonize:
+                placed_im = apply_oklab_harmonize_params(placed_im, harm_params)
             return render_df11_card(
-                portrait_rgba=src_im,
-                portrait_offset=(ox, oy),
-                portrait_scale=scale,
+                portrait_rgba=placed_im,
+                portrait_offset=(0.0, 0.0),
+                portrait_scale=1.0,
                 bg_mode=bg_mode,
                 bg_custom_rgba=custom_bg,
                 bg_blur=bg_blur,
                 enhance_quality=enhance_q,
-                fit_mode=fit_mode,
-                clamp_to_inner=clamp_pan,
+                fit_mode="raw",
+                clamp_to_inner=False,
+                upscale_hint=max(1.0, eff_s),
             )
 
         head_id = str(p.get("headAssetId", "")).strip()

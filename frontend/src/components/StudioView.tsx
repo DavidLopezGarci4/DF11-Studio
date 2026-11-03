@@ -94,6 +94,8 @@ interface LayerSnapshot {
   directPhotoId: string;
   directPhotoLabel: string;
   directPhotoIsPreCutout: boolean;
+  directWidth: number;
+  directHeight: number;
   directScale: number;
   directOffsetX: number;
   directOffsetY: number;
@@ -111,6 +113,9 @@ interface LayerSnapshot {
   bgBlur: number;
 }
 
+const DIRECT_INNER_W = 224;
+const DIRECT_INNER_H = 278;
+
 const INITIAL_SNAP: LayerSnapshot = {
   step1Mode: 'modular',
   headAssetId: '',
@@ -118,6 +123,8 @@ const INITIAL_SNAP: LayerSnapshot = {
   directPhotoId: '',
   directPhotoLabel: '',
   directPhotoIsPreCutout: false,
+  directWidth: DIRECT_INNER_W,
+  directHeight: DIRECT_INNER_H,
   directScale: 1.0,
   directOffsetX: 0,
   directOffsetY: 0,
@@ -134,6 +141,60 @@ const INITIAL_SNAP: LayerSnapshot = {
   bgMode: 'white_df11',
   bgBlur: 0,
 };
+
+function clampDirectOffsets(
+  ox: number,
+  oy: number,
+  scale: number,
+  sw: number,
+  sh: number,
+  isPreCutout: boolean,
+  clampPan: boolean,
+): { x: number; y: number } {
+  const cleanX = Number(ox.toFixed(4));
+  const cleanY = Number(oy.toFixed(4));
+  if (!clampPan) {
+    return { x: cleanX, y: cleanY };
+  }
+  const safeW = Math.max(1, sw);
+  const safeH = Math.max(1, sh);
+  const z = Math.max(0.08, Math.min(scale, 8.0));
+  const base = isPreCutout
+    ? Math.min(DIRECT_INNER_W / safeW, DIRECT_INNER_H / safeH)
+    : Math.max(DIRECT_INNER_W / safeW, DIRECT_INNER_H / safeH);
+  const eff = base * z;
+  const limX = Math.abs(safeW * eff - DIRECT_INNER_W) * 0.5;
+  const limY = Math.abs(safeH * eff - DIRECT_INNER_H) * 0.5;
+  return {
+    x: Number(Math.max(-limX, Math.min(limX, ox)).toFixed(4)),
+    y: Number(Math.max(-limY, Math.min(limY, oy)).toFixed(4)),
+  };
+}
+
+function buildComposePayload(s: LayerSnapshot) {
+  const direct = s.step1Mode === 'direct_photo';
+  const sc = direct ? s.directScale : s.scale;
+  const ox = direct ? s.directOffsetX : s.offsetX;
+  const oy = direct ? s.directOffsetY : s.offsetY;
+  return {
+    modular: true,
+    step1Mode: s.step1Mode,
+    directPhotoId: s.directPhotoId,
+    clampPan: s.clampPan,
+    enhanceQuality: s.enhanceQuality,
+    headAssetId: s.headAssetId === 'legacy-jump' ? '' : s.headAssetId,
+    wearMode: 'template' as const,
+    templateId: s.templateId,
+    clubId: s.clubId || '1736',
+    scale: sc,
+    offsetX: Number(ox.toFixed(2)),
+    offsetY: Number(oy.toFixed(2)),
+    neckFill: s.neckFill,
+    harmonize: s.harmonize,
+    bgMode: s.bgMode,
+    bgBlur: s.bgBlur,
+  };
+}
 
 interface PercentStepperProps {
   sessionPrefix: string;
@@ -347,6 +408,13 @@ export default function StudioView({
     : null;
 
   const [previewUrl, setPreviewUrl] = useState('');
+  const previewUrlRef = useRef('');
+  const lastRenderedPreviewRef = useRef<{ key: string; url: string }>({ key: '', url: '' });
+  const updatePreviewUrl = useCallback((url: string, renderedKey = '') => {
+    previewUrlRef.current = url;
+    lastRenderedPreviewRef.current = url && renderedKey ? { key: renderedKey, url } : { key: '', url: '' };
+    setPreviewUrl(url);
+  }, []);
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [savedMsg, setSavedMsg] = useState('');
@@ -479,12 +547,14 @@ export default function StudioView({
     if (isDirectMode) {
       if (!snap.directPhotoId) return;
       reqSeqRef.current += 1;
-      setPreviewUrl('');
+      updatePreviewUrl('');
       commitSnap((s) => ({
         ...s,
         directPhotoId: '',
         directPhotoLabel: '',
         directPhotoIsPreCutout: false,
+        directWidth: DIRECT_INNER_W,
+        directHeight: DIRECT_INNER_H,
         directScale: 1.0,
         directOffsetX: 0,
         directOffsetY: 0,
@@ -494,7 +564,7 @@ export default function StudioView({
     if (!snap.headAssetId) return;
     if (!snap.templateId) {
       reqSeqRef.current += 1;
-      setPreviewUrl('');
+      updatePreviewUrl('');
     }
     setCanExtractBg(false);
     commitSnap((s) => ({
@@ -505,7 +575,7 @@ export default function StudioView({
       offsetX: 0,
       offsetY: 0,
     }));
-  }, [cropStage, isDirectMode, snap.directPhotoId, snap.headAssetId, snap.templateId, commitSnap]);
+  }, [cropStage, isDirectMode, snap.directPhotoId, snap.headAssetId, snap.templateId, commitSnap, updatePreviewUrl]);
 
   const handleTemplatesUpdated = useCallback((nextTemplates: ShirtTemplateInfo[]) => {
     const prevTemplates = templatesRef.current;
@@ -591,7 +661,7 @@ export default function StudioView({
     setActiveStep(1);
     setCropStage(null);
     setUid(initialJump.uid);
-    setPreviewUrl(initialJump.previewDataUrl);
+    updatePreviewUrl(initialJump.previewDataUrl);
     setCanExtractBg(!initialJump.isPreCutout);
     const jumpClubId = (initialJump.clubId ?? '').replace(/[^0-9]/g, '').slice(0, 12);
     const matchedTpl = initialJump.matchedTemplateId
@@ -621,31 +691,11 @@ export default function StudioView({
       bgBlur: 0,
     }));
     onConsumeJump?.();
-  }, [initialJump, clubs, templates, commitSnap, onConsumeJump]);
+  }, [initialJump, clubs, templates, commitSnap, onConsumeJump, updatePreviewUrl]);
 
   const hasComposition = isDirectMode ? Boolean(snap.directPhotoId) : Boolean(snap.headAssetId || snap.templateId);
 
-  const composePayload = useMemo(
-    () => ({
-      modular: true,
-      step1Mode: snap.step1Mode,
-      directPhotoId: snap.directPhotoId,
-      clampPan: snap.clampPan,
-      enhanceQuality: snap.enhanceQuality,
-      headAssetId: snap.headAssetId === 'legacy-jump' ? '' : snap.headAssetId,
-      wearMode: 'template' as const,
-      templateId: snap.templateId,
-      clubId: snap.clubId || '1736',
-      scale: activeScale,
-      offsetX: Number(activeOffsetX.toFixed(2)),
-      offsetY: Number(activeOffsetY.toFixed(2)),
-      neckFill: snap.neckFill,
-      harmonize: snap.harmonize,
-      bgMode: snap.bgMode,
-      bgBlur: snap.bgBlur,
-    }),
-    [snap, activeScale, activeOffsetX, activeOffsetY],
-  );
+  const composePayload = useMemo(() => buildComposePayload(snap), [snap]);
 
   // Live modular preview when layers/fit/background/quality change
   useEffect(() => {
@@ -653,12 +703,12 @@ export default function StudioView({
     if (isDirectMode) {
       if (!snap.directPhotoId) {
         reqSeqRef.current += 1;
-        setPreviewUrl('');
+        updatePreviewUrl('');
         return undefined;
       }
     } else if (!snap.headAssetId && !snap.templateId) {
       reqSeqRef.current += 1;
-      setPreviewUrl('');
+      updatePreviewUrl('');
       return undefined;
     } else if (snap.headAssetId === 'legacy-jump') {
       if (!window.pywebview?.api?.render_studio_preview) return undefined;
@@ -666,24 +716,36 @@ export default function StudioView({
       const t = window.setTimeout(async () => {
         try {
           const res = await callBridge<{ previewDataUrl: string }>('render_studio_preview', composePayload);
-          if (seq === reqSeqRef.current && res?.previewDataUrl) setPreviewUrl(res.previewDataUrl);
+          if (seq === reqSeqRef.current && res?.previewDataUrl) {
+            updatePreviewUrl(res.previewDataUrl, 'legacy-jump');
+          }
         } catch {
           /* transient drag */
         }
       }, 65);
       return () => window.clearTimeout(t);
     }
+    const payloadKey = JSON.stringify(composePayload);
+    if (
+      lastRenderedPreviewRef.current.key === payloadKey &&
+      lastRenderedPreviewRef.current.url &&
+      previewUrlRef.current === lastRenderedPreviewRef.current.url
+    ) {
+      return undefined;
+    }
     const seq = ++reqSeqRef.current;
     const t = window.setTimeout(async () => {
       try {
         const res = await callBridge<{ previewDataUrl: string }>('render_modular_preview', composePayload);
-        if (seq === reqSeqRef.current && res?.previewDataUrl) setPreviewUrl(res.previewDataUrl);
+        if (seq === reqSeqRef.current && res?.previewDataUrl) {
+          updatePreviewUrl(res.previewDataUrl, payloadKey);
+        }
       } catch {
         /* transient drag */
       }
     }, 65);
     return () => window.clearTimeout(t);
-  }, [cropStage, isDirectMode, snap.directPhotoId, snap.headAssetId, snap.templateId, composePayload]);
+  }, [cropStage, isDirectMode, snap.directPhotoId, snap.headAssetId, snap.templateId, composePayload, updatePreviewUrl]);
 
   const applyDirectPhotoResult = useCallback(
     (res: DirectPhotoResponse) => {
@@ -695,22 +757,44 @@ export default function StudioView({
       if (res.detectedUid) {
         setUid(res.detectedUid);
       }
+      const buildNextDirectSnap = (s: LayerSnapshot): LayerSnapshot => {
+        const isPrecut = Boolean(res.isPreCutout);
+        const w = Math.max(1, Math.round(res.width || DIRECT_INNER_W));
+        const h = Math.max(1, Math.round(res.height || DIRECT_INNER_H));
+        const nextClamp = res.clampPan ?? !isPrecut;
+        const nextScale = res.autoFit?.scale ?? 1.0;
+        const clamped = clampDirectOffsets(
+          res.autoFit?.offsetX ?? 0,
+          res.autoFit?.offsetY ?? 0,
+          nextScale,
+          w,
+          h,
+          isPrecut,
+          nextClamp,
+        );
+        return {
+          ...s,
+          step1Mode: 'direct_photo',
+          directPhotoId: res.directPhotoId,
+          directPhotoLabel: res.label || 'Foto directa',
+          directPhotoIsPreCutout: isPrecut,
+          directWidth: w,
+          directHeight: h,
+          clampPan: nextClamp,
+          directScale: nextScale,
+          directOffsetX: clamped.x,
+          directOffsetY: clamped.y,
+        };
+      };
+      const projectedSnap = buildNextDirectSnap(snap);
       if (res.previewDataUrl) {
-        setPreviewUrl(res.previewDataUrl);
+        updatePreviewUrl(res.previewDataUrl, JSON.stringify(buildComposePayload(projectedSnap)));
+      } else {
+        updatePreviewUrl('');
       }
-      commitSnap((s) => ({
-        ...s,
-        step1Mode: 'direct_photo',
-        directPhotoId: res.directPhotoId,
-        directPhotoLabel: res.label || 'Foto directa',
-        directPhotoIsPreCutout: Boolean(res.isPreCutout),
-        clampPan: res.clampPan ?? true,
-        directScale: res.autoFit?.scale ?? 1.0,
-        directOffsetX: res.autoFit?.offsetX ?? 0,
-        directOffsetY: res.autoFit?.offsetY ?? 0,
-      }));
+      commitSnap(buildNextDirectSnap);
     },
-    [commitSnap],
+    [snap, commitSnap, updatePreviewUrl],
   );
 
   const handleDirectFileBlob = useCallback(
@@ -730,8 +814,9 @@ export default function StudioView({
           r.onerror = () => rej(new Error('No se pudo leer la imagen.'));
           r.readAsDataURL(file);
         });
+        const { clampPan: _omitClamp, ...loadParams } = composePayload;
         const out = await callBridge<DirectPhotoResponse>('load_direct_photo_source', dataUrl, file.name, {
-          ...composePayload,
+          ...loadParams,
           step1Mode: 'direct_photo',
         });
         if (out?.directPhotoId) applyDirectPhotoResult(out);
@@ -751,8 +836,9 @@ export default function StudioView({
       setSavedMsg('');
       setBusy(true);
       try {
+        const { clampPan: _omitClamp, ...loadParams } = composePayload;
         const out = await callBridge<DirectPhotoResponse | null>('pick_direct_photo_source', {
-          ...composePayload,
+          ...loadParams,
           step1Mode: 'direct_photo',
         });
         if (out?.directPhotoId) applyDirectPhotoResult(out);
@@ -777,11 +863,22 @@ export default function StudioView({
       }
       if (isDirectMode) {
         if (!snap.directPhotoId) return;
-        commitSnap((s) => ({
-          ...s,
-          directOffsetX: Number((s.directOffsetX + dx).toFixed(4)),
-          directOffsetY: Number((s.directOffsetY + dy).toFixed(4)),
-        }));
+        commitSnap((s) => {
+          const clamped = clampDirectOffsets(
+            s.directOffsetX + dx,
+            s.directOffsetY + dy,
+            s.directScale,
+            s.directWidth,
+            s.directHeight,
+            s.directPhotoIsPreCutout,
+            s.clampPan,
+          );
+          return {
+            ...s,
+            directOffsetX: clamped.x,
+            directOffsetY: clamped.y,
+          };
+        });
         return;
       }
       if (!snap.headAssetId) return;
@@ -875,7 +972,7 @@ export default function StudioView({
           {},
         );
         if (out?.previewDataUrl) {
-          setPreviewUrl(out.previewDataUrl);
+          updatePreviewUrl(out.previewDataUrl, 'legacy-jump');
           setCanExtractBg(!out.isPreCutout);
           commitSnap((s) => ({ ...s, step1Mode: 'modular', headAssetId: 'legacy-jump', faceLabel: 'Retrato' }));
         }
@@ -887,7 +984,7 @@ export default function StudioView({
       return;
     }
     fileInputRef.current?.click();
-  }, [openStagedCrop, snap.harmonize, commitSnap]);
+  }, [openStagedCrop, snap.harmonize, commitSnap, updatePreviewUrl]);
 
   const handleConfirmCropAndExtract = useCallback(async () => {
     if (!cropStage) return;
@@ -909,7 +1006,7 @@ export default function StudioView({
       reqSeqRef.current += 1;
       setActiveStep(1);
       setCropStage(null);
-      if (res.previewDataUrl) setPreviewUrl(res.previewDataUrl);
+      if (res.previewDataUrl) updatePreviewUrl(res.previewDataUrl);
       commitSnap((s) => ({
         ...s,
         step1Mode: 'modular',
@@ -925,7 +1022,7 @@ export default function StudioView({
     } finally {
       setBusy(false);
     }
-  }, [cropStage, cropVp, removeBgCrop, snap.templateId, snap.bgMode, snap.bgBlur, snap.harmonize, snap.enhanceQuality, commitSnap]);
+  }, [cropStage, cropVp, removeBgCrop, snap.templateId, snap.bgMode, snap.bgBlur, snap.harmonize, snap.enhanceQuality, commitSnap, updatePreviewUrl]);
 
   const handlePickSavedFace = useCallback(
     async (faceId: string) => {
@@ -944,7 +1041,7 @@ export default function StudioView({
         }>('load_saved_face', faceId, snap.templateId, { ...composePayload, step1Mode: 'modular' });
         reqSeqRef.current += 1;
         setCanExtractBg(!res.isPreCutout);
-        if (res.previewDataUrl) setPreviewUrl(res.previewDataUrl);
+        if (res.previewDataUrl) updatePreviewUrl(res.previewDataUrl);
         commitSnap((s) => ({
           ...s,
           step1Mode: 'modular',
@@ -961,7 +1058,7 @@ export default function StudioView({
         setBusy(false);
       }
     },
-    [snap.templateId, composePayload, commitSnap],
+    [snap.templateId, composePayload, commitSnap, updatePreviewUrl],
   );
 
   const applyFacepackRemixResult = useCallback(
@@ -994,7 +1091,7 @@ export default function StudioView({
         };
         setAdhocShirtsById((prev) => ({ ...prev, [entry.id]: entry }));
         setLatestAdhocShirtId(entry.id);
-        if (res.previewDataUrl) setPreviewUrl(res.previewDataUrl);
+        if (res.previewDataUrl) updatePreviewUrl(res.previewDataUrl);
         commitSnap((s) => ({
           ...s,
           step1Mode: 'modular',
@@ -1014,7 +1111,7 @@ export default function StudioView({
       }
       setActiveStep(1);
       setCanExtractBg(!res.isPreCutout);
-      if (res.previewDataUrl) setPreviewUrl(res.previewDataUrl);
+      if (res.previewDataUrl) updatePreviewUrl(res.previewDataUrl);
       const fallbackPrevTid = snap.templateId.startsWith('adhoc:') ? '' : snap.templateId;
       const nextTid = res.templateId !== undefined ? res.templateId : fallbackPrevTid;
       const foundTpl = templatesRef.current.find((t) => t.templateId === nextTid);
@@ -1035,7 +1132,7 @@ export default function StudioView({
       }));
       setSavedMsg(`Cabeza y cuello extraídos de ${res.cardLabel}. Elige su nueva equipación en el Paso 2.`);
     },
-    [onFacepackDirChange, snap.templateId, commitSnap],
+    [onFacepackDirChange, snap.templateId, commitSnap, updatePreviewUrl],
   );
 
   const handlePickFacepackCard = useCallback(
@@ -1313,14 +1410,38 @@ export default function StudioView({
         if (isDirectMode) {
           if (snap.directPhotoId) {
             ev.preventDefault();
+            const clamped = clampDirectOffsets(
+              snap.directOffsetX + dx,
+              snap.directOffsetY + dy,
+              snap.directScale,
+              snap.directWidth,
+              snap.directHeight,
+              snap.directPhotoIsPreCutout,
+              snap.clampPan,
+            );
+            if (clamped.x === snap.directOffsetX && clamped.y === snap.directOffsetY) {
+              return;
+            }
             const now = Date.now();
             const shouldPush = now - arrowBurstTsRef.current > 450;
             arrowBurstTsRef.current = now;
             setHistory((h) => {
+              const nextClamped = clampDirectOffsets(
+                h.present.directOffsetX + dx,
+                h.present.directOffsetY + dy,
+                h.present.directScale,
+                h.present.directWidth,
+                h.present.directHeight,
+                h.present.directPhotoIsPreCutout,
+                h.present.clampPan,
+              );
+              if (nextClamped.x === h.present.directOffsetX && nextClamped.y === h.present.directOffsetY) {
+                return h;
+              }
               const next: LayerSnapshot = {
                 ...h.present,
-                directOffsetX: Number((h.present.directOffsetX + dx).toFixed(4)),
-                directOffsetY: Number((h.present.directOffsetY + dy).toFixed(4)),
+                directOffsetX: nextClamped.x,
+                directOffsetY: nextClamped.y,
               };
               return shouldPush
                 ? { past: [...h.past.slice(-34), h.present], present: next, future: [], sessionKey: null }
@@ -1371,6 +1492,13 @@ export default function StudioView({
     cropStage,
     isDirectMode,
     snap.directPhotoId,
+    snap.directOffsetX,
+    snap.directOffsetY,
+    snap.directScale,
+    snap.directWidth,
+    snap.directHeight,
+    snap.directPhotoIsPreCutout,
+    snap.clampPan,
     snap.headAssetId,
     busy,
     handleUndo,
@@ -1409,13 +1537,13 @@ export default function StudioView({
       if (!out) return;
       reqSeqRef.current += 1;
       commitSnap((s) => ({ ...s, bgMode: 'custom' }));
-      if (out.previewDataUrl) setPreviewUrl(out.previewDataUrl);
+      if (out.previewDataUrl) updatePreviewUrl(out.previewDataUrl);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'Fondo inválido (máx. 20 MB / 25 MP).');
     } finally {
       setBusy(false);
     }
-  }, [composePayload, commitSnap]);
+  }, [composePayload, commitSnap, updatePreviewUrl]);
 
   const handleExtractBg = async () => {
     setErrorMsg('');
@@ -1428,7 +1556,7 @@ export default function StudioView({
       reqSeqRef.current += 1;
       setHasExtractedBg(true);
       commitSnap((s) => ({ ...s, bgMode: 'custom' }));
-      if (res?.previewDataUrl) setPreviewUrl(res.previewDataUrl);
+      if (res?.previewDataUrl) updatePreviewUrl(res.previewDataUrl);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'Sube primero una foto con fondo para extraerlo.');
     } finally {
@@ -1453,7 +1581,7 @@ export default function StudioView({
       );
       reqSeqRef.current += 1;
       commitSnap((s) => ({ ...s, bgMode: 'custom' }));
-      if (out?.previewDataUrl) setPreviewUrl(out.previewDataUrl);
+      if (out?.previewDataUrl) updatePreviewUrl(out.previewDataUrl);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'Fondo inválido.');
     } finally {
@@ -1684,11 +1812,20 @@ export default function StudioView({
                     commitSnap((s) => {
                       const nextScale = Number(Math.min(3.0, Math.max(0.35, s.directScale + delta)).toFixed(3));
                       const ratio = nextScale / Math.max(s.directScale, 0.05);
+                      const clamped = clampDirectOffsets(
+                        s.directOffsetX * ratio,
+                        s.directOffsetY * ratio,
+                        nextScale,
+                        s.directWidth,
+                        s.directHeight,
+                        s.directPhotoIsPreCutout,
+                        s.clampPan,
+                      );
                       return {
                         ...s,
                         directScale: nextScale,
-                        directOffsetX: Number((s.directOffsetX * ratio).toFixed(4)),
-                        directOffsetY: Number((s.directOffsetY * ratio).toFixed(4)),
+                        directOffsetX: clamped.x,
+                        directOffsetY: clamped.y,
                       };
                     });
                     return;
@@ -1738,11 +1875,22 @@ export default function StudioView({
                   if (dragRef.current.mode === 'crop') {
                     setCropVp((v) => ({ ...v, panX: dragRef.current!.ox + dx, panY: dragRef.current!.oy + dy }));
                   } else if (dragRef.current.mode === 'direct') {
-                    replaceLiveSnap((s) => ({
-                      ...s,
-                      directOffsetX: Number((dragRef.current!.ox + dx).toFixed(4)),
-                      directOffsetY: Number((dragRef.current!.oy + dy).toFixed(4)),
-                    }));
+                    replaceLiveSnap((s) => {
+                      const clamped = clampDirectOffsets(
+                        dragRef.current!.ox + dx,
+                        dragRef.current!.oy + dy,
+                        s.directScale,
+                        s.directWidth,
+                        s.directHeight,
+                        s.directPhotoIsPreCutout,
+                        s.clampPan,
+                      );
+                      return {
+                        ...s,
+                        directOffsetX: clamped.x,
+                        directOffsetY: clamped.y,
+                      };
+                    });
                   } else {
                     replaceLiveSnap((s) => ({ ...s, offsetX: dragRef.current!.ox + dx, offsetY: dragRef.current!.oy + dy }));
                   }
@@ -2172,7 +2320,29 @@ export default function StudioView({
                       <input
                         type="checkbox"
                         checked={snap.clampPan}
-                        onChange={(e) => commitSnap((s) => ({ ...s, clampPan: e.target.checked }))}
+                        onChange={(e) => {
+                          const nextClamp = e.target.checked;
+                          commitSnap((s) => {
+                            if (!nextClamp) {
+                              return { ...s, clampPan: false };
+                            }
+                            const clamped = clampDirectOffsets(
+                              s.directOffsetX,
+                              s.directOffsetY,
+                              s.directScale,
+                              s.directWidth,
+                              s.directHeight,
+                              s.directPhotoIsPreCutout,
+                              true,
+                            );
+                            return {
+                              ...s,
+                              clampPan: true,
+                              directOffsetX: clamped.x,
+                              directOffsetY: clamped.y,
+                            };
+                          });
+                        }}
                         className="accent-emerald-600"
                       />
                       Ajustar a bordes
@@ -2192,11 +2362,20 @@ export default function StudioView({
                         onChangeValue={(nextScale, skey) =>
                           commitSessionSnap(skey, (s, base) => {
                             const ratio = nextScale / Math.max(base.directScale, 0.05);
+                            const clamped = clampDirectOffsets(
+                              base.directOffsetX * ratio,
+                              base.directOffsetY * ratio,
+                              nextScale,
+                              s.directWidth,
+                              s.directHeight,
+                              s.directPhotoIsPreCutout,
+                              s.clampPan,
+                            );
                             return {
                               ...s,
                               directScale: nextScale,
-                              directOffsetX: Number((base.directOffsetX * ratio).toFixed(4)),
-                              directOffsetY: Number((base.directOffsetY * ratio).toFixed(4)),
+                              directOffsetX: clamped.x,
+                              directOffsetY: clamped.y,
                             };
                           })
                         }
