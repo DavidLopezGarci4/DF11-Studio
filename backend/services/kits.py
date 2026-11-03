@@ -50,7 +50,7 @@ class KitSpec:
 
 _INITIALIZED_DBS: dict[Path, int] = {}
 _DB_INIT_LOCK = threading.Lock()
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _CLUB_ID_RE = re.compile(r"^\d{1,12}$")
 _SCHEMA_SQL = (
     "CREATE TABLE IF NOT EXISTS fm_assets (club_id TEXT, kind TEXT, file_path TEXT, PRIMARY KEY (club_id, kind));"
@@ -63,7 +63,8 @@ _SCHEMA_SQL = (
     "template_id TEXT PRIMARY KEY, filename TEXT NOT NULL, display_name TEXT NOT NULL, "
     "club_id TEXT NOT NULL DEFAULT '', sha256 TEXT NOT NULL, mtime_ns INTEGER NOT NULL, "
     "size INTEGER NOT NULL, collar_json TEXT NOT NULL, "
-    "club_name TEXT NOT NULL DEFAULT '', season TEXT NOT NULL DEFAULT '', is_active_for_club INTEGER NOT NULL DEFAULT 1);"
+    "club_name TEXT NOT NULL DEFAULT '', season TEXT NOT NULL DEFAULT '', "
+    "is_active_for_club INTEGER NOT NULL DEFAULT 1, category TEXT NOT NULL DEFAULT 'player');"
 )
 
 
@@ -88,7 +89,10 @@ def init_state_db(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
                         boot_conn.execute("ALTER TABLE shirt_templates ADD COLUMN season TEXT NOT NULL DEFAULT ''")
                     if "is_active_for_club" not in cols:
                         boot_conn.execute("ALTER TABLE shirt_templates ADD COLUMN is_active_for_club INTEGER NOT NULL DEFAULT 1")
+                    if "category" not in cols:
+                        boot_conn.execute("ALTER TABLE shirt_templates ADD COLUMN category TEXT NOT NULL DEFAULT 'player'")
                     boot_conn.execute("UPDATE shirt_templates SET is_active_for_club=0 WHERE club_id=''")
+                    boot_conn.execute("UPDATE shirt_templates SET category='player' WHERE category NOT IN ('player', 'staff')")
                     boot_conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION};")
                 boot_conn.commit()
                 _INITIALIZED_DBS[target] = target.stat().st_ctime_ns

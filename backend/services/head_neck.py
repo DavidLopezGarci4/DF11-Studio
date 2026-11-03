@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import io
+import math
 import os
 from pathlib import Path
 import re
@@ -17,7 +18,7 @@ import backend.services.vision as vision_mod
 from backend.core.compositor import BgMode, DF11_HEIGHT, DF11_WIDTH, premul_over, render_df11_card
 from backend.core.fm_config import safe_ntfs_replace
 from backend.core.paths import get_caras_prueba_dir, get_extracted_faces_dir
-from backend.services.templates import CollarProfile, IMAGE_EXTS
+from backend.services.templates import CollarProfile, IMAGE_EXTS, _has_df11_outer_ring
 from backend.services.vision import FacePose, oklab_to_srgb, srgb_to_oklab
 
 CROWN_SAFE_Y = 21.0
@@ -65,6 +66,33 @@ class HeadFitParams:
     offset_y: float = 0.0
     neck_fill: float = 1.0
     harmonize: bool = True
+
+
+def prepare_facepack_card_for_head_extraction(raw_rgba: Image.Image, default_is_precut: bool = False) -> tuple[Image.Image, bool]:
+    """Unframe an already-assembled 260x310 DF11 card so outer alpha=0 borders never fool pre-cutout detection."""
+    im = raw_rgba.convert("RGBA")
+    if not _has_df11_outer_ring(im):
+        return im, default_is_precut
+
+    arr = np.asarray(im, dtype=np.uint8).copy()
+    alpha = arr[:, :, 3]
+    tl_opaque = float((alpha[24:90, 24:54] > 220).mean())
+    tr_opaque = float((alpha[24:90, 206:236] > 220).mean())
+    if max(tl_opaque, tr_opaque) >= 0.55:
+        # Opaque background inside DF11 bevel frame: replicate interior [21:290, 22:238] outward so BiRefNet strips wall cleanly
+        arr[:21, 22:238, :3] = arr[21:22, 22:238, :3]
+        arr[290:, 22:238, :3] = arr[289:290, 22:238, :3]
+        arr[:, :22, :3] = arr[:, 22:23, :3]
+        arr[:, 238:, :3] = arr[:, 237:238, :3]
+        arr[:, :, 3] = 255
+        return Image.fromarray(arr, mode="RGBA"), False
+
+    # Transparent-background DF11 card: strip the 3D silver bevel frame ring outside the inner window
+    arr[:21, :, :] = 0
+    arr[290:, :, :] = 0
+    arr[:, :22, :] = 0
+    arr[:, 238:, :] = 0
+    return Image.fromarray(arr, mode="RGBA"), True
 
 
 def suggest_safe_crop_viewport(raw_rgba: Image.Image) -> CropViewport:
@@ -346,19 +374,23 @@ def _build_collar_funnel_mask(
     shirt_alpha: np.ndarray,
     chin_canvas_y: float,
     placed_occ: np.ndarray,
+    neck_fill: float = 1.0,
 ) -> np.ndarray:
-    """Keep full hair/ears above jaw; funnel neck/trapezius tightly from jaw width into [x_L..x_R]."""
+    """Keep full hair/ears above jaw; funnel neck/trapezius from jaw width into collar opening."""
     x_l, y_l = collar.left_rim
     x_r, y_r = collar.right_rim
     _, y_v = collar.apex
     cx = 0.5 * (x_l + x_r)
     w_col = float(max(x_r - x_l, 40))
+    f_neck = float(np.clip(neck_fill, 0.0, 1.5)) if math.isfinite(float(neck_fill)) else 1.0
+    ov = max(0.0, (f_neck - 1.0) / 0.5)
 
     ear_gate_y = max(40, int(round(chin_canvas_y - 40.0)))
     jaw_y = min(min(y_l, y_r) - 6, int(round(chin_canvas_y - 10.0)))
     y_bot = min(DF11_HEIGHT - 1, y_v + 26)
-    ear_half_w = 0.63 * w_col
-    jaw_half_w = 0.50 * w_col
+    ear_half_w = (0.63 + 0.05 * ov) * w_col
+    jaw_half_w = (0.50 + 0.14 * ov) * w_col
+    rim_pad = int(round(3.0 * ov))
 
     mask_im = Image.new("L", (DF11_WIDTH, DF11_HEIGHT), 0)
     draw = ImageDraw.Draw(mask_im)
@@ -368,10 +400,10 @@ def _build_collar_funnel_mask(
             (round(cx - ear_half_w), ear_gate_y),
             (round(cx + ear_half_w), ear_gate_y),
             (round(cx + jaw_half_w + 2), jaw_y),
-            (x_r - 1, y_r + 2),
-            (x_r + 10, y_bot),
-            (x_l - 10, y_bot),
-            (x_l + 1, y_l + 2),
+            (x_r - 1 + rim_pad, y_r + 2),
+            (x_r + 10 + rim_pad, y_bot),
+            (x_l - 10 - rim_pad, y_bot),
+            (x_l + 1 - rim_pad, y_l + 2),
             (round(cx - jaw_half_w - 2), jaw_y),
         ],
         fill=255,
@@ -400,10 +432,11 @@ def _build_directional_neck_bridge(
     chin_canvas_y: float,
     neck_fill: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Synthesize seam-free columnar OKLab skin bridge and soften flat horizontal bottom cuts on Z3."""
+    """Synthesize seam-free columnar OKLab skin bridge with continuous neck_fill thickening (0.00..1.50)."""
     bridge = np.zeros((DF11_HEIGHT, DF11_WIDTH, 4), dtype=np.uint8)
     z3_soft = z3_head.copy()
-    if neck_fill <= 0.01:
+    f_neck = float(np.clip(neck_fill, 0.0, 1.5)) if math.isfinite(float(neck_fill)) else 1.0
+    if f_neck <= 0.005:
         return bridge, z3_soft
 
     x_l, y_l = collar.left_rim
@@ -418,16 +451,16 @@ def _build_directional_neck_bridge(
     neck_band_y1 = min(DF11_HEIGHT - 1, max(neck_band_y0 + 6, y_rim + 2))
     neck_xs = np.where(z3_head[neck_band_y0:neck_band_y1, :, 3] > 150)[1]
     if len(neck_xs) >= 10:
-        real_nl = float(np.clip(np.percentile(neck_xs, 2), x_l - 3, cx - 18.0))
-        real_nr = float(np.clip(np.percentile(neck_xs, 98), cx + 18.0, x_r + 3))
+        real_nl = float(np.clip(np.percentile(neck_xs, 2), x_l - 3, cx - 15.0))
+        real_nr = float(np.clip(np.percentile(neck_xs, 98), cx + 15.0, x_r + 3))
     else:
-        real_nl, real_nr = cx - 0.38 * w_col, cx + 0.38 * w_col
+        real_nl, real_nr = cx - 0.36 * w_col, cx + 0.36 * w_col
 
     fg_ys_center = np.where(z3_head[:, max(0, int(cx) - 18) : min(DF11_WIDTH, int(cx) + 19), 3] > 180)[0]
     fg_bot_y = int(fg_ys_center.max()) if len(fg_ys_center) else int(round(chin_canvas_y))
 
-    y_top = max(135, min(int(round(chin_canvas_y - 10.0)), y_rim - 6, fg_bot_y - 18))
-    y_bot = min(DF11_HEIGHT - 18, int(round(y_v + 14.0 * min(neck_fill, 1.4))))
+    y_top = max(135, min(int(round(chin_canvas_y - 10.0)), y_rim - 8, fg_bot_y - 18))
+    y_bot = min(DF11_HEIGHT - 18, int(round(y_v + 8.0 + 8.0 * min(f_neck, 1.5))))
     if y_bot <= y_top + 2:
         return bridge, z3_soft
 
@@ -470,21 +503,62 @@ def _build_directional_neck_bridge(
     col_a = np.convolve(np.pad(col_a, 15, mode="edge"), gx, mode="valid")
     col_b = np.convolve(np.pad(col_b, 15, mode="edge"), gx, mode="valid")
 
-    yy, xx = np.mgrid[0:DF11_HEIGHT, 0:DF11_WIDTH].astype(np.float32)
-    t_collar = np.clip((yy - float(y_top)) / max(float((y_rim + 2) - y_top), 4.0), 0.0, 1.0)
-    left_above = (1.0 - t_collar) * (real_nl + 0.5) + t_collar * float(x_l + 1)
-    right_above = (1.0 - t_collar) * (real_nr - 0.5) + t_collar * float(x_r - 1)
-    left_edge = np.minimum(left_above, float(x_l + 2))
-    right_edge = np.maximum(right_above, float(x_r - 2))
+    # Continuous lateral neck-thickening profile across f_neck in (0.005 .. 1.50]
+    cx_neck = 0.5 * (real_nl + real_nr)
+    slim_top_l = max(real_nl, cx_neck - 0.17 * w_col)
+    slim_top_r = min(real_nr, cx_neck + 0.17 * w_col)
+    slim_rim_l = max(real_nl, cx - 0.19 * w_col)
+    slim_rim_r = min(real_nr, cx + 0.19 * w_col)
 
-    in_band = (yy >= y_top) & (yy <= y_bot) & (xx >= left_above) & (xx <= right_above)
+    std_top_l = real_nl + 0.5
+    std_top_r = real_nr - 0.5
+    std_rim_l = float(x_l + 1)
+    std_rim_r = float(x_r - 1)
+
+    max_top_l = min(std_top_l - 0.18 * w_col, float(x_l - 2))
+    max_top_r = max(std_top_r + 0.18 * w_col, float(x_r + 2))
+    max_rim_l = float(x_l - 4)
+    max_rim_r = float(x_r + 4)
+
+    if f_neck <= 1.0:
+        u = f_neck
+        cur_top_l = slim_top_l + (std_top_l - slim_top_l) * u
+        cur_top_r = slim_top_r + (std_top_r - slim_top_r) * u
+        cur_rim_l = slim_rim_l + (std_rim_l - slim_rim_l) * u
+        cur_rim_r = slim_rim_r + (std_rim_r - slim_rim_r) * u
+        curve_exp = 1.0
+    else:
+        ov = (f_neck - 1.0) / 0.5
+        cur_top_l = std_top_l + (max_top_l - std_top_l) * ov
+        cur_top_r = std_top_r + (max_top_r - std_top_r) * ov
+        cur_rim_l = std_rim_l + (max_rim_l - std_rim_l) * ov
+        cur_rim_r = std_rim_r + (max_rim_r - std_rim_r) * ov
+        curve_exp = 1.0 - 0.52 * ov
+
+    yy, xx = np.mgrid[0:DF11_HEIGHT, 0:DF11_WIDTH].astype(np.float32)
+    t_raw = np.clip((yy - float(y_top)) / max(float((y_rim + 2) - y_top), 4.0), 0.0, 1.0)
+    t_collar = t_raw ** curve_exp
+    left_span = (1.0 - t_collar) * cur_top_l + t_collar * cur_rim_l
+    right_span = (1.0 - t_collar) * cur_top_r + t_collar * cur_rim_r
+
+    in_band = (yy >= y_top) & (yy <= y_bot) & (xx >= left_span) & (xx <= right_span)
     mask_im = Image.fromarray((in_band.astype(np.uint8) * 255), mode="L").filter(ImageFilter.GaussianBlur(1.5))
     alpha_f = np.asarray(mask_im, dtype=np.float32) / 255.0
 
-    in_lower_socket = (yy >= y_rim + 2) & (yy <= y_v + 8) & (xx >= left_edge) & (xx <= right_edge)
-    behind_shirt_collar = (yy >= y_rim) & (yy <= y_v + 10) & (xx >= x_l - 3) & (xx <= x_r + 3) & (shirt_alpha > 180)
+    in_lower_socket = (yy >= y_rim + 2) & (yy <= y_v + 8) & (xx >= left_span + 1.0) & (xx <= right_span - 1.0)
+    behind_shirt_collar = (
+        (yy >= y_rim)
+        & (yy <= y_v + 10)
+        & (xx >= left_span - 2.5)
+        & (xx <= right_span + 2.5)
+        & (xx >= x_l - 3)
+        & (xx <= x_r + 3)
+        & (shirt_alpha > 200)
+    )
     alpha_f = np.where(in_lower_socket | behind_shirt_collar, 1.0, alpha_f)
-    outside_shoulder = (yy >= y_rim - 3) & ((xx < x_l) | (xx > x_r)) & (shirt_alpha < 245)
+    if f_neck < 0.16:
+        alpha_f *= float(np.clip(f_neck / 0.16, 0.20, 1.0))
+    outside_shoulder = (yy >= y_rim + 1) & ((xx < x_l) | (xx > x_r)) & (shirt_alpha < 245)
     alpha_f = np.where(outside_shoulder, 0.0, alpha_f)
 
     # Cross-dissolve flat horizontal bottom cut of Z3 over opaque Z2 (curving +4.5px up on sides for natural beard/chin arc)
@@ -497,8 +571,9 @@ def _build_directional_neck_bridge(
     z3_soft[:, :, 3] = np.clip(np.round(z3_a_new * 255.0), 0.0, 255.0).astype(np.uint8)
     z3_soft[:, :, :3] = np.where(z3_soft[:, :, 3:4] > 0, z3_soft[:, :, :3], 0)
 
+    half_span = np.maximum(0.5 * (right_span - left_span), 14.0)
     subchin_shadow = -0.036 * np.exp(-np.maximum(0.0, yy - chin_canvas_y) / 11.0)
-    cyl_shadow = -0.022 * np.clip(((xx - cx) / max(0.48 * w_col, 1.0)) ** 2, 0.0, 1.2)
+    cyl_shadow = -0.022 * np.clip(((xx - 0.5 * (left_span + right_span)) / half_span) ** 2, 0.0, 1.2)
     rng = np.random.default_rng(1711)
     grain = rng.normal(0.0, 0.0028, size=(DF11_HEIGHT, DF11_WIDTH)).astype(np.float32)
 
@@ -550,7 +625,7 @@ def compose_modular_df11(
 
         if shirt_arr is not None and collar is not None:
             y_rim = min(collar.left_rim[1], collar.right_rim[1])
-            funnel = _build_collar_funnel_mask(collar, shirt_arr[:, :, 3], chin_canvas_y, placed_occ)
+            funnel = _build_collar_funnel_mask(collar, shirt_arr[:, :, 3], chin_canvas_y, placed_occ, neck_fill=f.neck_fill)
             z3[:, :, 3] = np.clip(np.round(z3[:, :, 3].astype(np.float32) * funnel), 0.0, 255.0).astype(np.uint8)
             z3[:, :, :3] = np.where(z3[:, :, 3:4] > 0, z3[:, :, :3], 0)
 

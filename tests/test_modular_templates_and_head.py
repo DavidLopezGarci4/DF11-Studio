@@ -310,3 +310,76 @@ def test_transparent_or_panned_dark_and_vertical_shirts_never_synthesize_black_b
     out3 = np.asarray(sanitize_shirt_template_rgba(vert_red, symmetrize_shoulders=True, shoulder_boost=0.4))
     assert int(out3[260, 22, 3]) == 0
     assert int(out3[260, 48, 3]) >= 250 and int(out3[260, 48, 0]) > 150
+
+
+def test_progressive_neck_thickening_scales_monotonically_across_collar_opening(monkeypatch) -> None:
+    import backend.services.vision as vision_mod
+    from backend.services.head_neck import HeadFitParams
+    from backend.services.templates import extract_collar_profile
+    from backend.services.vision import FacePose
+
+    # Wide V-neck blue shirt template (collar opening x=86..174 at y=196, V-apex at 130,232 -> 88px wide)
+    shirt = Image.new("RGBA", (DF11_WIDTH, DF11_HEIGHT), (0, 0, 0, 0))
+    sdraw = ImageDraw.Draw(shirt)
+    sdraw.polygon(
+        [(19, 234), (86, 196), (130, 232), (174, 196), (241, 234), (241, 292), (19, 292)],
+        fill=(25, 65, 145, 255),
+    )
+    collar = extract_collar_profile(shirt)
+
+    # Portrait with a slim real neck (x=108..148 in 256x256) ending short at y=190
+    face_im = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+    fdraw = ImageDraw.Draw(face_im)
+    fdraw.ellipse([78, 34, 178, 174], fill=(216, 165, 138, 255))
+    fdraw.rectangle([108, 158, 148, 190], fill=(210, 158, 132, 255))
+
+    def _fake_pose(_im: Image.Image, score_thresh: float = 0.55) -> FacePose:
+        return FacePose(
+            right_eye=(102.0, 106.0),
+            left_eye=(154.0, 106.0),
+            nose=(128.0, 132.0),
+            eye_center=(128.0, 106.0),
+            ipd=52.0,
+            yaw=0.0,
+            bbox=(76.0, 32.0, 104.0, 158.0),
+        )
+
+    def _fake_seg(im: Image.Image) -> np.ndarray:
+        arr = np.asarray(im.convert("RGBA"))
+        h, w = arr.shape[:2]
+        probs = np.zeros((h, w, 6), dtype=np.float32)
+        fg = arr[:, :, 3] > 20
+        probs[:, :, 3] = np.where(fg, 0.92, 0.01)
+        probs[:, :, 0] = np.where(~fg, 0.97, 0.02)
+        return probs
+
+    monkeypatch.setattr(vision_mod, "detect_face_pose", _fake_pose)
+    monkeypatch.setattr(vision_mod, "segment_portrait_classes", _fake_seg)
+
+    vp = suggest_safe_crop_viewport(face_im)
+    head_asset = extract_clean_head_and_neck(face_im, is_pre_cutout=True, crop_viewport=vp)
+    base_fit = fit_head_to_shirt_template(head_asset, collar)
+
+    skin_counts: dict[float, int] = {}
+    for nf in (0.0, 0.35, 0.70, 1.00, 1.40):
+        card = compose_modular_df11(
+            head_asset=head_asset,
+            shirt_rgba=shirt,
+            collar=collar,
+            fit=HeadFitParams(
+                scale=base_fit.scale,
+                offset_x=base_fit.offset_x,
+                offset_y=base_fit.offset_y,
+                neck_fill=nf,
+                harmonize=False,
+            ),
+            bg_mode="transparent",
+        )
+        arr = np.asarray(card)
+        band = arr[184:218, 78:182]
+        # Count warm skin pixels (R > 120, R > B + 15, alpha > 180) inside the collar opening band
+        is_skin_px = (band[:, :, 3] > 180) & (band[:, :, 0] > 120) & (band[:, :, 0].astype(int) > band[:, :, 2].astype(int) + 15)
+        skin_counts[nf] = int(is_skin_px.sum())
+
+    assert skin_counts[0.0] < skin_counts[0.35] < skin_counts[0.70] < skin_counts[1.00] < skin_counts[1.40], skin_counts
+

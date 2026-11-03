@@ -58,6 +58,10 @@ class CollarProfile:
         )
 
 
+def normalize_template_category(raw: str) -> str:
+    return "staff" if str(raw or "").strip().lower() == "staff" else "player"
+
+
 @dataclass(frozen=True, slots=True)
 class ShirtTemplate:
     template_id: str
@@ -69,6 +73,7 @@ class ShirtTemplate:
     club_name: str = ""
     season: str = ""
     is_active_for_club: bool = True
+    category: str = "player"
 
 
 def _needs_shirt_sanitization(im_rgba: Image.Image) -> bool:
@@ -473,10 +478,11 @@ def sync_tshirt_templates_dir(
                     "club_name": str(row[8] or ""),
                     "season": str(row[9] or ""),
                     "is_active_for_club": bool(int(row[10]) if row[10] is not None else 1),
+                    "category": normalize_template_category(str(row[11] or "player")),
                 }
                 for row in conn.execute(
                     "SELECT template_id, filename, display_name, club_id, sha256, mtime_ns, size, collar_json, "
-                    "club_name, season, is_active_for_club FROM shirt_templates"
+                    "club_name, season, is_active_for_club, category FROM shirt_templates"
                 ).fetchall()
             }
 
@@ -484,7 +490,7 @@ def sync_tshirt_templates_dir(
         seen_ids: set[str] = set()
         seen_lower: set[str] = set()
         pending_deletes: list[str] = []
-        pending_upserts: list[tuple[str, str, str, str, str, int, int, str, str, str, int]] = []
+        pending_upserts: list[tuple[str, str, str, str, str, int, int, str, str, str, int, str]] = []
 
         candidates = sorted(
             (p for p in folder.iterdir() if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in IMAGE_EXTS),
@@ -531,6 +537,7 @@ def sync_tshirt_templates_dir(
                         club_name=cname_c,
                         season=cached["season"],
                         is_active_for_club=bool(cached["is_active_for_club"]) if cid_c else False,
+                        category=cached["category"],
                     )
                 )
                 continue
@@ -577,12 +584,13 @@ def sync_tshirt_templates_dir(
             cid = cached["club_id"] if cached else ""
             cname = _resolve_club_display_name(cid, cached["club_name"] if cached else "", clubs_map)
             season = cached["season"] if cached else ""
+            cat = cached["category"] if cached else "player"
             is_act = int(bool(cached["is_active_for_club"])) if (cached and cid) else (1 if cid else 0)
 
             if cached_key != tid:
                 pending_deletes.append(cached_key)
             pending_upserts.append(
-                (tid, actual_file.name, disp, cid, clean_sha, clean_st.st_mtime_ns, clean_st.st_size, collar.to_json(), cname, season, is_act)
+                (tid, actual_file.name, disp, cid, clean_sha, clean_st.st_mtime_ns, clean_st.st_size, collar.to_json(), cname, season, is_act, cat)
             )
             seen_lower.add(tid_low)
             seen_ids.add(tid)
@@ -597,19 +605,20 @@ def sync_tshirt_templates_dir(
                     club_name=cname,
                     season=season,
                     is_active_for_club=bool(is_act),
+                    category=cat,
                 )
             )
 
         out.sort(key=lambda t: t.template_id.lower())
         stale_ids = list(set(existing.keys()) - seen_ids)
 
-        # Enforce invariant: every assigned club_id in `out` has strictly 1 active titular template
-        by_club: dict[str, list[int]] = {}
+        # Enforce invariant: every assigned (club_id, category) pair in `out` has strictly 1 active titular template
+        by_club: dict[tuple[str, str], list[int]] = {}
         for idx, item in enumerate(out):
             if item.club_id:
-                by_club.setdefault(item.club_id, []).append(idx)
+                by_club.setdefault((item.club_id, item.category), []).append(idx)
         active_fixes: list[tuple[int, str]] = []
-        for cid_k, idxs in by_club.items():
+        for _club_cat_k, idxs in by_club.items():
             act_idxs = [i for i in idxs if out[i].is_active_for_club]
             if len(act_idxs) == 1:
                 continue
@@ -628,6 +637,7 @@ def sync_tshirt_templates_dir(
                         club_name=t_old.club_name,
                         season=t_old.season,
                         is_active_for_club=want_act,
+                        category=t_old.category,
                     )
                     active_fixes.append((1 if want_act else 0, t_old.template_id))
 
@@ -638,8 +648,8 @@ def sync_tshirt_templates_dir(
                 for row_vals in pending_upserts:
                     conn.execute(
                         "INSERT OR REPLACE INTO shirt_templates "
-                        "(template_id, filename, display_name, club_id, sha256, mtime_ns, size, collar_json, club_name, season, is_active_for_club) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "(template_id, filename, display_name, club_id, sha256, mtime_ns, size, collar_json, club_name, season, is_active_for_club, category) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         row_vals,
                     )
                 for stale_id in stale_ids:
@@ -650,33 +660,34 @@ def sync_tshirt_templates_dir(
         return out
 
 
-def _ensure_club_has_one_active(conn: object, club_id: str, prefer_other_than: str = "") -> None:
+def _ensure_club_has_one_active(conn: object, club_id: str, category: str = "player", prefer_other_than: str = "") -> None:
     if not club_id:
         return
+    cat = normalize_template_category(category)
     c = conn  # sqlite3.Connection
     active_rows = c.execute(  # type: ignore[attr-defined]
-        "SELECT template_id FROM shirt_templates WHERE club_id=? AND is_active_for_club=1 ORDER BY mtime_ns DESC",
-        (club_id,),
+        "SELECT template_id FROM shirt_templates WHERE club_id=? AND category=? AND is_active_for_club=1 ORDER BY mtime_ns DESC",
+        (club_id, cat),
     ).fetchall()
     if len(active_rows) > 1:
         keep_tid = str(active_rows[0][0])
         c.execute(  # type: ignore[attr-defined]
-            "UPDATE shirt_templates SET is_active_for_club=0 WHERE club_id=? AND template_id!=?",
-            (club_id, keep_tid),
+            "UPDATE shirt_templates SET is_active_for_club=0 WHERE club_id=? AND category=? AND template_id!=?",
+            (club_id, cat, keep_tid),
         )
     elif len(active_rows) == 0:
         cand_row = (
             c.execute(  # type: ignore[attr-defined]
-                "SELECT template_id FROM shirt_templates WHERE club_id=? AND template_id!=? ORDER BY mtime_ns DESC LIMIT 1",
-                (club_id, prefer_other_than),
+                "SELECT template_id FROM shirt_templates WHERE club_id=? AND category=? AND template_id!=? ORDER BY mtime_ns DESC LIMIT 1",
+                (club_id, cat, prefer_other_than),
             ).fetchone()
             if prefer_other_than
             else None
         )
         if cand_row is None:
             cand_row = c.execute(  # type: ignore[attr-defined]
-                "SELECT template_id FROM shirt_templates WHERE club_id=? ORDER BY mtime_ns DESC LIMIT 1",
-                (club_id,),
+                "SELECT template_id FROM shirt_templates WHERE club_id=? AND category=? ORDER BY mtime_ns DESC LIMIT 1",
+                (club_id, cat),
             ).fetchone()
         if cand_row:
             c.execute(  # type: ignore[attr-defined]
@@ -694,8 +705,9 @@ def rename_shirt_template(
     club_name: str = "",
     season: str = "",
     is_active_for_club: bool = True,
+    category: str | None = None,
 ) -> ShirtTemplate:
-    """Update human-friendly name, FM club_id/club_name, season tag, and active-kit flag for a shirt template."""
+    """Update human-friendly name, FM club_id/club_name, season tag, category, and active-kit flag for a shirt template."""
     state_db = db_path or get_state_db_path()
     clean_name = display_name.strip()[:80] or template_id
     clean_club = validate_club_id(club_id)
@@ -707,6 +719,8 @@ def rename_shirt_template(
         if match is None:
             raise ValueError(f"Plantilla de camiseta no encontrada: {template_id}")
         old_club = match.club_id
+        old_cat = match.category
+        clean_cat = normalize_template_category(category) if category is not None else match.category
         clubs_map = load_merged_clubs(state_db)
         resolved_cname = _resolve_club_display_name(clean_club, club_name, clubs_map)
         act_flag = 1 if (clean_club and is_active_for_club) else 0
@@ -718,17 +732,17 @@ def rename_shirt_template(
                 conn.execute("UPDATE shirt_templates SET club_name=? WHERE club_id=?", (resolved_cname, clean_club))
             if clean_club and act_flag == 1:
                 conn.execute(
-                    "UPDATE shirt_templates SET is_active_for_club=0 WHERE club_id=? AND template_id!=?",
-                    (clean_club, template_id),
+                    "UPDATE shirt_templates SET is_active_for_club=0 WHERE club_id=? AND category=? AND template_id!=?",
+                    (clean_club, clean_cat, template_id),
                 )
             conn.execute(
-                "UPDATE shirt_templates SET display_name=?, club_id=?, club_name=?, season=?, is_active_for_club=? WHERE template_id=?",
-                (clean_name, clean_club, resolved_cname, clean_season, act_flag, template_id),
+                "UPDATE shirt_templates SET display_name=?, club_id=?, club_name=?, season=?, is_active_for_club=?, category=? WHERE template_id=?",
+                (clean_name, clean_club, resolved_cname, clean_season, act_flag, clean_cat, template_id),
             )
-            if old_club and old_club != clean_club:
-                _ensure_club_has_one_active(conn, old_club)
+            if old_club and (old_club != clean_club or old_cat != clean_cat):
+                _ensure_club_has_one_active(conn, old_club, old_cat)
             if clean_club:
-                _ensure_club_has_one_active(conn, clean_club, prefer_other_than=template_id if not is_active_for_club else "")
+                _ensure_club_has_one_active(conn, clean_club, clean_cat, prefer_other_than=template_id if not is_active_for_club else "")
 
         refreshed = sync_tshirt_templates_dir(tpl_dir=tpl_dir, db_path=state_db)
         return next((t for t in refreshed if t.template_id == template_id), match)
@@ -739,7 +753,7 @@ def set_active_club_shirt_template(
     tpl_dir: Path | None = None,
     db_path: Path | None = None,
 ) -> ShirtTemplate:
-    """Promote a historical/seasonal shirt template to be the active titular shirt of its assigned club_id."""
+    """Promote a historical/seasonal shirt template to be the active titular shirt of its assigned club_id and category."""
     state_db = db_path or get_state_db_path()
     with _TEMPLATES_LOCK:
         items = sync_tshirt_templates_dir(tpl_dir=tpl_dir, db_path=state_db)
@@ -749,7 +763,10 @@ def set_active_club_shirt_template(
         if not match.club_id:
             raise ValueError("Asigna primero un #ID de club a la camiseta antes de marcarla como titular activa.")
         with init_state_db(state_db) as conn:
-            conn.execute("UPDATE shirt_templates SET is_active_for_club=0 WHERE club_id=?", (match.club_id,))
+            conn.execute(
+                "UPDATE shirt_templates SET is_active_for_club=0 WHERE club_id=? AND category=?",
+                (match.club_id, match.category),
+            )
             conn.execute("UPDATE shirt_templates SET is_active_for_club=1 WHERE template_id=?", (template_id,))
         refreshed = sync_tshirt_templates_dir(tpl_dir=tpl_dir, db_path=state_db)
         return next((t for t in refreshed if t.template_id == template_id), match)
@@ -779,7 +796,7 @@ def delete_shirt_template(
         with init_state_db(state_db) as conn:
             conn.execute("DELETE FROM shirt_templates WHERE template_id=?", (match.template_id,))
             if match.club_id:
-                _ensure_club_has_one_active(conn, match.club_id)
+                _ensure_club_has_one_active(conn, match.club_id, match.category)
         return match.template_id
 
 
@@ -807,26 +824,29 @@ def save_new_shirt_template(
     season: str = "",
     is_active_for_club: bool = True,
     replace_previous_for_club: bool = False,
+    category: str = "player",
 ) -> ShirtTemplate:
-    """Save a newly extracted shirt-only PNG into tshirt_templates and register its club_id, season & active status."""
+    """Save a newly extracted shirt-only PNG into tshirt_templates and register its club_id, season, category & active status."""
     folder = (tpl_dir or get_tshirt_templates_dir()).resolve()
     archive = (raw_archive_dir or get_raw_tshirt_archive_dir()).resolve()
     state_db = db_path or get_state_db_path()
     ext_norm = raw_ext.lower() if raw_ext and raw_ext.lower() in IMAGE_EXTS else ".png"
+    clean_cat = normalize_template_category(category)
 
     with _TEMPLATES_LOCK:
         folder.mkdir(parents=True, exist_ok=True)
         clean_club = validate_club_id(club_id)
         clean_season = season.strip()[:24]
-        clean_disp = display_name.strip()[:80] or template_id.strip()[:80] or "Camiseta Club"
+        fallback_lbl = "Traje_Staff" if clean_cat == "staff" else "Camiseta_Club"
+        clean_disp = display_name.strip()[:80] or template_id.strip()[:80] or ("Traje Staff" if clean_cat == "staff" else "Camiseta Club")
         season_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", clean_season).strip("_")[:24]
         if template_id.strip():
-            tid = slugify_template_id(template_id.strip(), fallback="Camiseta_Club")
+            tid = slugify_template_id(template_id.strip(), fallback=fallback_lbl)
         elif season_slug:
-            base_part = re.sub(r"[^A-Za-z0-9_-]+", "_", clean_disp).strip("_")[: max(12, 48 - len(season_slug) - 1)] or "Camiseta_Club"
-            tid = slugify_template_id(f"{base_part}_{season_slug}", fallback="Camiseta_Club")
+            base_part = re.sub(r"[^A-Za-z0-9_-]+", "_", clean_disp).strip("_")[: max(12, 48 - len(season_slug) - 1)] or fallback_lbl
+            tid = slugify_template_id(f"{base_part}_{season_slug}", fallback=fallback_lbl)
         else:
-            tid = slugify_template_id(clean_disp, fallback="Camiseta_Club")
+            tid = slugify_template_id(clean_disp, fallback=fallback_lbl)
         target_png = folder / f"{tid}.png"
 
         if raw_bytes:
@@ -853,8 +873,8 @@ def save_new_shirt_template(
                 conn.execute("UPDATE shirt_templates SET club_name=? WHERE club_id=?", (resolved_cname, clean_club))
             if clean_club and replace_previous_for_club:
                 old_rows = conn.execute(
-                    "SELECT template_id, filename FROM shirt_templates WHERE club_id=? AND LOWER(template_id)!=LOWER(?)",
-                    (clean_club, tid),
+                    "SELECT template_id, filename FROM shirt_templates WHERE club_id=? AND category=? AND LOWER(template_id)!=LOWER(?)",
+                    (clean_club, clean_cat, tid),
                 ).fetchall()
                 for old_tid, old_fname in old_rows:
                     old_fp = (folder / str(old_fname)).resolve()
@@ -864,19 +884,19 @@ def save_new_shirt_template(
                 act_flag = 1
             elif clean_club and act_flag == 1:
                 conn.execute(
-                    "UPDATE shirt_templates SET is_active_for_club=0 WHERE club_id=? AND LOWER(template_id)!=LOWER(?)",
-                    (clean_club, tid),
+                    "UPDATE shirt_templates SET is_active_for_club=0 WHERE club_id=? AND category=? AND LOWER(template_id)!=LOWER(?)",
+                    (clean_club, clean_cat, tid),
                 )
 
             conn.execute("DELETE FROM shirt_templates WHERE LOWER(template_id)=LOWER(?) AND template_id!=?", (tid, tid))
             conn.execute(
                 "INSERT OR REPLACE INTO shirt_templates "
-                "(template_id, filename, display_name, club_id, sha256, mtime_ns, size, collar_json, club_name, season, is_active_for_club) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (tid, target_png.name, clean_disp, clean_club, clean_sha, clean_st.st_mtime_ns, clean_st.st_size, collar.to_json(), resolved_cname, clean_season, act_flag),
+                "(template_id, filename, display_name, club_id, sha256, mtime_ns, size, collar_json, club_name, season, is_active_for_club, category) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (tid, target_png.name, clean_disp, clean_club, clean_sha, clean_st.st_mtime_ns, clean_st.st_size, collar.to_json(), resolved_cname, clean_season, act_flag, clean_cat),
             )
             if clean_club:
-                _ensure_club_has_one_active(conn, clean_club)
+                _ensure_club_has_one_active(conn, clean_club, clean_cat)
 
         refreshed = sync_tshirt_templates_dir(tpl_dir=folder, raw_archive_dir=archive, db_path=state_db)
         return next(
@@ -891,6 +911,7 @@ def save_new_shirt_template(
                 club_name=resolved_cname,
                 season=clean_season,
                 is_active_for_club=bool(act_flag),
+                category=clean_cat,
             ),
         )
 
@@ -900,11 +921,14 @@ def get_club_shirt_template(
     tpl_dir: Path | None = None,
     db_path: Path | None = None,
 ) -> ShirtTemplate | None:
-    """Return the active titular ShirtTemplate bound to club_id (or fallback to any matching club_id)."""
+    """Return the active titular player ShirtTemplate bound to club_id (or fallback to any matching club_id)."""
     cid = club_id.strip().lstrip("#")
     if not cid:
         return None
     items = sync_tshirt_templates_dir(tpl_dir=tpl_dir, db_path=db_path)
-    return next((t for t in items if t.club_id == cid and t.is_active_for_club), None) or next(
-        (t for t in items if t.club_id == cid), None
+    return (
+        next((t for t in items if t.club_id == cid and t.category == "player" and t.is_active_for_club), None)
+        or next((t for t in items if t.club_id == cid and t.category == "player"), None)
+        or next((t for t in items if t.club_id == cid and t.is_active_for_club), None)
+        or next((t for t in items if t.club_id == cid), None)
     )

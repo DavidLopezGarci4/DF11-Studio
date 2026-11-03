@@ -665,5 +665,211 @@ def test_v120_custom_clubs_multi_season_templates_deletion_and_legacy_migration(
     assert {t["clubName"] for t in soria_tpls} == {"CD Soria CF"}
 
 
+def test_v130_template_categories_facepack_remix_and_dual_export_targets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import numpy as np
+    from PIL import ImageDraw
+    import backend.services.vision as vision_mod
+    from backend.core.compositor import render_df11_card
+    from backend.services.templates import get_club_shirt_template
+    from backend.services.vision import FacePose
+
+    def _fake_pose(_im: Image.Image, score_thresh: float = 0.55) -> FacePose:
+        w, h = _im.size
+        return FacePose(
+            right_eye=(w * 0.40, h * 0.36),
+            left_eye=(w * 0.60, h * 0.36),
+            nose=(w * 0.50, h * 0.45),
+            eye_center=(w * 0.50, h * 0.36),
+            ipd=w * 0.20,
+            yaw=0.0,
+            bbox=(w * 0.28, h * 0.14, w * 0.44, h * 0.46),
+        )
+
+    def _fake_seg(im: Image.Image) -> np.ndarray:
+        arr = np.asarray(im.convert("RGBA"))
+        h, w = arr.shape[:2]
+        probs = np.zeros((h, w, 6), dtype=np.float32)
+        is_crimson = (arr[:, :, 0] > 130) & (arr[:, :, 1] < 60) & (arr[:, :, 3] > 40)
+        is_navy = (arr[:, :, 2] > 130) & (arr[:, :, 0] < 60) & (arr[:, :, 3] > 40)
+        is_cloth = is_crimson | is_navy
+        is_skin = (arr[:, :, 0] > 185) & (arr[:, :, 1] > 130) & (arr[:, :, 1] < 205) & (arr[:, :, 3] > 40)
+        probs[:, :, 4] = np.where(is_cloth, 0.95, 0.01)
+        probs[:, :, 3] = np.where(is_skin & ~is_cloth, 0.92, 0.01)
+        probs[:, :, 0] = np.clip(1.0 - probs[:, :, 4] - probs[:, :, 3], 0.0, 1.0)
+        return probs
+
+    def _fake_biref(im: Image.Image) -> Image.Image:
+        arr = np.asarray(im.convert("RGBA")).copy()
+        is_white_bg = (arr[:, :, 0] > 212) & (arr[:, :, 1] > 212) & (arr[:, :, 2] > 212)
+        arr[:, :, 3] = np.where(is_white_bg, 0, arr[:, :, 3])
+        return Image.fromarray(arr, mode="RGBA")
+
+    monkeypatch.setattr(vision_mod, "detect_face_pose", _fake_pose)
+    monkeypatch.setattr(vision_mod, "segment_portrait_classes", _fake_seg)
+    monkeypatch.setattr(vision_mod, "remove_background_birefnet", _fake_biref)
+
+    tpl_dir = tmp_path / "tshirt_templates"
+    export_dir = tmp_path / "my_creations"
+    facepack_dir = tmp_path / "fm_megapack_faces"
+    tpl_dir.mkdir(parents=True)
+    facepack_dir.mkdir(parents=True)
+
+    # Seed one clean player navy shirt template & one staff navy jacket template
+    navy_shirt = Image.new("RGBA", (260, 310), (0, 0, 0, 0))
+    ndraw = ImageDraw.Draw(navy_shirt)
+    ndraw.polygon([(19, 224), (92, 196), (130, 228), (168, 196), (241, 224), (241, 292), (19, 292)], fill=(25, 55, 175, 255))
+    navy_shirt.save(tpl_dir / "Navy_Player.png", format="PNG")
+
+    db_path = tmp_path / "state.sqlite3"
+    bridge = StudioBridge(
+        vault_dir=tmp_path / "vault",
+        export_dir=export_dir,
+        db_path=db_path,
+        templates_dir=tpl_dir,
+        raw_archive_dir=tmp_path / "raw_archive",
+        extracted_faces_dir=tmp_path / "caras_extraidas",
+        sample_faces_dir=tmp_path / "caras_prueba",
+    )
+
+    # 1. Default category == 'player', plus saving & updating a 'staff' template
+    initial_tpls = bridge.list_shirt_templates()
+    assert initial_tpls[0]["category"] == "player"
+
+    suit_buf = io.BytesIO()
+    navy_shirt.save(suit_buf, format="PNG")
+    suit_url = "data:image/png;base64," + base64.b64encode(suit_buf.getvalue()).decode("ascii")
+    s_src = bridge.load_raw_shirt_source(suit_url, file_name="Traje_Mister.png")
+    bridge.preview_shirt_extraction({"shirtSourceId": s_src["shirtSourceId"]})
+    saved_staff = bridge.save_shirt_template(
+        {
+            "shirtSourceId": s_src["shirtSourceId"],
+            "displayName": "Traje Entrenador",
+            "templateId": "Traje_Staff",
+            "clubId": "1736",
+            "category": "staff",
+            "isActiveForClub": True,
+        }
+    )
+    by_id = {t["templateId"]: t for t in saved_staff["templates"]}
+    assert by_id["Traje_Staff"]["category"] == "staff"
+    bridge.update_shirt_template_meta({"templateId": "Navy_Player", "displayName": "Titular 1736", "clubId": "1736", "category": "player", "isActiveForClub": True})
+    # Player kit lookup for club #1736 must prefer 'player' category over 'staff'
+    club_kit = get_club_shirt_template("1736", tpl_dir=tpl_dir, db_path=db_path)
+    assert club_kit is not None and club_kit.template_id == "Navy_Player"
+
+    # 2. Build a genuine assembled DF11 facepack card (<29184012>.png) with DF11 outer alpha=0 ring + white wall + crimson shirt + pink face
+    raw_person = Image.new("RGBA", (260, 310), (0, 0, 0, 0))
+    pdraw = ImageDraw.Draw(raw_person)
+    pdraw.ellipse([84, 44, 176, 176], fill=(220, 172, 148, 255))
+    pdraw.rectangle([98, 162, 162, 226], fill=(214, 165, 140, 255))
+    pdraw.polygon([(19, 224), (92, 196), (130, 228), (168, 196), (241, 224), (241, 292), (19, 292)], fill=(185, 24, 38, 255))
+    assembled_card = render_df11_card(raw_person, bg_mode="white_df11")
+    facepack_card_path = facepack_dir / "29184012.png"
+    assembled_card.save(facepack_card_path, format="PNG")
+    (facepack_dir / "config.xml").write_text(
+        '<record>\n\t<boolean id="preload" value="false"/>\n\t<boolean id="amap" value="false"/>\n\t<list id="maps">\n'
+        '\t\t<record from="111111" to="graphics/pictures/person/111111/portrait"/>\n'
+        '\t\t<record from="29184012" to="graphics/pictures/person/29184012/portrait"/>\n'
+        "\t</list>\n</record>\n",
+        encoding="utf-8",
+    )
+
+    class _FacepackDialogWin:
+        def create_file_dialog(self, *args: object, **kwargs: object) -> tuple[str, ...]:
+            return (str(facepack_card_path),)
+
+    bridge._attach_window(_FacepackDialogWin())
+
+    # 2A. Remix Mode 'swap_shirt': extracts footballer head+neck (stripping white DF11 wall AND crimson shirt) onto Navy_Player
+    remix_a = bridge.pick_facepack_card("swap_shirt", "Navy_Player", {"bgMode": "transparent"})
+    assert remix_a is not None
+    assert remix_a["detectedUid"] == "29184012"
+    assert remix_a["facepackDir"] == str(facepack_dir.resolve())
+    assert bridge.get_bootstrap_state()["facepackDir"] == str(facepack_dir.resolve())
+    head_asset = bridge._mod().get_head_asset(remix_a["headAssetId"])
+    assert head_asset is not None
+    # Upper-left interior corner of DF11 card (30, 30) MUST be transparent (white DF11 background stripped, not mistaken for pre-cutout!)
+    assert int(np.asarray(head_asset.rgba)[30, 30, 3]) == 0
+    prev_a = np.asarray(Image.open(io.BytesIO(base64.b64decode(remix_a["previewDataUrl"].split(",", 1)[1]))).convert("RGBA"))
+    # Chest now wears Navy_Player (blue > red), NOT the old crimson shirt!
+    assert int(prev_a[255, 80, 2]) > int(prev_a[255, 80, 0]) + 60
+
+    # 2B. Switch remix mode to 'swap_face': isolates crimson shirt from 29184012.png into adhocShirtId so a new face mounts on it
+    remix_b = bridge.switch_facepack_remix_mode("swap_face", "", {"bgMode": "transparent"})
+    adhoc_id = remix_b["adhocShirtId"]
+    assert adhoc_id.startswith("adhoc:")
+    # Compose new face (head_asset) onto adhocShirtId -> chest wears the original crimson shirt (red > blue)!
+    comp_b = bridge.render_modular_preview(
+        {
+            "headAssetId": remix_a["headAssetId"],
+            "wearMode": "template",
+            "templateId": adhoc_id,
+            "scale": remix_a["autoFit"]["scale"],
+            "offsetX": remix_a["autoFit"]["offsetX"],
+            "offsetY": remix_a["autoFit"]["offsetY"],
+            "neckFill": 1.0,
+            "bgMode": "transparent",
+        }
+    )
+    prev_b = np.asarray(Image.open(io.BytesIO(base64.b64decode(comp_b["previewDataUrl"].split(",", 1)[1]))).convert("RGBA"))
+    assert int(prev_b[255, 80, 0]) > int(prev_b[255, 80, 2]) + 80
+
+    # 3. Dual Export Target: Option 1 (Creations folder) & Option 2 (FM Facepack folder overwriting 29184012.png)
+    exp1 = bridge.export_modular_card(
+        {
+            "uid": "29184012",
+            "exportTarget": "creations",
+            "headAssetId": remix_a["headAssetId"],
+            "wearMode": "template",
+            "templateId": "Navy_Player",
+            "scale": remix_a["autoFit"]["scale"],
+            "offsetX": remix_a["autoFit"]["offsetX"],
+            "offsetY": remix_a["autoFit"]["offsetY"],
+            "neckFill": 1.0,
+            "fmt": "png",
+            "updateConfigXml": True,
+        }
+    )
+    assert Path(exp1["savedPath"]).resolve() == (export_dir / "29184012.png").resolve()
+    assert (export_dir / "29184012.png").is_file()
+
+    cfg_mtime_before = (facepack_dir / "config.xml").stat().st_mtime_ns
+    exp2 = bridge.export_modular_card(
+        {
+            "uid": "29184012",
+            "exportTarget": "facepack",
+            "headAssetId": remix_a["headAssetId"],
+            "wearMode": "template",
+            "templateId": adhoc_id,
+            "scale": remix_a["autoFit"]["scale"],
+            "offsetX": remix_a["autoFit"]["offsetX"],
+            "offsetY": remix_a["autoFit"]["offsetY"],
+            "neckFill": 1.0,
+            "fmt": "png",
+            "updateConfigXml": True,
+        }
+    )
+    assert Path(exp2["savedPath"]).resolve() == facepack_card_path.resolve()
+    # Existing megapack config.xml already had 29184012 mapped -> fast-path preserves file untouched without clobbering 111111!
+    assert (facepack_dir / "config.xml").stat().st_mtime_ns == cfg_mtime_before
+    assert 'from="111111"' in (facepack_dir / "config.xml").read_text(encoding="utf-8")
+
+    # Unapproved arbitrary outDir on facepack target must still raise CapabilityError
+    with pytest.raises(CapabilityError):
+        bridge.export_modular_card(
+            {
+                "uid": "29184012",
+                "exportTarget": "facepack",
+                "outDir": str(tmp_path / "unapproved_dir"),
+                "headAssetId": remix_a["headAssetId"],
+                "wearMode": "template",
+                "templateId": "Navy_Player",
+            }
+        )
+
+
+
 
 

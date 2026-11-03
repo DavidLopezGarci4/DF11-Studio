@@ -85,6 +85,7 @@ class StudioBridge:
         self._db_path = db_path or get_state_db_path()
         self._vault_dir = (vault_dir or get_default_vault_dir()).resolve()
         self._export_dir = (export_dir or (get_studio_root() / "Exports" / "000_DF11_Regens_Override")).resolve()
+        self._facepack_dir: Path | None = None
         self._templates_dir = (templates_dir or get_tshirt_templates_dir()).resolve()
         self._raw_archive_dir = (raw_archive_dir or get_raw_tshirt_archive_dir()).resolve()
         self._extracted_faces_dir = (extracted_faces_dir or get_extracted_faces_dir()).resolve()
@@ -169,8 +170,12 @@ class StudioBridge:
         if saved_export and Path(saved_export).resolve() != self._vault_dir and (Path(saved_export).is_dir() or Path(saved_export).parent.is_dir()):
             self._export_dir = Path(saved_export).resolve()
             self._approved_dirs.add(self._export_dir)
+        saved_facepack = self._get_pref("last_facepack_dir")
+        if saved_facepack and Path(saved_facepack).is_dir() and Path(saved_facepack).resolve() != self._vault_dir:
+            self._facepack_dir = Path(saved_facepack).resolve()
+            self._approved_dirs.add(self._facepack_dir)
         saved_vault = self._get_pref("last_vault_dir")
-        if saved_vault and Path(saved_vault).is_dir() and Path(saved_vault).resolve() != self._export_dir:
+        if saved_vault and Path(saved_vault).is_dir() and Path(saved_vault).resolve() != self._export_dir and Path(saved_vault).resolve() != self._facepack_dir:
             self._vault_dir = Path(saved_vault).resolve()
 
         m = get_models_dir()
@@ -182,6 +187,7 @@ class StudioBridge:
             "clubs": load_merged_clubs(self._db_path),
             "vaultDir": str(self._vault_dir),
             "exportDir": str(self._export_dir),
+            "facepackDir": str(self._facepack_dir) if self._facepack_dir else "",
             "storageHealth": asdict(check_fm_storage_health(self._export_dir)),
             "hasModels": ok,
             "liveWatching": self._watcher is not None,
@@ -212,17 +218,29 @@ class StudioBridge:
         import webview
         from backend.services.sync import check_fm_storage_health
 
-        pref_key = "last_vault_dir" if role == "vault" else "last_export_dir"
-        fallback = self._vault_dir if role == "vault" else self._export_dir
+        if role == "vault":
+            pref_key = "last_vault_dir"
+            fallback = self._vault_dir
+        elif role == "facepack":
+            pref_key = "last_facepack_dir"
+            fallback = self._facepack_dir or self._export_dir
+        else:
+            pref_key = "last_export_dir"
+            fallback = self._export_dir
         init_dir = self._resolve_dialog_dir(pref_key, fallback)
         res = self._window.create_file_dialog(webview.FOLDER_DIALOG, directory=init_dir) if self._window else None
         if not res:
             return None
         c = Path(res[0]).resolve()
         if role == "vault":
-            if c == self._export_dir:
+            if c == self._export_dir or (self._facepack_dir is not None and c == self._facepack_dir):
                 raise CapabilityError("La bóveda NG_Regens de solo lectura no puede coincidir con la carpeta de salida.")
             self._vault_dir = c
+        elif role == "facepack":
+            if c == self._vault_dir:
+                raise CapabilityError("La carpeta del Pack de Faces no puede coincidir con la bóveda NG_Regens de solo lectura.")
+            self._approved_dirs.add(c)
+            self._facepack_dir = c
         else:
             if c == self._vault_dir:
                 raise CapabilityError("La carpeta de salida no puede coincidir con la bóveda NG_Regens de solo lectura.")
@@ -592,9 +610,11 @@ class StudioBridge:
         club_name: str = "",
         season: str = "",
         is_active_for_club: bool = True,
+        category: str | None = None,
     ) -> dict[str, Any]:
         if isinstance(template_id, dict):
             d = template_id
+            cat_val = str(d["category"]) if d.get("category") is not None else None
             return self._mod().update_template_meta(
                 template_id=str(d.get("templateId", "")),
                 display_name=str(d.get("displayName", "")),
@@ -602,6 +622,7 @@ class StudioBridge:
                 club_name=str(d.get("clubName", "")),
                 season=str(d.get("season", "")),
                 is_active_for_club=bool(d.get("isActiveForClub", True)),
+                category=cat_val,
             )
         return self._mod().update_template_meta(
             template_id=str(template_id),
@@ -610,6 +631,7 @@ class StudioBridge:
             club_name=club_name,
             season=season,
             is_active_for_club=bool(is_active_for_club),
+            category=category,
         )
 
     def set_active_club_shirt_template(self, template_id: str) -> dict[str, Any]:
@@ -641,6 +663,59 @@ class StudioBridge:
         count = index_fm_graphics_packs(chosen, db_path=self._db_path)
         return {"path": str(chosen), "importedCount": count, "clubs": load_merged_clubs(self._db_path)}
 
+    def pick_facepack_card(
+        self, remix_mode: str = "swap_shirt", active_template_id: str = "", params: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        chosen = self._pick_image_file("last_facepack_dir")
+        if chosen is None:
+            return None
+        parent_dir = chosen.parent.resolve()
+        if parent_dir != self._vault_dir:
+            self._facepack_dir = parent_dir
+            self._approved_dirs.add(parent_dir)
+            self._set_pref("last_facepack_dir", str(parent_dir))
+        out = self._mod().remix_facepack_card(
+            _read_guarded_file(chosen),
+            file_name=chosen.name,
+            remix_mode=remix_mode,
+            active_template_id=active_template_id,
+            extra_params=params,
+            custom_bg=self._custom_bg_img,
+        )
+        return {**out, "facepackDir": str(self._facepack_dir) if self._facepack_dir else ""}
+
+    def load_facepack_card(
+        self,
+        data_url: str,
+        file_name: str = "",
+        remix_mode: str = "swap_shirt",
+        active_template_id: str = "",
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        out = self._mod().remix_facepack_card(
+            _decode_b64(data_url),
+            file_name=file_name,
+            remix_mode=remix_mode,
+            active_template_id=active_template_id,
+            extra_params=params,
+            custom_bg=self._custom_bg_img,
+        )
+        return {**out, "facepackDir": str(self._facepack_dir) if self._facepack_dir else ""}
+
+    def switch_facepack_remix_mode(
+        self, remix_mode: str, active_template_id: str = "", params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        out = self._mod().switch_facepack_remix_mode(
+            remix_mode=remix_mode,
+            active_template_id=active_template_id,
+            extra_params=params,
+            custom_bg=self._custom_bg_img,
+        )
+        return {**out, "facepackDir": str(self._facepack_dir) if self._facepack_dir else ""}
+
+    def save_adhoc_shirt_template(self, opts: dict[str, Any]) -> dict[str, Any]:
+        return self._mod().save_adhoc_shirt_to_templates(opts)
+
     def auto_fit_head_to_template(self, head_asset_id: str, template_id: str) -> dict[str, float]:
         return self._mod().compute_auto_fit(head_asset_id, template_id)
 
@@ -659,11 +734,20 @@ class StudioBridge:
             if self._mod().get_head_asset(head_id) is None:
                 raise ValueError("La cara activa ya no está en memoria; vuelve a cargarla antes de exportar.")
         else:
-            if wear_mode != "template" or not tpl_id or self._mod()._find_template(tpl_id) is None:
+            if wear_mode != "template" or not tpl_id or not self._mod().has_shirt_reference(tpl_id):
                 raise ValueError("Añade una cara o selecciona una plantilla válida antes de exportar la ficha DF11.")
         uid = validate_fm_uid(str(params.get("uid", "")))
+        export_target = str(params.get("exportTarget", "creations")).strip().lower()
         fmt = "jpg" if str(params.get("fmt", "png")).lower() in ("jpg", "jpeg") else "png"
-        tdir = self._require_approved(Path(params["outDir"]) if params.get("outDir") else self._export_dir)
+        if export_target == "facepack":
+            fmt = "png"
+            raw_out = str(params.get("outDir") or "").strip()
+            cand_dir = Path(raw_out) if raw_out else self._facepack_dir
+            if cand_dir is None:
+                raise ValueError("Selecciona primero la carpeta del Pack de Faces de Football Manager.")
+            tdir = self._require_approved(cand_dir)
+        else:
+            tdir = self._require_approved(Path(params["outDir"]) if params.get("outDir") else self._export_dir)
         if params.get("customKitDirty") and wear_mode in ("club", "staff_polo", "staff_suit"):
             kit = self._resolve_studio_kit(str(params.get("clubId", "1736")), params)
             save_kit_override(kit.club_id, kit.primary, kit.secondary, pattern=kit.pattern, db_path=self._db_path)

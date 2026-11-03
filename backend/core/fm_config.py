@@ -46,16 +46,30 @@ def upsert_fm_config_xml(config_path: Path, uids: Iterable[str]) -> int:
     records: dict[str, str] = {}
 
     target_tos = {f"graphics/pictures/person/{u}/portrait" for u in validated}
+    validated_set = set(validated)
     if config_path.is_file():
+        matched_exact: set[str] = set()
+        conflict_found = False
         try:
             tree = SafeET.parse(config_path)
             for rec in tree.getroot().findall(".//record"):
                 frm = rec.attrib.get("from", "").strip()
                 to = rec.attrib.get("to", "").strip()
-                if frm and to and to not in target_tos:
+                if not frm or not to:
+                    continue
+                if to in target_tos:
+                    if frm in validated_set and to == f"graphics/pictures/person/{frm}/portrait" and frm not in matched_exact:
+                        matched_exact.add(frm)
+                    else:
+                        conflict_found = True
+                elif frm in validated_set:
+                    conflict_found = True
+                else:
                     records[frm] = to
         except Exception as exc:
             raise FMConfigError(f"No se pudo leer config.xml de forma segura: {exc}") from exc
+        if validated_set and not conflict_found and len(matched_exact) == len(validated_set):
+            return len(records) + len(matched_exact)
 
     for uid in validated:
         records[uid] = f"graphics/pictures/person/{uid}/portrait"

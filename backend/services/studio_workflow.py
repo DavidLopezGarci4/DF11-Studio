@@ -14,6 +14,7 @@ import numpy as np
 from PIL import Image
 
 from backend.core.compositor import render_df11_card
+from backend.core.fm_config import VALID_FM_UID_RE
 from backend.core.image_guard import load_guarded_image
 from backend.services.head_neck import (
     DEFAULT_DF11_COLLAR,
@@ -25,16 +26,19 @@ from backend.services.head_neck import (
     extract_clean_head_and_neck,
     fit_head_to_shirt_template,
     list_face_library_files,
+    prepare_facepack_card_for_head_extraction,
     save_clean_face_to_library,
     suggest_safe_crop_viewport,
     viewport_to_head_fit,
 )
 from backend.services.kits import KitSpec, dress_or_frame_portrait, load_merged_clubs, resolve_club_kit
 from backend.services.templates import (
+    CollarProfile,
     IMAGE_EXTS,
     ShirtTemplate,
     delete_shirt_template,
     extract_collar_profile,
+    normalize_template_category,
     rename_shirt_template,
     sanitize_shirt_template_rgba,
     save_new_shirt_template,
@@ -121,6 +125,11 @@ class ModularWorkflowSession:
         self._shirt_preview_img: Image.Image | None = None
         self._shirt_preview_params: tuple[str, bool, float, float, float, float, float] | None = None
 
+        # Ad-hoc shirts isolated from assembled FM facepack cards & last remixed card for instant mode toggle
+        self._adhoc_seq = 0
+        self._adhoc_shirts: OrderedDict[str, tuple[Image.Image, CollarProfile, bytes | None, str, str]] = OrderedDict()
+        self._last_facepack_card: tuple[bytes, str] | None = None
+
     def _put_head_asset(self, asset: HeadNeckAsset) -> str:
         with self._lock:
             self._seq += 1
@@ -170,22 +179,23 @@ class ModularWorkflowSession:
 
     def stage_raw_face(self, raw_bytes: bytes, file_name: str = "") -> dict[str, Any]:
         g = load_guarded_image(raw_bytes)
-        vp = suggest_safe_crop_viewport(g.image)
+        prep_img, prep_precut = prepare_facepack_card_for_head_extraction(g.image, g.is_pre_cutout)
+        vp = suggest_safe_crop_viewport(prep_img)
         with self._lock:
-            self._crop_raw_img = g.image
-            self._crop_is_precut = g.is_pre_cutout
+            self._crop_raw_img = prep_img
+            self._crop_is_precut = prep_precut
             self._crop_name = Path(file_name).stem if file_name else "Retrato"
             self._crop_suggested_vp = vp
 
-        alpha = np.asarray(g.image.convert("RGBA"), dtype=np.uint8)[:, :, 3]
+        alpha = np.asarray(prep_img.convert("RGBA"), dtype=np.uint8)[:, :, 3]
         ys = np.where(alpha > 24)[0]
         crown_src_y = int(ys.min()) if len(ys) else 0
-        w, h = g.image.size
+        w, h = prep_img.size
         return {
-            "rawDataUrl": _png_data_url(g.image),
+            "rawDataUrl": _png_data_url(prep_img),
             "width": w,
             "height": h,
-            "isPreCutout": g.is_pre_cutout,
+            "isPreCutout": prep_precut,
             "crownSrcY": crown_src_y,
             "suggestedViewport": {"zoom": vp.zoom, "panX": vp.pan_x, "panY": vp.pan_y},
             "fileName": file_name,
@@ -343,6 +353,7 @@ class ModularWorkflowSession:
                         "clubName": t.club_name,
                         "season": t.season,
                         "isActiveForClub": t.is_active_for_club,
+                        "category": t.category,
                         "collarWidth": t.collar.collar_width,
                         "apexY": t.collar.apex[1],
                         "thumbDataUrl": self._cached_thumb(t.file_path),
@@ -353,7 +364,7 @@ class ModularWorkflowSession:
         return out
 
     def _find_template(self, template_id: str) -> ShirtTemplate | None:
-        if not template_id:
+        if not template_id or template_id.startswith("adhoc:"):
             return None
         items = sync_tshirt_templates_dir(
             tpl_dir=self.templates_dir,
@@ -361,6 +372,31 @@ class ModularWorkflowSession:
             db_path=self.db_path,
         )
         return next((t for t in items if t.template_id == template_id), None)
+
+    def has_shirt_reference(self, template_id: str) -> bool:
+        tid = str(template_id or "").strip()
+        if not tid:
+            return False
+        if tid.startswith("adhoc:"):
+            with self._lock:
+                return tid in self._adhoc_shirts
+        return self._find_template(tid) is not None
+
+    def _resolve_shirt_layer(self, template_id: str) -> tuple[Image.Image | None, CollarProfile | None]:
+        tid = str(template_id or "").strip()
+        if not tid:
+            return None, None
+        if tid.startswith("adhoc:"):
+            with self._lock:
+                entry = self._adhoc_shirts.get(tid)
+                if entry is not None:
+                    self._adhoc_shirts.move_to_end(tid)
+                    return entry[0], entry[1]
+            return None, None
+        tpl = self._find_template(tid)
+        if tpl is None:
+            return None, None
+        return self._load_template_image(tpl), tpl.collar
 
     def stage_raw_shirt(self, raw_bytes: bytes, file_name: str = "") -> dict[str, Any]:
         g = load_guarded_image(raw_bytes)
@@ -493,6 +529,7 @@ class ModularWorkflowSession:
             season=str(opts.get("season", "")),
             is_active_for_club=bool(opts.get("isActiveForClub", True)),
             replace_previous_for_club=bool(opts.get("replacePreviousForClub", False)),
+            category=normalize_template_category(str(opts.get("category", "player"))),
         )
         return {
             "savedTemplateId": tpl.template_id,
@@ -508,6 +545,7 @@ class ModularWorkflowSession:
         club_name: str = "",
         season: str = "",
         is_active_for_club: bool = True,
+        category: str | None = None,
     ) -> dict[str, Any]:
         rename_shirt_template(
             template_id=template_id,
@@ -518,6 +556,7 @@ class ModularWorkflowSession:
             club_name=club_name,
             season=season,
             is_active_for_club=is_active_for_club,
+            category=category,
         )
         return {"templates": self.list_templates(), "clubs": load_merged_clubs(self.db_path)}
 
@@ -543,15 +582,152 @@ class ModularWorkflowSession:
                     cache_dict.pop(sk, None)
         return {"deletedTemplateId": deleted_id, "templates": self.list_templates()}
 
-    # --- Tool 3: Step-by-Step Modular Layer Composer ---
+    # --- Tool 3: Step-by-Step Modular Layer Composer & Facepack Card Remix ---
+
+    def remix_facepack_card(
+        self,
+        raw_bytes: bytes,
+        file_name: str = "",
+        remix_mode: str = "swap_shirt",
+        active_template_id: str = "",
+        extra_params: dict[str, Any] | None = None,
+        custom_bg: Image.Image | None = None,
+    ) -> dict[str, Any]:
+        g = load_guarded_image(raw_bytes)
+        raw_ext = _infer_raw_ext(raw_bytes, file_name)
+        stem = Path(file_name).stem.strip() if file_name else ""
+        detected_uid = stem if VALID_FM_UID_RE.fullmatch(stem) else ""
+        label = stem or "Ficha_Facepack"
+        mode = "swap_face" if str(remix_mode or "").strip() == "swap_face" else "swap_shirt"
+
+        with self._lock:
+            self._last_facepack_card = (raw_bytes, file_name)
+
+        base_params = dict(extra_params or {})
+        if mode == "swap_face":
+            clean_shirt = sanitize_shirt_template_rgba(g.image, symmetrize_shoulders=True, detail_crispness=0.35)
+            self._ensure_nonempty_shirt(clean_shirt)
+            collar = extract_collar_profile(clean_shirt)
+            with self._lock:
+                self._adhoc_seq += 1
+                adhoc_id = f"adhoc:shirt-{self._adhoc_seq}"
+                self._adhoc_shirts[adhoc_id] = (clean_shirt, collar, raw_bytes, raw_ext, f"Camiseta {label}")
+                while len(self._adhoc_shirts) > MAX_CACHED_SHIRTS:
+                    self._adhoc_shirts.popitem(last=False)
+
+            cur_head_id = str(base_params.get("headAssetId", "")).strip()
+            fit_dict = self.compute_auto_fit(cur_head_id, adhoc_id) if cur_head_id else {"scale": 1.0, "offsetX": 0.0, "offsetY": 0.0, "neckFill": 1.0}
+            comp_params = {
+                **base_params,
+                "wearMode": "template",
+                "templateId": adhoc_id,
+                "scale": fit_dict["scale"],
+                "offsetX": fit_dict["offsetX"],
+                "offsetY": fit_dict["offsetY"],
+                "neckFill": fit_dict["neckFill"],
+            }
+            return {
+                "remixMode": "swap_face",
+                "detectedUid": detected_uid,
+                "cardLabel": label,
+                "adhocShirtId": adhoc_id,
+                "adhocShirtLabel": f"Camiseta ficha {label}",
+                "adhocShirtThumbDataUrl": _thumb_data_url(clean_shirt),
+                "collarWidth": collar.collar_width,
+                "apexY": collar.apex[1],
+                "autoFit": fit_dict,
+                "previewDataUrl": _png_data_url(self.compose_step_card(comp_params, custom_bg=custom_bg)),
+            }
+
+        prep_im, prep_precut = prepare_facepack_card_for_head_extraction(g.image, g.is_pre_cutout)
+        vp = suggest_safe_crop_viewport(prep_im)
+        asset = extract_clean_head_and_neck(prep_im, is_pre_cutout=prep_precut, crop_viewport=vp, remove_bg=True)
+        aid = self._put_head_asset(asset)
+
+        target_tid = str(active_template_id or "").strip()
+        if not target_tid or target_tid.startswith("adhoc:") or not self.has_shirt_reference(target_tid):
+            items = sync_tshirt_templates_dir(tpl_dir=self.templates_dir, raw_archive_dir=self.raw_archive_dir, db_path=self.db_path)
+            first_player = next((t for t in items if t.category == "player"), None) or (items[0] if items else None)
+            target_tid = first_player.template_id if first_player else ""
+
+        fit_dict = self.compute_auto_fit(aid, target_tid)
+        comp_params = {
+            **base_params,
+            "headAssetId": aid,
+            "wearMode": "template",
+            "templateId": target_tid,
+            "scale": fit_dict["scale"],
+            "offsetX": fit_dict["offsetX"],
+            "offsetY": fit_dict["offsetY"],
+            "neckFill": fit_dict["neckFill"],
+        }
+        return {
+            "remixMode": "swap_shirt",
+            "detectedUid": detected_uid,
+            "cardLabel": label,
+            "headAssetId": aid,
+            "templateId": target_tid,
+            "isPreCutout": prep_precut,
+            "autoFit": fit_dict,
+            "previewDataUrl": _png_data_url(self.compose_step_card(comp_params, custom_bg=custom_bg)),
+        }
+
+    def switch_facepack_remix_mode(
+        self,
+        remix_mode: str,
+        active_template_id: str = "",
+        extra_params: dict[str, Any] | None = None,
+        custom_bg: Image.Image | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            cached = self._last_facepack_card
+        if cached is None:
+            raise ValueError("Carga primero una ficha del Pack de Faces de Football Manager.")
+        raw_bytes, file_name = cached
+        return self.remix_facepack_card(
+            raw_bytes=raw_bytes,
+            file_name=file_name,
+            remix_mode=remix_mode,
+            active_template_id=active_template_id,
+            extra_params=extra_params,
+            custom_bg=custom_bg,
+        )
+
+    def save_adhoc_shirt_to_templates(self, opts: dict[str, Any]) -> dict[str, Any]:
+        adhoc_id = str(opts.get("adhocShirtId") or "").strip()
+        with self._lock:
+            entry = self._adhoc_shirts.get(adhoc_id)
+        if entry is None:
+            raise ValueError("La camiseta aislada de la ficha ya no está en memoria.")
+        clean_shirt, _collar, raw_bytes, raw_ext, default_label = entry
+        tpl = save_new_shirt_template(
+            clean_rgba=clean_shirt,
+            raw_bytes=raw_bytes,
+            display_name=str(opts.get("displayName") or default_label),
+            club_id=str(opts.get("clubId", "")),
+            template_id=str(opts.get("templateId", "")),
+            tpl_dir=self.templates_dir,
+            raw_archive_dir=self.raw_archive_dir,
+            db_path=self.db_path,
+            raw_ext=raw_ext,
+            club_name=str(opts.get("clubName", "")),
+            season=str(opts.get("season", "")),
+            is_active_for_club=bool(opts.get("isActiveForClub", True)),
+            category=normalize_template_category(str(opts.get("category", "player"))),
+        )
+        return {
+            "savedTemplateId": tpl.template_id,
+            "templates": self.list_templates(),
+            "clubs": load_merged_clubs(self.db_path),
+        }
 
     def compute_auto_fit(self, head_asset_id: str, template_id: str = "") -> dict[str, float]:
         asset = self.get_head_asset(head_asset_id)
         if asset is None:
             return {"scale": 1.0, "offsetX": 0.0, "offsetY": 0.0, "neckFill": 1.0}
-        tpl = self._find_template(template_id) if template_id else None
-        collar = tpl.collar if tpl is not None else DEFAULT_DF11_COLLAR
-        fit = fit_head_to_shirt_template(asset, collar)
+        _shirt_im, collar = self._resolve_shirt_layer(template_id)
+        use_collar = collar if collar is not None else DEFAULT_DF11_COLLAR
+        fit = fit_head_to_shirt_template(asset, use_collar)
         return {"scale": fit.scale, "offsetX": fit.offset_x, "offsetY": fit.offset_y, "neckFill": fit.neck_fill}
 
     def compose_step_card(self, p: dict[str, Any], custom_bg: Image.Image | None = None) -> Image.Image:
@@ -596,9 +772,7 @@ class ModularWorkflowSession:
                 bg_blur=bg_blur,
             )
 
-        tpl = self._find_template(str(p.get("templateId", "")).strip()) if wear_mode == "template" else None
-        shirt_im = self._load_template_image(tpl) if tpl is not None else None
-        collar = tpl.collar if tpl is not None else None
+        shirt_im, collar = self._resolve_shirt_layer(str(p.get("templateId", "")).strip()) if wear_mode == "template" else (None, None)
         fit = HeadFitParams(scale=scale, offset_x=ox, offset_y=oy, neck_fill=neck_fill, harmonize=harmonize)
         return compose_modular_df11(
             head_asset=asset,
