@@ -11,6 +11,7 @@ import {
   Redo2,
   RotateCcw,
   Scissors,
+  Search,
   Shirt,
   Sparkles,
   Trash2,
@@ -42,6 +43,7 @@ export interface StudioJumpPayload {
 
 interface Props {
   clubs: Record<string, ClubSeed>;
+  onClubsUpdated?: (clubs: Record<string, ClubSeed>) => void;
   exportDir: string;
   onExportDirChange: (dir: string, sh?: StorageHealth) => void;
   initialJump: StudioJumpPayload | null;
@@ -49,6 +51,26 @@ interface Props {
 }
 
 const UID_RE = /^(?:r-)?[0-9]{1,12}$/;
+
+function resolveNextClubName(
+  prevCid: string,
+  prevName: string,
+  nextCid: string,
+  clubs: Record<string, ClubSeed>,
+  templates: ShirtTemplateInfo[],
+): string {
+  if (!nextCid) return '';
+  const knownNext = clubs[nextCid]?.name;
+  if (knownNext !== undefined) return knownNext;
+  const tplNext = templates.find((t) => t.clubId === nextCid && t.clubName)?.clubName;
+  if (tplNext) return tplNext;
+  const prevCatalogName =
+    (prevCid ? clubs[prevCid]?.name : undefined) ??
+    (prevCid ? templates.find((t) => t.clubId === prevCid && t.clubName)?.clubName : undefined);
+  if (prevCatalogName !== undefined && prevName === prevCatalogName) return '';
+  if (prevCid && !(nextCid.startsWith(prevCid) || prevCid.startsWith(nextCid))) return '';
+  return prevName;
+}
 type ToolTab = 'composer' | 'face_tool' | 'shirt_tool';
 type WearMode = 'template' | 'none' | 'club' | 'staff_polo' | 'staff_suit';
 type BgMode = 'transparent' | 'white_df11' | 'pearl_studio' | 'stadium_bokeh' | 'tunnel_club' | 'office_staff' | 'custom';
@@ -91,7 +113,14 @@ const INITIAL_SNAP: LayerSnapshot = {
   customPattern: 'solid',
 };
 
-export default function StudioView({ clubs, exportDir, onExportDirChange, initialJump, onConsumeJump }: Props) {
+export default function StudioView({
+  clubs,
+  onClubsUpdated,
+  exportDir,
+  onExportDirChange,
+  initialJump,
+  onConsumeJump,
+}: Props) {
   const [toolTab, setToolTab] = useState<ToolTab>('composer');
   const [templates, setTemplates] = useState<ShirtTemplateInfo[]>([]);
   const [faces, setFaces] = useState<SavedFaceInfo[]>([]);
@@ -117,9 +146,14 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
   const [hasExtractedBg, setHasExtractedBg] = useState(false);
   const [canExtractBg, setCanExtractBg] = useState(false);
 
-  // Inline template rename/club binding state
+  // Inline template rename/club/season/delete state in Paso 2
   const [tplNameDraft, setTplNameDraft] = useState('');
   const [tplClubDraft, setTplClubDraft] = useState('');
+  const [tplClubNameDraft, setTplClubNameDraft] = useState('');
+  const [tplSeasonDraft, setTplSeasonDraft] = useState('');
+  const [tplActiveDraft, setTplActiveDraft] = useState(true);
+  const [step2Search, setStep2Search] = useState('');
+  const [confirmDeleteTpl, setConfirmDeleteTpl] = useState(false);
 
   const [uid, setUid] = useState('');
   const [fmt, setFmt] = useState<'png' | 'jpg'>('png');
@@ -179,33 +213,56 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
     }));
   }, [cropStage, snap.headAssetId, previewUrl, commitSnap]);
 
-  // Load templates & saved faces on mount
-  useEffect(() => {
-    callBridge<ShirtTemplateInfo[]>('list_shirt_templates')
+  const handleTemplatesUpdated = useCallback((nextTemplates: ShirtTemplateInfo[]) => {
+    setTemplates(nextTemplates);
+    setConfirmDeleteTpl(false);
+    setHistory((h) => {
+      const validIds = new Set(nextTemplates.map((t) => t.templateId));
+      const fallbackTid = nextTemplates[0]?.templateId ?? '';
+      let changed = false;
+      const fixSnap = (sn: LayerSnapshot): LayerSnapshot => {
+        if (!sn.templateId ? !fallbackTid : validIds.has(sn.templateId)) return sn;
+        if (sn.templateId === fallbackTid) return sn;
+        changed = true;
+        return { ...sn, templateId: fallbackTid };
+      };
+      const nextPresent = fixSnap(h.present);
+      const nextPast = h.past.map(fixSnap);
+      const nextFuture = h.future.map(fixSnap);
+      return changed ? { past: nextPast, present: nextPresent, future: nextFuture } : h;
+    });
+  }, []);
+
+  const loadInitialCatalogs = useCallback(() => {
+    void callBridge<ShirtTemplateInfo[]>('list_shirt_templates')
       .then((tpls) => {
-        if (Array.isArray(tpls)) {
-          setTemplates(tpls);
-          if (tpls.length > 0) {
-            setHistory((h) =>
-              h.present.templateId ? h : { ...h, present: { ...h.present, templateId: tpls[0].templateId } },
-            );
-          }
-        }
+        if (Array.isArray(tpls)) handleTemplatesUpdated(tpls);
       })
       .catch(() => {});
-    callBridge<SavedFaceInfo[]>('list_saved_faces')
+    void callBridge<SavedFaceInfo[]>('list_saved_faces')
       .then((fcs) => {
         if (Array.isArray(fcs)) setFaces(fcs);
       })
       .catch(() => {});
-  }, []);
+  }, [handleTemplatesUpdated]);
 
-  // Sync inline template name/club drafts when selected template changes
+  // Load templates & saved faces on mount and on pywebviewready
+  useEffect(() => {
+    loadInitialCatalogs();
+    window.addEventListener('pywebviewready', loadInitialCatalogs);
+    return () => window.removeEventListener('pywebviewready', loadInitialCatalogs);
+  }, [loadInitialCatalogs]);
+
+  // Sync inline template name/club/season drafts when selected template changes
   useEffect(() => {
     const active = templates.find((t) => t.templateId === snap.templateId);
     setTplNameDraft(active?.displayName ?? '');
     setTplClubDraft(active?.clubId ?? '');
-  }, [templates, snap.templateId]);
+    setTplClubNameDraft(active?.clubName || (active?.clubId ? clubs[active.clubId]?.name ?? '' : ''));
+    setTplSeasonDraft(active?.season ?? '');
+    setTplActiveDraft(active?.clubId ? active.isActiveForClub !== false : true);
+    setConfirmDeleteTpl(false);
+  }, [templates, snap.templateId, clubs]);
 
   // Handle jump from NG_Regens Sync tab
   useEffect(() => {
@@ -215,18 +272,20 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
     setUid(initialJump.uid);
     setPreviewUrl(initialJump.previewDataUrl);
     setCanExtractBg(!initialJump.isPreCutout);
+    const jumpClubId = (initialJump.clubId ?? '').replace(/[^0-9]/g, '').slice(0, 12);
     const matchedTpl = initialJump.matchedTemplateId
       ? { templateId: initialJump.matchedTemplateId }
-      : initialJump.clubId
-      ? templates.find((t) => t.clubId === initialJump.clubId)
+      : jumpClubId
+      ? templates.find((t) => t.clubId === jumpClubId && t.isActiveForClub !== false) ||
+        templates.find((t) => t.clubId === jumpClubId)
       : undefined;
     commitSnap((s) => ({
       ...s,
       headAssetId: initialJump.headAssetId ?? 'legacy-jump',
       faceLabel: initialJump.uid,
-      wearMode: matchedTpl ? 'template' : initialJump.clubId && clubs[initialJump.clubId] ? 'club' : 'none',
+      wearMode: matchedTpl ? 'template' : jumpClubId ? 'club' : 'none',
       templateId: matchedTpl ? matchedTpl.templateId : s.templateId,
-      clubId: initialJump.clubId && clubs[initialJump.clubId] ? initialJump.clubId : s.clubId,
+      clubId: jumpClubId || s.clubId,
       scale: initialJump.autoFit?.scale ?? 1.0,
       offsetX: initialJump.autoFit?.offsetX ?? 0,
       offsetY: initialJump.autoFit?.offsetY ?? 0,
@@ -245,7 +304,7 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
       headAssetId: snap.headAssetId === 'legacy-jump' ? '' : snap.headAssetId,
       wearMode: snap.wearMode,
       templateId: snap.templateId,
-      clubId: snap.clubId,
+      clubId: snap.clubId || '1736',
       scale: snap.scale,
       offsetX: snap.offsetX,
       offsetY: snap.offsetY,
@@ -291,6 +350,11 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
 
   const handleFileBlob = useCallback(
     async (file: File) => {
+      if (busy) return;
+      if (file.size > 20 * 1024 * 1024) {
+        setErrorMsg('El archivo supera el límite máximo permitido de 20 MB.');
+        return;
+      }
       setErrorMsg(''); setSavedMsg(''); setBusy(true);
       try {
         const dataUrl = await new Promise<string>((res, rej) => {
@@ -307,7 +371,7 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
         setBusy(false);
       }
     },
-    [openStagedCrop],
+    [busy, openStagedCrop],
   );
 
   const handlePickPortrait = useCallback(async () => {
@@ -440,17 +504,43 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
     [snap.headAssetId, commitSnap],
   );
 
+  const sortedClubs = useMemo(
+    () => Object.entries(clubs).sort((a, b) => a[1].name.localeCompare(b[1].name, 'es')),
+    [clubs],
+  );
+
+  const filteredStep2Templates = useMemo(() => {
+    const q = step2Search.trim().toLowerCase().replace(/^#/, '');
+    if (!q) return templates;
+    return templates.filter((t) => {
+      const cName = (t.clubName || (t.clubId ? clubs[t.clubId]?.name ?? '' : '')).toLowerCase();
+      return (
+        t.displayName.toLowerCase().includes(q) ||
+        t.templateId.toLowerCase().includes(q) ||
+        t.clubId.toLowerCase().includes(q) ||
+        cName.includes(q) ||
+        (t.season || '').toLowerCase().includes(q)
+      );
+    });
+  }, [templates, step2Search, clubs]);
+
   const handleSaveTemplateMeta = async () => {
     if (!snap.templateId) return;
     setBusy(true); setErrorMsg('');
     try {
-      const res = await callBridge<{ templates: ShirtTemplateInfo[] }>(
+      const res = await callBridge<{ templates: ShirtTemplateInfo[]; clubs?: Record<string, ClubSeed> }>(
         'update_shirt_template_meta',
-        snap.templateId,
-        tplNameDraft,
-        tplClubDraft,
+        {
+          templateId: snap.templateId,
+          displayName: tplNameDraft,
+          clubId: tplClubDraft,
+          clubName: tplClubNameDraft,
+          season: tplSeasonDraft,
+          isActiveForClub: tplActiveDraft,
+        },
       );
-      if (Array.isArray(res?.templates)) setTemplates(res.templates);
+      if (res?.clubs) onClubsUpdated?.(res.clubs);
+      if (Array.isArray(res?.templates)) handleTemplatesUpdated(res.templates);
       setSavedMsg(`Plantilla actualizada: ${tplNameDraft || snap.templateId}`);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'No se pudo actualizar la plantilla.');
@@ -459,12 +549,36 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
     }
   };
 
+  const handleDeleteCurrentTemplate = async () => {
+    if (!snap.templateId || busy) return;
+    const targetTid = snap.templateId;
+    setBusy(true); setErrorMsg('');
+    try {
+      const res = await callBridge<{ deletedTemplateId: string; templates: ShirtTemplateInfo[] }>(
+        'delete_shirt_template',
+        targetTid,
+      );
+      if (Array.isArray(res?.templates)) handleTemplatesUpdated(res.templates);
+      setConfirmDeleteTpl(false);
+      setSavedMsg(`Plantilla eliminada: ${res?.deletedTemplateId ?? targetTid}`);
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'No se pudo eliminar la plantilla.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Keyboard shortcuts: Ctrl+Z (Undo), Ctrl+Y / Ctrl+Shift+Z (Redo), Delete/Suprimir (Clear), Enter (Apply Crop)
   useEffect(() => {
     if (toolTab !== 'composer') return undefined;
+    const nonTextTypes = new Set(['range', 'checkbox', 'radio', 'button', 'color', 'file']);
     const onKeyDown = (ev: KeyboardEvent) => {
-      const tag = (ev.target as HTMLElement | null)?.tagName?.toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (busy || document.querySelector('[role="dialog"]')) return;
+      const el = ev.target as HTMLElement | null;
+      if (el?.isContentEditable) return;
+      const tag = el?.tagName?.toLowerCase();
+      if (tag === 'textarea' || tag === 'select') return;
+      if (tag === 'input' && !nonTextTypes.has(((el as HTMLInputElement).type || 'text').toLowerCase())) return;
       if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'z') {
         ev.preventDefault();
         if (ev.shiftKey) handleRedo();
@@ -475,7 +589,7 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
       } else if (ev.key === 'Delete') {
         ev.preventDefault();
         handleClearCanvas();
-      } else if (ev.key === 'Enter' && cropStage && !busy) {
+      } else if (ev.key === 'Enter' && cropStage) {
         ev.preventDefault();
         void handleConfirmCropAndExtract();
       }
@@ -487,6 +601,7 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
   useEffect(() => {
     if (toolTab !== 'composer') return undefined;
     const onPaste = (ev: ClipboardEvent) => {
+      if (busy || document.querySelector('[role="dialog"]')) return;
       const f = Array.from(ev.clipboardData?.items ?? [])
         .find((i) => i.type.startsWith('image/'))
         ?.getAsFile();
@@ -494,7 +609,7 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
-  }, [toolTab, handleFileBlob]);
+  }, [toolTab, busy, handleFileBlob]);
 
   const handlePickCustomBg = useCallback(async () => {
     if (!window.pywebview?.api?.pick_and_upload_custom_background) {
@@ -658,7 +773,8 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
         <ShirtExtractorTool
           clubs={clubs}
           templates={templates}
-          onTemplatesUpdated={setTemplates}
+          onTemplatesUpdated={handleTemplatesUpdated}
+          onClubsUpdated={onClubsUpdated}
           onSelectTemplateForComposer={(tid) => void handleSelectTemplate(tid)}
         />
       ) : (
@@ -1013,24 +1129,54 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
 
               {snap.wearMode === 'template' && (
                 <div className="space-y-2.5">
-                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 max-h-40 overflow-y-auto pr-1">
-                    {templates.map((t) => {
+                  {templates.length > 0 && (
+                    <div className="relative text-xs">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        aria-label="Buscar camiseta plantilla en montaje"
+                        value={step2Search}
+                        onChange={(e) => setStep2Search(e.target.value)}
+                        placeholder={`Buscar en ${templates.length} plantillas por nombre, club, #ID o temporada…`}
+                        className="w-full pl-8 pr-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                      />
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 max-h-44 overflow-y-auto pr-1">
+                    {filteredStep2Templates.map((t) => {
                       const active = t.templateId === snap.templateId;
+                      const isTitular = Boolean(t.clubId) && t.isActiveForClub !== false;
                       return (
                         <button
                           key={t.templateId}
                           type="button"
                           onClick={() => void handleSelectTemplate(t.templateId)}
-                          className={`p-1.5 rounded-lg border text-center flex flex-col items-center gap-1 transition ${
+                          className={`p-1.5 rounded-lg border text-center flex flex-col items-center gap-0.5 transition ${
                             active
                               ? 'border-emerald-500 bg-emerald-50/60 dark:bg-emerald-950/30'
                               : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50 hover:border-slate-400'
                           }`}
                         >
-                          <img src={t.thumbDataUrl} alt={t.displayName} className="w-12 h-12 object-contain rounded bg-[#0f172a]" />
+                          <div className="relative">
+                            <img src={t.thumbDataUrl} alt={t.displayName} className="w-12 h-12 object-contain rounded bg-[#0f172a]" />
+                            {t.clubId && (
+                              <span
+                                className={`absolute -top-1 -right-1 text-[8px] px-1 rounded font-semibold ${
+                                  isTitular ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-200'
+                                }`}
+                              >
+                                {isTitular ? '★' : 'H'}
+                              </span>
+                            )}
+                          </div>
                           <span className="text-[11px] font-medium truncate w-full text-slate-800 dark:text-slate-200">
                             {t.displayName}
                           </span>
+                          {t.clubId && (
+                            <span className="text-[9px] text-emerald-700 dark:text-emerald-400 truncate max-w-full tabular-nums">
+                              #{t.clubId}{t.season ? ` · ${t.season}` : ''}
+                            </span>
+                          )}
                         </button>
                       );
                     })}
@@ -1045,35 +1191,124 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
                   </div>
 
                   {snap.templateId && (
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center text-xs pt-1">
-                      <input
-                        aria-label="Nombre de la camiseta activa"
-                        value={tplNameDraft}
-                        onChange={(e) => setTplNameDraft(e.target.value)}
-                        placeholder="Nombre club / plantilla"
-                        className="sm:col-span-5 px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
-                      />
-                      <select
-                        aria-label="Vincular plantilla a club"
-                        value={tplClubDraft}
-                        onChange={(e) => setTplClubDraft(e.target.value)}
-                        className="sm:col-span-4 px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 truncate"
-                      >
-                        <option value="">Sin club fijo</option>
-                        {Object.entries(clubs).map(([cid, info]) => (
-                          <option key={cid} value={cid}>
-                            {info.name} (#{cid})
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void handleSaveTemplateMeta()}
-                        className="sm:col-span-3 px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-medium"
-                      >
-                        Guardar nombre
-                      </button>
+                    <div className="space-y-2 pt-1 text-xs">
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
+                        <input
+                          aria-label="Nombre de la camiseta activa"
+                          value={tplNameDraft}
+                          onChange={(e) => setTplNameDraft(e.target.value)}
+                          placeholder="Nombre plantilla"
+                          className="sm:col-span-4 px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                        />
+                        <select
+                          aria-label="Vincular plantilla a club"
+                          value={tplClubDraft}
+                          onChange={(e) => {
+                            const cid = e.target.value;
+                            setTplClubDraft(cid);
+                            setTplClubNameDraft(cid ? clubs[cid]?.name ?? '' : '');
+                          }}
+                          className="sm:col-span-4 px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 truncate"
+                        >
+                          <option value="">Sin club fijo</option>
+                          {tplClubDraft && !clubs[tplClubDraft] && (
+                            <option value={tplClubDraft}>
+                              {tplClubNameDraft.trim() || `Club #${tplClubDraft}`} (#{tplClubDraft})
+                            </option>
+                          )}
+                          {sortedClubs.map(([cid, info]) => (
+                            <option key={cid} value={cid}>
+                              {info.name} (#{cid})
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          aria-label="ID numérico del club en montaje"
+                          inputMode="numeric"
+                          value={tplClubDraft}
+                          onChange={(e) => {
+                            const cid = e.target.value.replace(/[^0-9]/g, '').slice(0, 12);
+                            setTplClubNameDraft((prevName) =>
+                              resolveNextClubName(tplClubDraft, prevName, cid, clubs, templates),
+                            );
+                            setTplClubDraft(cid);
+                          }}
+                          placeholder="#ID Club"
+                          className="sm:col-span-2 px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 tabular-nums font-mono"
+                        />
+                        <input
+                          aria-label="Temporada de plantilla en montaje"
+                          value={tplSeasonDraft}
+                          onChange={(e) => setTplSeasonDraft(e.target.value)}
+                          placeholder="Temporada"
+                          className="sm:col-span-2 px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 tabular-nums"
+                        />
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {tplClubDraft && (
+                            <input
+                              aria-label="Nombre de club nuevo en montaje"
+                              value={tplClubNameDraft}
+                              onChange={(e) => setTplClubNameDraft(e.target.value)}
+                              placeholder="Nombre del club"
+                              className="w-44 px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                            />
+                          )}
+                          {tplClubDraft && (
+                            <label className="inline-flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
+                              <input
+                                type="checkbox"
+                                checked={tplActiveDraft}
+                                onChange={(e) => setTplActiveDraft(e.target.checked)}
+                                className="accent-emerald-600"
+                              />
+                              <span>★ Titular activa</span>
+                            </label>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void handleSaveTemplateMeta()}
+                            className="px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-medium"
+                          >
+                            Guardar datos
+                          </button>
+                          {confirmDeleteTpl ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void handleDeleteCurrentTemplate()}
+                                className="px-2 py-1 rounded-md bg-rose-600 hover:bg-rose-500 text-white font-medium"
+                              >
+                                Confirmar borrado
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteTpl(false)}
+                                className="px-2 py-1 rounded-md bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+                              >
+                                Cancelar
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              aria-label="Eliminar plantilla seleccionada"
+                              title="Eliminar esta plantilla de tshirt_templates"
+                              disabled={busy}
+                              onClick={() => setConfirmDeleteTpl(true)}
+                              className="p-1.5 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-rose-100 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1096,14 +1331,37 @@ export default function StudioView({ clubs, exportDir, onExportDirChange, initia
                         customPattern: c?.pattern ?? 'solid',
                       }));
                     }}
-                    className="sm:col-span-6 px-2.5 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 truncate"
+                    className="sm:col-span-4 px-2.5 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 truncate"
                   >
-                    {Object.entries(clubs).map(([cid, info]) => (
+                    {!snap.clubId && <option value="">Indica #ID de club…</option>}
+                    {snap.clubId && !clubs[snap.clubId] && (
+                      <option value={snap.clubId}>Club #{snap.clubId} (#{snap.clubId})</option>
+                    )}
+                    {sortedClubs.map(([cid, info]) => (
                       <option key={cid} value={cid}>
                         {info.name} (#{cid})
                       </option>
                     ))}
                   </select>
+                  <input
+                    aria-label="ID numérico de club generativo"
+                    inputMode="numeric"
+                    value={snap.clubId}
+                    onChange={(e) => {
+                      const cid = e.target.value.replace(/[^0-9]/g, '').slice(0, 12);
+                      const c = cid ? clubs[cid] : undefined;
+                      commitSnap((s) => ({
+                        ...s,
+                        clubId: cid,
+                        customKitDirty: false,
+                        customPrimary: c?.primary ?? '#F7F8FA',
+                        customSecondary: c?.secondary ?? '#F8FAFC',
+                        customPattern: c?.pattern ?? 'solid',
+                      }));
+                    }}
+                    placeholder="#ID Club"
+                    className="sm:col-span-2 px-2 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 tabular-nums font-mono"
+                  />
                   <select
                     aria-label="Patrón textil"
                     value={snap.customPattern}

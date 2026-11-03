@@ -202,8 +202,17 @@ export default function RegensSyncView({
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium text-slate-800 dark:text-slate-200 inline-flex items-center gap-1"><Tag className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Etiquetar Mi Club:</span>
               <select aria-label="Club para etiquetado masivo" value={myClubId} onChange={(e) => setMyClubId(e.target.value)} className="px-2.5 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100">
-                {Object.entries(clubs).map(([cid, info]) => <option key={cid} value={cid}>{info.name} (#{cid})</option>)}
+                {myClubId && !clubs[myClubId] && <option value={myClubId}>Club #{myClubId}</option>}
+                {Object.entries(clubs).sort((a, b) => a[1].name.localeCompare(b[1].name, 'es')).map(([cid, info]) => <option key={cid} value={cid}>{info.name} (#{cid})</option>)}
               </select>
+              <input
+                aria-label="ID numérico de club para regens"
+                inputMode="numeric"
+                value={myClubId}
+                onChange={(e) => setMyClubId(e.target.value.replace(/[^0-9]/g, '').slice(0, 12))}
+                placeholder="#ID Club"
+                className="w-24 px-2 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 tabular-nums font-mono"
+              />
               <button type="button" onClick={() => void handleTagClub()} className="px-2.5 py-1 rounded-md bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-medium">Aplicar a selección / vista</button>
             </div>
             <button type="button" onClick={() => setShowImporter((s) => !s)} className="px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 inline-flex items-center gap-1"><ClipboardPaste className="w-3.5 h-3.5" /> Importar CSV / HTML (F9)</button>

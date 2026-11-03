@@ -189,23 +189,27 @@ def test_white_on_white_shirt_preserves_full_shoulders_even_when_p_clothes_drops
     def _fake_seg(im: Image.Image) -> np.ndarray:
         arr = np.asarray(im.convert("RGBA"))
         h, w = arr.shape[:2]
+        sx, sy = w / float(DF11_WIDTH), h / float(DF11_HEIGHT)
         probs = np.zeros((h, w, 6), dtype=np.float32)
         is_skin = (arr[:, :, 0] > 205) & (arr[:, :, 1] < 190)
         probs[:, :, 2] = np.where(is_skin, 0.94, 0.01)
-        # Simulate MediaPipe 256x256 confusing white sleeves (|x-130|>45) with white background (p_clothes=0.03)!
+        # Simulate MediaPipe 256x256 confusing white sleeves (|x-130|>45 in 1x) with white background (p_clothes=0.03)!
         yy, xx = np.mgrid[0:h, 0:w]
-        center_cloth = (yy >= 181) & (np.abs(xx - 130) <= 45) & ~is_skin
+        center_cloth = (yy >= 181.0 * sy) & (np.abs(xx - 130.0 * sx) <= 45.0 * sx) & ~is_skin
         probs[:, :, 4] = np.where(center_cloth, 0.90, 0.03)
         probs[:, :, 0] = np.clip(1.0 - probs[:, :, 2] - probs[:, :, 4], 0.0, 1.0)
         return probs
 
     def _fake_biref(im: Image.Image) -> Image.Image:
-        # Simulate ItalMed9 asymmetry: BiRefNet finds right white shoulder (x>=130) at 255, misses left outer tip
+        # Simulate ItalMed9 asymmetry: BiRefNet finds right white shoulder (x>=130 in 1x) at 255, misses left outer tip
+        w, h = im.size
+        sx, sy = w / float(DF11_WIDTH), h / float(DF11_HEIGHT)
         out = Image.new("RGBA", im.size, (0, 0, 0, 0))
         mask = Image.new("L", im.size, 0)
         mdraw = ImageDraw.Draw(mask)
-        mdraw.ellipse([82, 42, 178, 178], fill=255)
-        mdraw.polygon([(60, 214), (86, 181), (174, 181), (241, 214), (241, 292), (60, 292)], fill=255)
+        mdraw.ellipse([82 * sx, 42 * sy, 178 * sx, 178 * sy], fill=255)
+        pts = [(x * sx, y * sy) for x, y in [(60, 214), (86, 181), (174, 181), (241, 214), (241, 292), (60, 292)]]
+        mdraw.polygon(pts, fill=255)
         out.putalpha(mask)
         return out
 
@@ -218,3 +222,91 @@ def test_white_on_white_shirt_preserves_full_shoulders_even_when_p_clothes_drops
     assert int(cleaned[220:280, 239, 3].min()) >= 250
     # Head and neck stay completely stripped
     assert int(cleaned[:160, :, 3].max()) == 0
+
+
+def test_asymmetric_dark_shoulder_over_white_wall_never_mirrors_white_halo(monkeypatch) -> None:
+    import backend.services.vision as vision_mod
+    from backend.services.templates import sanitize_shirt_template_rgba
+
+    # Simulate a dark-shouldered shirt (like Rayo away/third or asymmetric pose) over a bright white studio wall:
+    # Left shoulder sits higher (y=198), right shoulder sits lower (y=210), so y=200..208 on the right is white wall!
+    card = Image.new("RGBA", (DF11_WIDTH, DF11_HEIGHT), (253, 253, 251, 255))
+    draw = ImageDraw.Draw(card)
+    draw.ellipse([82, 42, 178, 178], fill=(220, 175, 152, 255))
+    draw.rectangle([96, 166, 164, 224], fill=(214, 168, 146, 255))
+    draw.polygon(
+        [(19, 198), (92, 184), (130, 224), (168, 188), (241, 210), (241, 292), (19, 292)],
+        fill=(24, 26, 30, 255),
+    )
+
+    def _fake_seg(im: Image.Image) -> np.ndarray:
+        arr = np.asarray(im.convert("RGBA"))
+        h, w = arr.shape[:2]
+        probs = np.zeros((h, w, 6), dtype=np.float32)
+        is_dark_cloth = arr[:, :, 0] < 60
+        is_skin = (arr[:, :, 0] > 195) & (arr[:, :, 1] < 190)
+        probs[:, :, 4] = np.where(is_dark_cloth, 0.95, 0.02)
+        probs[:, :, 2] = np.where(is_skin, 0.93, 0.01)
+        probs[:, :, 0] = np.clip(1.0 - probs[:, :, 4] - probs[:, :, 2], 0.0, 1.0)
+        return probs
+
+    def _fake_biref(im: Image.Image) -> Image.Image:
+        arr = np.asarray(im.convert("RGBA")).copy()
+        is_wall = (arr[:, :, 0] > 245) & (arr[:, :, 1] > 245) & (arr[:, :, 2] > 245)
+        arr[:, :, 3] = np.where(is_wall, 0, 255)
+        return Image.fromarray(arr, mode="RGBA")
+
+    monkeypatch.setattr(vision_mod, "segment_portrait_classes", _fake_seg)
+    monkeypatch.setattr(vision_mod, "remove_background_birefnet", _fake_biref)
+
+    cleaned = np.asarray(sanitize_shirt_template_rgba(card, symmetrize_shoulders=True, detail_crispness=0.45))
+    # Right shoulder white background band (y=201..206, x=228) must NOT be turned opaque white by mirror symmetrization
+    assert int(cleaned[202, 228, 3]) < 20
+    # Dark fabric below (y=220..280, x=228) stays completely solid and dark
+    assert int(cleaned[220:280, 228, 3].min()) >= 250
+    assert int(cleaned[240, 228, 0]) < 45
+
+
+def test_transparent_or_panned_dark_and_vertical_shirts_never_synthesize_black_blocks(monkeypatch) -> None:
+    import backend.services.vision as vision_mod
+    from backend.services.templates import sanitize_shirt_template_rgba
+
+    def _fake_seg(im: Image.Image) -> np.ndarray:
+        arr = np.asarray(im.convert("RGBA"))
+        h, w = arr.shape[:2]
+        probs = np.zeros((h, w, 6), dtype=np.float32)
+        is_cloth = ((arr[:, :, 0] < 60) & (arr[:, :, 1] < 60)) | ((arr[:, :, 0] > 170) & (arr[:, :, 1] < 60))
+        probs[:, :, 4] = np.where(is_cloth, 0.94, 0.02)
+        probs[:, :, 0] = np.clip(1.0 - probs[:, :, 4], 0.0, 1.0)
+        return probs
+
+    def _fake_biref(im: Image.Image) -> Image.Image:
+        arr = np.asarray(im.convert("RGBA")).copy()
+        is_cloth = ((arr[:, :, 0] < 60) & (arr[:, :, 1] < 60)) | ((arr[:, :, 0] > 170) & (arr[:, :, 1] < 60))
+        arr[:, :, 3] = np.where(is_cloth, 255, 0)
+        return Image.fromarray(arr, mode="RGBA")
+
+    monkeypatch.setattr(vision_mod, "segment_portrait_classes", _fake_seg)
+    monkeypatch.setattr(vision_mod, "remove_background_birefnet", _fake_biref)
+
+    # 1) Transparent 260x310 PNG with dark sleeve only on left side (raw_a == 0 on right)
+    asym_cutout = Image.new("RGBA", (DF11_WIDTH, DF11_HEIGHT), (0, 0, 0, 0))
+    d1 = ImageDraw.Draw(asym_cutout)
+    d1.polygon([(20, 200), (92, 186), (130, 226), (168, 188), (185, 220), (185, 292), (20, 292)], fill=(22, 24, 28, 255))
+    out1 = np.asarray(sanitize_shirt_template_rgba(asym_cutout, symmetrize_shoulders=True))
+    assert int(out1[220, 220, 3]) == 0
+
+    # 2) Opaque 260x310 dark shirt panned right (pan_x=35 -> left margin x=20..30 has raw_a == 0)
+    dark_card = Image.new("RGBA", (DF11_WIDTH, DF11_HEIGHT), (245, 245, 248, 255))
+    d2 = ImageDraw.Draw(dark_card)
+    d2.polygon([(19, 204), (90, 186), (130, 224), (170, 186), (241, 204), (241, 292), (19, 292)], fill=(22, 24, 28, 255))
+    out2 = np.asarray(sanitize_shirt_template_rgba(dark_card, symmetrize_shoulders=True, pan_x=35.0))
+    assert int(out2[250, 25, 3]) == 0
+
+    # 3) Vertical 600x900 red shirt at zoom=1.0 with shoulder_boost=0.4 -> outer raw_a==0 margins stay alpha==0
+    vert_red = Image.new("RGBA", (600, 900), (245, 246, 248, 255))
+    d3 = ImageDraw.Draw(vert_red)
+    d3.polygon([(10, 590), (210, 535), (300, 650), (390, 535), (590, 590), (590, 885), (10, 885)], fill=(200, 20, 30, 255))
+    out3 = np.asarray(sanitize_shirt_template_rgba(vert_red, symmetrize_shoulders=True, shoulder_boost=0.4))
+    assert int(out3[260, 22, 3]) == 0
+    assert int(out3[260, 48, 3]) >= 250 and int(out3[260, 48, 0]) > 150

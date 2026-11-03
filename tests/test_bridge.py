@@ -21,7 +21,7 @@ def _sample_png_data_url() -> str:
 def test_bridge_bootstrap_and_capability_guard_blocks_unapproved_paths(tmp_path: Path) -> None:
     bridge = StudioBridge(vault_dir=tmp_path / "vault", export_dir=tmp_path / "approved_out", db_path=tmp_path / "state.sqlite3")
     boot = bridge.get_bootstrap_state()
-    assert boot["version"] == "1.1.0" and "1736" in boot["clubs"]
+    assert boot["version"] == "1.2.0" and "1736" in boot["clubs"] and "1744" in boot["clubs"]
     bridge.upload_studio_image(_sample_png_data_url(), remove_bg=False, harmonize=True, extract_bg=False)
     with pytest.raises(CapabilityError):
         bridge.export_studio_card({"uid": "29184012", "fmt": "png", "outDir": str(tmp_path / "unapproved_evil")})
@@ -216,12 +216,28 @@ def test_bridge_modular_face_extractor_shirt_extractor_and_step_composer(tmp_pat
         sample_faces_dir=tmp_path / "caras_prueba",
     )
 
-    # 1. Shirt Extractor Tool: load -> preview with shoulderBoost -> save to tshirt_templates -> rename & bind club
+    # 1. Shirt Extractor Tool: stage raw on canvas -> frame (zoom/pan) -> extract on click -> save -> rename & bind club
     shirt_stage = bridge.load_raw_shirt_source(_sample_png_data_url(), file_name="BlancaClub.png")
-    assert shirt_stage["cleanShirtDataUrl"].startswith("data:image/png;base64,")
-    shirt_prev = bridge.preview_shirt_extraction({"symmetrizeShoulders": True, "shoulderBoost": 0.25})
+    assert shirt_stage["rawDataUrl"].startswith("data:image/png;base64,")
+    assert "cleanShirtDataUrl" not in shirt_stage
+    assert shirt_stage["width"] == 220 and shirt_stage["height"] == 220
+    assert shirt_stage["suggestedViewport"] == {"zoom": 1.0, "panX": 0.0, "panY": 0.0}
+    shirt_prev = bridge.preview_shirt_extraction(
+        {"zoom": 0.92, "panX": 4.0, "panY": 6.0, "symmetrizeShoulders": True, "shoulderBoost": 0.25}
+    )
     assert shirt_prev["cleanShirtDataUrl"].startswith("data:image/png;base64,")
-    saved_tpl = bridge.save_shirt_template({"displayName": "Real Madrid Blanca", "clubId": "1736", "templateId": "RM_Blanca"})
+    saved_tpl = bridge.save_shirt_template(
+        {
+            "displayName": "Real Madrid Blanca",
+            "clubId": "1736",
+            "templateId": "RM_Blanca",
+            "zoom": 0.92,
+            "panX": 4.0,
+            "panY": 6.0,
+            "symmetrizeShoulders": True,
+            "shoulderBoost": 0.25,
+        }
+    )
     assert saved_tpl["savedTemplateId"] == "RM_Blanca" and len(saved_tpl["templates"]) == 1
     meta = bridge.update_shirt_template_meta("RM_Blanca", "Real Madrid Local", "1736")
     assert meta["templates"][0]["displayName"] == "Real Madrid Local"
@@ -370,5 +386,284 @@ def test_bridge_judgment_day_regressions_highres_modes_corrupt_files_and_caps(
     bridge._attach_window(_SameDirWin())
     with pytest.raises(CapabilityError):
         bridge.choose_directory("vault")
+
+
+def test_shirt_extractor_opaque_pan_eviction_and_df11_bevel_signature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import numpy as np
+    import backend.services.vision as vision_mod
+    from backend.core.compositor import render_df11_card
+    from backend.services.templates import _frame_to_df11_stage, _has_df11_outer_ring
+
+    # 1. DF11 outer-ring signature: True on genuine DF11 cards, False on opaque photos & clean cutouts
+    df11_card = render_df11_card(None, bg_mode="white_df11")
+    assert _has_df11_outer_ring(df11_card) is True
+    assert _has_df11_outer_ring(Image.new("RGBA", (260, 310), (245, 245, 245, 255))) is False
+    assert _has_df11_outer_ring(Image.new("RGBA", (260, 310), (0, 0, 0, 0))) is False
+
+    # 2. 1:1 scale parity on 1536x1536 image at zoom=0.20 (52px wide, not clamped to 77px)
+    big_stage = _frame_to_df11_stage(Image.new("RGBA", (1536, 1536), (30, 90, 200, 255)), zoom=0.20)
+    big_a = np.asarray(big_stage)[:, :, 3]
+    xs_nonzero = np.where(big_a.max(axis=0) > 0)[0]
+    assert 50 <= int(xs_nonzero[-1] - xs_nonzero[0] + 1) <= 54
+
+    # 3. Opaque RGB jersey photo panned downward (y0 >= 140) MUST invoke BiRefNet and strip solid gray wall
+    biref_calls = {"n": 0}
+
+    def _biref_strip_gray(im: Image.Image) -> Image.Image:
+        biref_calls["n"] += 1
+        arr = np.asarray(im.convert("RGBA")).copy()
+        is_blue_jersey = (arr[:, :, 2] > 170) & (arr[:, :, 0] < 80)
+        arr[:, :, 3] = np.where(is_blue_jersey, 255, 0)
+        return Image.fromarray(arr, mode="RGBA")
+
+    def _seg_jersey(im: Image.Image) -> np.ndarray:
+        arr = np.asarray(im.convert("RGBA"))
+        probs = np.zeros((arr.shape[0], arr.shape[1], 6), dtype=np.float32)
+        is_blue_jersey = (arr[:, :, 2] > 170) & (arr[:, :, 0] < 80)
+        probs[:, :, 4] = np.where(is_blue_jersey, 0.94, 0.02)
+        probs[:, :, 0] = np.where(~is_blue_jersey, 0.94, 0.02)
+        return probs
+
+    monkeypatch.setattr(vision_mod, "remove_background_birefnet", _biref_strip_gray)
+    monkeypatch.setattr(vision_mod, "segment_portrait_classes", _seg_jersey)
+
+    opaque_src = Image.new("RGB", (500, 400), (200, 200, 200))
+    opaque_src.paste((25, 95, 220), (120, 90, 380, 390))
+    buf = io.BytesIO()
+    opaque_src.save(buf, format="JPEG", quality=95)
+    jpg_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+    bridge = StudioBridge(
+        vault_dir=tmp_path / "vault",
+        export_dir=tmp_path / "export",
+        db_path=tmp_path / "state.sqlite3",
+        templates_dir=tmp_path / "tshirt_templates",
+        raw_archive_dir=tmp_path / "raw_archive",
+        extracted_faces_dir=tmp_path / "caras_extraidas",
+        sample_faces_dir=tmp_path / "caras_prueba",
+    )
+
+    staged = bridge.load_raw_shirt_source(jpg_url, file_name="CamisetaAzul.jpg")
+    assert biref_calls["n"] == 0
+    prev = bridge.preview_shirt_extraction(
+        {"shirtSourceId": staged["shirtSourceId"], "zoom": 1.0, "panX": 0.0, "panY": 95.0}
+    )
+    assert biref_calls["n"] == 1
+    clean_im = Image.open(io.BytesIO(base64.b64decode(prev["cleanShirtDataUrl"].split(",", 1)[1]))).convert("RGBA")
+    clean_arr = np.asarray(clean_im)
+    # Gray wall outside blue shirt at (25, 220) must be transparent; center shirt at (130, 240) must be opaque
+    assert int(clean_arr[220, 25, 3]) == 0
+    assert int(clean_arr[240, 130, 3]) > 240
+
+    saved = bridge.save_shirt_template(
+        {
+            "shirtSourceId": staged["shirtSourceId"],
+            "displayName": "Azul_Local",
+            "templateId": "Azul_Local",
+            "zoom": 1.0,
+            "panX": 0.0,
+            "panY": 95.0,
+        }
+    )
+    assert saved["savedTemplateId"] == "Azul_Local"
+    # Raw JPEG archive preserves .jpg suffix instead of hardcoding .png
+    assert any(p.suffix == ".jpg" for p in (tmp_path / "raw_archive").iterdir())
+
+    # 4. Evicted/unknown shirtSourceId must raise ValueError instead of substituting another shirt
+    with pytest.raises(ValueError, match="memoria"):
+        bridge.save_shirt_template({"shirtSourceId": "shirt-src-99999", "displayName": "Wrong"})
+
+    # 5. Off-canvas empty shirt extraction must raise ValueError instead of saving a blank PNG
+    with pytest.raises(ValueError, match="camiseta"):
+        bridge.preview_shirt_extraction(
+            {"shirtSourceId": staged["shirtSourceId"], "zoom": 0.5, "panX": 0.0, "panY": -220.0}
+        )
+
+
+def test_v120_custom_clubs_multi_season_templates_deletion_and_legacy_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+    import numpy as np
+    import backend.services.vision as vision_mod
+    from backend.services.templates import CollarProfile, get_club_shirt_template, sanitize_shirt_template_rgba
+
+    def _fast_seg(im: Image.Image) -> np.ndarray:
+        arr = np.asarray(im.convert("RGBA"))
+        probs = np.zeros((arr.shape[0], arr.shape[1], 6), dtype=np.float32)
+        fg = (arr[:, :, 3] > 20) & ~((arr[:, :, 0] > 245) & (arr[:, :, 1] > 245) & (arr[:, :, 2] > 245))
+        probs[:, :, 4] = np.where(fg, 0.94, 0.02)
+        probs[:, :, 0] = np.where(~fg, 0.94, 0.02)
+        return probs
+
+    def _fast_biref(im: Image.Image) -> Image.Image:
+        arr = np.asarray(im.convert("RGBA")).copy()
+        is_bg = (arr[:, :, 0] > 245) & (arr[:, :, 1] > 245) & (arr[:, :, 2] > 245)
+        arr[:, :, 3] = np.where(is_bg, 0, arr[:, :, 3])
+        return Image.fromarray(arr, mode="RGBA")
+
+    monkeypatch.setattr(vision_mod, "segment_portrait_classes", _fast_seg)
+    monkeypatch.setattr(vision_mod, "remove_background_birefnet", _fast_biref)
+
+    # 1. Shoulder color-coherence: dark asymmetric sleeves on white wall must NOT mirror white wall above lower sleeve
+    asym = Image.new("RGBA", (260, 310), (252, 252, 250, 255))
+    asym.paste((22, 24, 28, 255), (20, 215, 130, 292))   # Left dark shoulder high (y=215)
+    asym.paste((22, 24, 28, 255), (130, 236, 240, 292))  # Right dark shoulder lower (y=236)
+    clean_asym = sanitize_shirt_template_rgba(asym, symmetrize_shoulders=True, detail_crispness=0.5)
+    asym_arr = np.asarray(clean_asym)
+    assert int(asym_arr[224, 225, 3]) == 0, "White background above lower dark right sleeve must stay transparent"
+    assert int(asym_arr[250, 225, 3]) > 240
+
+    # 2. Legacy 8-column v1.1.0 SQLite migration + single-active-per-club invariant
+    db = tmp_path / "legacy_state.sqlite3"
+    tpl_dir = tmp_path / "tshirt_templates"
+    tpl_dir.mkdir(parents=True)
+    for tid_legacy in ("Barca_Old1", "Barca_Old2"):
+        im_leg = Image.new("RGBA", (260, 310), (0, 0, 0, 0))
+        im_leg.paste((0, 77, 152, 255), (25, 205, 235, 290))
+        im_leg.save(tpl_dir / f"{tid_legacy}.png", format="PNG")
+    dummy_collar = CollarProfile((90, 198), (170, 198), (130, 222), 80, tuple([198] * 260)).to_json()
+    raw_conn = sqlite3.connect(str(db))
+    raw_conn.execute(
+        "CREATE TABLE shirt_templates (template_id TEXT PRIMARY KEY, filename TEXT NOT NULL, display_name TEXT NOT NULL, "
+        "club_id TEXT NOT NULL DEFAULT '', sha256 TEXT NOT NULL, mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL, collar_json TEXT NOT NULL)"
+    )
+    for idx_l, tid_legacy in enumerate(("Barca_Old1", "Barca_Old2")):
+        st_l = (tpl_dir / f"{tid_legacy}.png").stat()
+        raw_conn.execute(
+            "INSERT INTO shirt_templates VALUES (?, ?, ?, '1708', 'abc', ?, ?, ?)",
+            (tid_legacy, f"{tid_legacy}.png", tid_legacy, st_l.st_mtime_ns + idx_l, st_l.st_size, dummy_collar),
+        )
+    raw_conn.commit()
+    raw_conn.close()
+
+    bridge = StudioBridge(
+        vault_dir=tmp_path / "vault",
+        export_dir=tmp_path / "export",
+        db_path=db,
+        templates_dir=tpl_dir,
+        raw_archive_dir=tmp_path / "raw_archive",
+        extracted_faces_dir=tmp_path / "caras_extraidas",
+        sample_faces_dir=tmp_path / "caras_prueba",
+    )
+    migrated = bridge.list_shirt_templates()
+    barca_active = [t for t in migrated if t["clubId"] == "1708" and t["isActiveForClub"]]
+    assert len(barca_active) == 1
+
+    # 3. Custom #ClubID + FM Graphics config.xml club importer
+    with pytest.raises(ValueError):
+        bridge.upsert_custom_club("invalid-abc", "Club Malo")
+    custom_res = bridge.upsert_custom_club("#2000554433", "AD Alcorcón B")
+    assert custom_res["clubs"]["2000554433"]["name"] == "AD Alcorcón B"
+    assert bridge.get_bootstrap_state()["clubs"]["2000554433"]["name"] == "AD Alcorcón B"
+
+    gfx_dir = tmp_path / "fm_graphics" / "logos"
+    gfx_dir.mkdir(parents=True)
+    Image.new("RGBA", (32, 32), (200, 10, 20, 255)).save(gfx_dir / "998877.png", format="PNG")
+    (gfx_dir / "config.xml").write_text(
+        '<record><list id="maps"><record from="998877" to="graphics/pictures/club/998877/logo"/></list></record>',
+        encoding="utf-8",
+    )
+
+    class _GfxWin:
+        def create_file_dialog(self, *args: object, **kwargs: object) -> tuple[str, ...]:
+            return (str(gfx_dir.parent),)
+
+    bridge._attach_window(_GfxWin())
+    imp = bridge.import_clubs_from_fm_graphics()
+    assert imp is not None and imp["importedCount"] == 1 and "998877" in imp["clubs"]
+
+    # 4. Multi-season club shirts, switching active titular, auto-promotion on delete, and replacePreviousForClub
+    shirt_buf = io.BytesIO()
+    asym.save(shirt_buf, format="PNG")
+    shirt_url = "data:image/png;base64," + base64.b64encode(shirt_buf.getvalue()).decode("ascii")
+    s1 = bridge.load_raw_shirt_source(shirt_url, file_name="Rayo25.png")
+    bridge.preview_shirt_extraction({"shirtSourceId": s1["shirtSourceId"], "detailCrispness": 0.45})
+    bridge.save_shirt_template(
+        {
+            "shirtSourceId": s1["shirtSourceId"],
+            "displayName": "Rayo Vallecano",
+            "clubId": "1744",
+            "season": "2025/26",
+            "templateId": "Rayo_2526",
+            "isActiveForClub": True,
+            "detailCrispness": 0.45,
+        }
+    )
+    bridge.save_shirt_template(
+        {
+            "shirtSourceId": s1["shirtSourceId"],
+            "displayName": "Rayo Vallecano Nueva",
+            "clubId": "1744",
+            "season": "2026/27",
+            "templateId": "Rayo_2627",
+            "isActiveForClub": True,
+            "detailCrispness": 0.60,
+        }
+    )
+    active_1744 = get_club_shirt_template("1744", tpl_dir=tpl_dir, db_path=db)
+    assert active_1744 is not None and active_1744.template_id == "Rayo_2627"
+
+    # Switch active back to 2025/26 season
+    bridge.set_active_club_shirt_template("Rayo_2526")
+    switched = get_club_shirt_template("1744", tpl_dir=tpl_dir, db_path=db)
+    assert switched is not None and switched.template_id == "Rayo_2526"
+
+    # Delete 2025/26 -> file removed and 2026/27 auto-promoted back to active!
+    with pytest.raises(ValueError):
+        bridge.delete_shirt_template("../evil")
+    del_res = bridge.delete_shirt_template("Rayo_2526")
+    assert del_res["deletedTemplateId"] == "Rayo_2526"
+    assert not (tpl_dir / "Rayo_2526.png").exists()
+    promoted = get_club_shirt_template("1744", tpl_dir=tpl_dir, db_path=db)
+    assert promoted is not None and promoted.template_id == "Rayo_2627" and promoted.is_active_for_club is True
+
+    # Explicit replacePreviousForClub=True removes older templates of #1744
+    bridge.save_shirt_template(
+        {
+            "shirtSourceId": s1["shirtSourceId"],
+            "displayName": "Rayo Definitiva",
+            "clubId": "1744",
+            "season": "2027/28",
+            "templateId": "Rayo_2728",
+            "replacePreviousForClub": True,
+        }
+    )
+    assert not (tpl_dir / "Rayo_2627.png").exists()
+    assert (tpl_dir / "Rayo_2728.png").is_file()
+
+    # Long displayName + distinct seasons must never collide on 48-char slug truncation,
+    # and naming custom club on season 2 synchronizes clubName onto sibling season 1!
+    long_title = "Equipacion Oficial Titular Historica Club Deportivo Soria"
+    r_s1 = bridge.save_shirt_template(
+        {
+            "shirtSourceId": s1["shirtSourceId"],
+            "displayName": long_title,
+            "clubId": "999888",
+            "clubName": "",
+            "season": "2025/26",
+            "templateId": "",
+            "isActiveForClub": True,
+        }
+    )
+    r_s2 = bridge.save_shirt_template(
+        {
+            "shirtSourceId": s1["shirtSourceId"],
+            "displayName": long_title,
+            "clubId": "999888",
+            "clubName": "CD Soria CF",
+            "season": "2026/27",
+            "templateId": "",
+            "isActiveForClub": True,
+        }
+    )
+    assert r_s1["savedTemplateId"] != r_s2["savedTemplateId"]
+    soria_tpls = [t for t in r_s2["templates"] if t["clubId"] == "999888"]
+    assert len(soria_tpls) == 2
+    assert {t["clubName"] for t in soria_tpls} == {"CD Soria CF"}
+
+
 
 

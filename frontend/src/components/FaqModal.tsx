@@ -17,7 +17,7 @@ const SECTIONS: FAQSection[] = [
         tags: ['capas', 'ctrl+z', 'ctrl+y', 'suprimir', 'paso', 'lienzo'],
         bullets: [
           'Clic central con memoria de carpeta: Pulsa en el centro vacío del lienzo 260 × 310 px o en Subir retrato para abrir tu última carpeta usada.',
-          'Orden en 4 pasos: Paso 1 (Cara y Cuello), Paso 2 (Camiseta Plantilla o Club/Staff), Paso 3 (Fondo por defecto Blanco Estudio DF11) y Paso 4 (Exportación).',
+          'Orden en 4 pasos: Paso 1 (Cara y Cuello), Paso 2 (Camiseta Plantilla con buscador o Club/Staff), Paso 3 (Fondo por defecto Blanco Estudio DF11) y Paso 4 (Exportación).',
           'Deshacer, Rehacer y Suprimir: Usa los botones superiores o los atajos Ctrl+Z, Ctrl+Y y Supr para limpiar o recuperar cualquier edición.',
         ],
       },
@@ -52,18 +52,29 @@ const SECTIONS: FAQSection[] = [
   },
   {
     id: 'shirt-extractor',
-    title: 'Extractor de Camisetas y Plantillas',
-    description: 'Creación de tshirt_templates limpias, incluidas equipaciones blancas.',
+    title: 'Extractor de Camisetas, #ID y Temporadas',
+    description: 'Extracción nítida 2× SSAA, buscador, #ID de club FM y temporadas.',
     items: [
       {
         id: 'white-shirts',
-        question: '¿Cómo convierto cualquier imagen (incluidas camisetas blancas) en plantilla limpia?',
-        badge: 'Calidad 10/10',
-        tags: ['camiseta', 'blanca', 'hombros', 'tshirt_templates', 'club', 'plantilla'],
+        question: '¿Cómo convierto cualquier imagen (incluidas camisetas blancas) en plantilla nítida?',
+        badge: 'Calidad 2× SSAA',
+        tags: ['camiseta', 'blanca', 'hombros', 'tshirt_templates', 'nitidez', 'plantilla'],
         bullets: [
-          'Pestaña Extraer Camiseta: Sube una imagen para eliminar cabeza, cuello y fondo dejando únicamente la prenda sobre damero oscuro.',
-          'Hombros blancos completos: Activa Simetrizar hombros y Refuerzo hombro para mantener intactas las mangas blancas sobre fondos claros.',
-          'Vínculo por club: Ponle nombre, asóciala a un club y pulsa Guardar en tshirt_templates para reutilizarla siempre.',
+          'Encuadre previo sobre el lienzo: Al subir una imagen en Extraer Camiseta, ajústala en tamaño (rueda o deslizador Tamaño) y posición con Deshacer y Rehacer (Ctrl+Z / Ctrl+Y).',
+          'Nitidez textil y cuellos limpios: Regula Nitidez textil para realzar escudos, marcas y ribetes de cuello y pulsa «Extraer solo la camiseta».',
+          'Hombros completos sin halos: Simetrizar hombros y Refuerzo hombro reconstruyen camisetas blancas sin contaminar mangas oscuras.',
+        ],
+      },
+      {
+        id: 'club-ids-seasons',
+        question: '¿Cómo conozco el #ID de cada club, busco camisetas o actualizo temporadas?',
+        badge: 'Novedad',
+        tags: ['id', 'club', 'temporada', 'buscar', 'eliminar', 'borrar', 'graphics', 'activa'],
+        bullets: [
+          'Cómo ver el #ID en Football Manager: En Preferencias -> Interfaz activa «Mostrar ID de pantalla en la barra de título», pulsa Importar #IDs FM sobre tu carpeta graphics o escribe cualquier #ID numérico y nombre.',
+          'Historial por temporadas: Añade la temporada (ej. 2026/27) y marca ★ Camiseta Titular Activa para actualizar la equipación del club conservando temporadas previas (o pulsa Activar para alternarlas).',
+          'Buscador y eliminación: Filtra tus plantillas por nombre, club, #ID o temporada y usa los botones de editar o papelera (Borrar) para gestionar tshirt_templates.',
         ],
       },
     ],
@@ -79,7 +90,8 @@ const SECTIONS: FAQSection[] = [
         tags: ['ng_regens', 'live', 'shrink', 'boveda'],
         bullets: [
           'Modo no destructivo: Apunta NG_Regens a D:\\DF11Studio\\NG_Regens_Vault; su config.xml nunca se renombra.',
-          'Actualización en caliente: Activa Live Disk Sync (650ms) para convertir solo los regens nuevos con las plantillas de cada club.',
+          'Actualización en caliente: Activa Live Disk Sync (650ms) para convertir solo los regens nuevos aplicando la camiseta ★ Titular activa de cada #ID de club.',
+          'Protección Shrink Guard: Si tu bóveda pierde más del 50% de caras por error, la sincronización se detiene antes de borrar salidas previas.',
         ],
       },
       {
@@ -138,7 +150,7 @@ export default function FaqModal({ onClose }: { onClose: () => void }) {
           <aside className="md:col-span-4 p-4 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-800 space-y-3 bg-slate-50/70 dark:bg-slate-900/40">
             <div className="relative">
               <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
-              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar dudas, atajos o funciones..." className="w-full pl-8 pr-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" />
+              <input aria-label="Buscar en preguntas frecuentes" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar dudas, atajos o funciones..." className="w-full pl-8 pr-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" />
             </div>
             <div className="flex flex-wrap md:flex-col gap-1.5 text-xs">
               <button type="button" onClick={() => setActiveSec('all')} className={`min-h-[44px] px-3 py-2 rounded-lg text-left font-medium ${activeSec === 'all' ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300'}`}>Todas las secciones ({allItemIds.length})</button>
@@ -164,7 +176,7 @@ export default function FaqModal({ onClose }: { onClose: () => void }) {
                     const isOpen = Boolean(qNorm) || Boolean(openIds[it.id]);
                     return (
                       <div key={it.id} className="p-3.5 text-xs">
-                        <button type="button" onClick={() => setOpenIds((p) => ({ ...p, [it.id]: !isOpen }))} className="w-full min-h-[44px] flex items-center justify-between gap-2 text-left font-semibold text-slate-900 dark:text-white">
+                        <button type="button" aria-expanded={isOpen} onClick={() => setOpenIds((p) => ({ ...p, [it.id]: !isOpen }))} className="w-full min-h-[44px] flex items-center justify-between gap-2 text-left font-semibold text-slate-900 dark:text-white">
                           <span>{it.question}</span>
                           <span className="inline-flex items-center gap-1.5 shrink-0">
                             {it.badge && <span className="px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 text-[11px]">{it.badge}</span>}

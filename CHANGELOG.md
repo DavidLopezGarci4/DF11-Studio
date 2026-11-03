@@ -1,5 +1,21 @@
 # Changelog Técnico — DF11 Face Studio
 
+## [1.2.0] - 2026-11-03
+### Added
+- **Motor de extracción textil `2× SSAA` (`520 × 620 -> 260 × 310`) en `backend/services/templates.py`**: super-muestreo `2×` con *Edge-Guided Collar Matting* en espacio perceptual `OKLab`, descontaminación exclusiva de borde (`fg_shirt < 0.93` preservando el 100% del RGB interior de escudos y patrocinadores), micro-contraste regulable en luminancia (`detailCrispness` / `Nitidez textil`), reducción `Lanczos` premultiplicada sin halos oscuros y compresión PNG `optimize=True, compress_level=9` (`~28–45 KB` por plantilla, `0 MB` extra en modelos).
+- **Gestión completa de `#ID` de club, multi-temporada y catálogo en `ShirtExtractorTool.tsx` + `StudioView.tsx` + `kits.py`**:
+  - Tabla SQLite `custom_clubs` y migración automática `PRAGMA user_version = 2` (`club_name`, `season`, `is_active_for_club`) en `shirt_templates`.
+  - Asignación de cualquier `#ID` numérico de Football Manager + nombre de club personalizado, guía desplegable in-app (`Preferencias -> Mostrar ID de pantalla en la barra de título`) e importador nativo de `config.xml` desde carpetas `graphics` (`import_clubs_from_fm_graphics`).
+  - Soporte multi-temporada con conmutación en 1 clic de `★ Camiseta Titular Activa` por `#ID` (`set_active_club_shirt_template`), opción de reemplazo directo (`replacePreviousForClub`) y auto-promoción al borrar.
+  - Buscador instantáneo por nombre, club, `#ID` o temporada, filtros (`Todas`, `★ Activas`, `Histórico`, `Sin club`), edición inline y eliminación segura de plantillas (`delete_shirt_template`).
+- **Catálogo semilla ampliado (`assets/kits/club_kits_seed.json`)**: 54 clubes con cobertura completa de LaLiga, clubes históricos españoles (`#1744` Rayo Vallecano, Celta, Girona, Mallorca, Osasuna, Deportivo, Zaragoza, Sporting, Oviedo, Racing…) y grandes ligas europeas.
+- **Encuadre previo sobre el lienzo e historial `Deshacer / Rehacer` en `Extraer Camiseta`**: ajuste libre de posición y escala (`0.2x..4.0x`) antes de pulsar `Extraer solo la camiseta`, con pila pura de 40 pasos (`Ctrl+Z`, `Ctrl+Y`, `Supr`) y caché LRU `shirtSourceId`.
+
+### Fixed
+- **Condición de carrera `pywebviewready` en arranque en frío (`frontend/src/lib/ipc.ts`, `App.tsx`, `StudioView.tsx`)**: espera reactiva a la inyección de `window.pywebview.api` en WebView2 y recarga automática en el evento `pywebviewready`, evitando caer en `FALLBACK_BOOT` (que mostraba solo 2 clubes).
+- **Coherencia cromática en simetría de hombros (`backend/services/templates.py`)**: la reconstrucción bilateral verifica compatibilidad de color con la manga inferior, impidiendo que fotos asimétricas con hombros oscuros sobre fondo blanco (`rayo.png`) expongan franjas blancas mientras mantiene intactos los hombros blancos (`Caucasian0.png`, `ItalMed9.png`).
+- **Des-biselado condicional en fotos externas**: `_has_df11_outer_ring` limita la compensación del bisel interior a tarjetas `260 × 310` con firma real de marco DF11.
+
 ## [1.1.0] - 2026-11-03
 ### Added
 - **Herramienta Extractor de Caras (`FaceExtractorTool` + `backend/services/head_neck.py`)**: pre-encuadre con rueda de ratón (`CropViewport`), aviso anti-corte de coronilla (`crownSrcY < 19`), extracción limpia de cabeza y cuello (`BiRefNet` + `selfie_multiclass_256x256`), y biblioteca reutilizable en `D:\DF11Studio\caras_extraidas` y `D:\DF11Studio\caras_prueba`.

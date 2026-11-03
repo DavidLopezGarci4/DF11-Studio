@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import gzip
+import json
 import sys
 import time
 from pathlib import Path
 
+from backend import __version__
 from backend.core.paths import WORKSPACE_ROOT
 
 
@@ -16,6 +18,8 @@ def test_native_launcher_exe_and_pe_header() -> None:
     raw = exe.read_bytes()
     assert raw[:2] == b"MZ", "DF11FaceStudio.exe must have a valid Win32 PE MZ header"
     assert 4_096 <= len(raw) <= 262_144, "Launcher binary must remain lightweight (< 256 KB)"
+    utf16_ver = f"{__version__}.0".encode("utf-16-le")
+    assert utf16_ver in raw, f"DF11FaceStudio.exe PE version resource must match {__version__}.0"
 
 
 def test_frontend_dist_and_lazy_graph_gzip_budget() -> None:
@@ -24,6 +28,15 @@ def test_frontend_dist_and_lazy_graph_gzip_budget() -> None:
     assert index_html.is_file(), "Production frontend/dist/index.html must exist"
     text = index_html.read_text(encoding="utf-8")
     assert "./assets/" in text
+
+    changelog_cfg = json.loads(
+        (WORKSPACE_ROOT / "frontend" / "src" / "config" / "changelog.user.json").read_text(encoding="utf-8")
+    )
+    assert changelog_cfg["currentVersion"] == __version__
+
+    js_concat = "\n".join(p.read_text(encoding="utf-8") for p in (dist_dir / "assets").glob("*.js"))
+    assert __version__ in js_concat, f"frontend/dist JS bundle must embed current version {__version__}"
+    assert "shirt-extractor-canvas" in js_concat, "frontend/dist JS bundle must embed ShirtExtractorTool canvas"
 
     graph_chunks = list((dist_dir / "assets").glob("AppArchitectureGraph-*.js"))
     assert len(graph_chunks) == 1, "AppArchitectureGraph must be isolated in its own lazy chunk"

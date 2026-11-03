@@ -1,11 +1,23 @@
 {
-  "currentVersion": "1.1.0",
-  "buildNumber": 10100,
+  "currentVersion": "1.2.0",
+  "buildNumber": 10200,
   "lastUpdated": "2026-11-03",
   "appName": "DF11 Face Studio",
   "appDescription": "Estudio modular por capas con extractores de caras y camisetas y sincronizador DF11 para Football Manager.",
   "privacyPolicy": "Tus fotos y partidas nunca salen de tu PC: procesamiento 100% local, privado y sin suscripciones ni claves API.",
   "versions": [
+    {
+      "version": "1.2.0",
+      "build": 10200,
+      "date": "2026-11-03",
+      "title": "Calidad Textil Superior, Gestión de #ID de Clubes por Temporada y Buscador de Camisetas",
+      "highlights": [
+        "💎 **Camisetas mucho más nítidas en tamaño ligero:** Extrae escudos, logotipos y ribetes de cuello con bordes limpios y regulador de Nitidez textil sin aumentar el peso en disco.",
+        "🎯 **Encuadre previo y Deshacer/Rehacer en camisetas:** Ajusta posición y tamaño con la rueda antes de pulsar «Extraer solo la camiseta» y recupera cualquier paso con Ctrl+Z o Ctrl+Y.",
+        "🏟️ **Cualquier #ID de club y guía integrada:** Consulta cómo ver el #ID en Football Manager, importa todos los #ID desde tu carpeta Graphics o escribe cualquier número y nombre de equipo.",
+        "🔍 **Buscador, historial por temporadas y borrado:** Filtra al instante decenas de camisetas, cambia cuál es la ★ Titular activa en cada temporada o elimina las plantillas que ya no uses."
+      ]
+    },
     {
       "version": "1.1.0",
       "build": 10100,

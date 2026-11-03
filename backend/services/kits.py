@@ -48,15 +48,22 @@ class KitSpec:
     crest_path: str | None = None
 
 
-_INITIALIZED_DBS: set[Path] = set()
+_INITIALIZED_DBS: dict[Path, int] = {}
 _DB_INIT_LOCK = threading.Lock()
+_SCHEMA_VERSION = 2
+_CLUB_ID_RE = re.compile(r"^\d{1,12}$")
 _SCHEMA_SQL = (
     "CREATE TABLE IF NOT EXISTS fm_assets (club_id TEXT, kind TEXT, file_path TEXT, PRIMARY KEY (club_id, kind));"
     "CREATE TABLE IF NOT EXISTS kit_overrides (club_id TEXT PRIMARY KEY, primary_hex TEXT, secondary_hex TEXT, collar_hex TEXT, pattern TEXT);"
+    "CREATE TABLE IF NOT EXISTS custom_clubs (club_id TEXT PRIMARY KEY, club_name TEXT NOT NULL);"
     "CREATE TABLE IF NOT EXISTS squad_map (uid TEXT PRIMARY KEY, club_id TEXT NOT NULL);"
     "CREATE TABLE IF NOT EXISTS regen_manifest (uid TEXT PRIMARY KEY, mtime_ns INTEGER, size INTEGER, sig TEXT);"
     "CREATE TABLE IF NOT EXISTS app_prefs (pref_key TEXT PRIMARY KEY, pref_val TEXT NOT NULL);"
-    "CREATE TABLE IF NOT EXISTS shirt_templates (template_id TEXT PRIMARY KEY, filename TEXT NOT NULL, display_name TEXT NOT NULL, club_id TEXT NOT NULL DEFAULT '', sha256 TEXT NOT NULL, mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL, collar_json TEXT NOT NULL);"
+    "CREATE TABLE IF NOT EXISTS shirt_templates ("
+    "template_id TEXT PRIMARY KEY, filename TEXT NOT NULL, display_name TEXT NOT NULL, "
+    "club_id TEXT NOT NULL DEFAULT '', sha256 TEXT NOT NULL, mtime_ns INTEGER NOT NULL, "
+    "size INTEGER NOT NULL, collar_json TEXT NOT NULL, "
+    "club_name TEXT NOT NULL DEFAULT '', season TEXT NOT NULL DEFAULT '', is_active_for_club INTEGER NOT NULL DEFAULT 1);"
 )
 
 
@@ -64,15 +71,27 @@ _SCHEMA_SQL = (
 def init_state_db(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
     target = (db_path or get_state_db_path()).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
+    cur_ctime = target.stat().st_ctime_ns if target.is_file() else -1
     with _DB_INIT_LOCK:
-        need_ddl = target not in _INITIALIZED_DBS or not target.is_file()
+        need_ddl = _INITIALIZED_DBS.get(target) != cur_ctime or not target.is_file()
         if need_ddl:
             boot_conn = sqlite3.connect(str(target), timeout=10.0)
             try:
                 boot_conn.execute("PRAGMA journal_mode=WAL;")
-                boot_conn.executescript(_SCHEMA_SQL)
+                u_ver = int(boot_conn.execute("PRAGMA user_version").fetchone()[0])
+                if u_ver < _SCHEMA_VERSION:
+                    boot_conn.executescript(_SCHEMA_SQL)
+                    cols = {str(r[1]) for r in boot_conn.execute("PRAGMA table_info(shirt_templates)").fetchall()}
+                    if "club_name" not in cols:
+                        boot_conn.execute("ALTER TABLE shirt_templates ADD COLUMN club_name TEXT NOT NULL DEFAULT ''")
+                    if "season" not in cols:
+                        boot_conn.execute("ALTER TABLE shirt_templates ADD COLUMN season TEXT NOT NULL DEFAULT ''")
+                    if "is_active_for_club" not in cols:
+                        boot_conn.execute("ALTER TABLE shirt_templates ADD COLUMN is_active_for_club INTEGER NOT NULL DEFAULT 1")
+                    boot_conn.execute("UPDATE shirt_templates SET is_active_for_club=0 WHERE club_id=''")
+                    boot_conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION};")
                 boot_conn.commit()
-                _INITIALIZED_DBS.add(target)
+                _INITIALIZED_DBS[target] = target.stat().st_ctime_ns
             finally:
                 boot_conn.close()
     conn = sqlite3.connect(str(target), timeout=10.0)
@@ -89,6 +108,63 @@ def init_state_db(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
 @lru_cache(maxsize=1)
 def load_seed_kits() -> dict[str, dict[str, str]]:
     return json.loads((ASSETS_DIR / "kits" / "club_kits_seed.json").read_text(encoding="utf-8"))
+
+
+def validate_club_id(raw_club_id: str) -> str:
+    cid = str(raw_club_id or "").strip().lstrip("#")
+    if not cid:
+        return ""
+    if not _CLUB_ID_RE.match(cid):
+        raise ValueError("El ID del club debe contener solo dígitos numéricos de Football Manager (ej. 1744).")
+    return cid
+
+
+def load_merged_clubs(db_path: Path | None = None) -> dict[str, dict[str, str]]:
+    """Return seed clubs merged with user-defined custom_clubs and indexed FM graphics club IDs."""
+    merged: dict[str, dict[str, str]] = {cid: dict(spec) for cid, spec in load_seed_kits().items()}
+    target = (db_path or get_state_db_path()).resolve()
+    if not target.is_file():
+        return merged
+    with init_state_db(target) as conn:
+        for cid, cname in conn.execute("SELECT club_id, club_name FROM custom_clubs").fetchall():
+            cid_s = str(cid).strip()
+            cname_s = str(cname).strip()
+            if not cid_s:
+                continue
+            if cid_s in merged:
+                if cname_s:
+                    merged[cid_s] = {**merged[cid_s], "name": cname_s}
+            else:
+                merged[cid_s] = {
+                    "name": cname_s or f"Club #{cid_s}",
+                    "pattern": "solid",
+                    "primary": "#1E293B",
+                    "secondary": "#F8FAFC",
+                    "collar": "#F8FAFC",
+                }
+        for (cid,) in conn.execute("SELECT DISTINCT club_id FROM fm_assets").fetchall():
+            cid_s = str(cid).strip()
+            if cid_s and cid_s not in merged:
+                merged[cid_s] = {
+                    "name": f"Club FM #{cid_s}",
+                    "pattern": "solid",
+                    "primary": "#1E293B",
+                    "secondary": "#F8FAFC",
+                    "collar": "#F8FAFC",
+                }
+    return merged
+
+
+def upsert_custom_club_entry(club_id: str, club_name: str, db_path: Path | None = None) -> dict[str, dict[str, str]]:
+    cid = validate_club_id(club_id)
+    if not cid:
+        raise ValueError("Indica un ID numérico de club válido (ej. 1744).")
+    seed_entry = load_seed_kits().get(cid)
+    clean_name = str(club_name or "").strip()[:80] or (seed_entry["name"] if seed_entry else f"Club #{cid}")
+    with init_state_db(db_path) as conn:
+        conn.execute("INSERT OR REPLACE INTO custom_clubs VALUES (?, ?)", (cid, clean_name))
+        conn.execute("UPDATE shirt_templates SET club_name=? WHERE club_id=?", (clean_name, cid))
+    return load_merged_clubs(db_path)
 
 
 @lru_cache(maxsize=1)
@@ -174,6 +250,9 @@ def resolve_club_kit(club_id: str, db_path: Path | None = None) -> KitSpec:
     seed = load_seed_kits().get(cid)
     club_name = seed["name"] if seed else f"Club {cid}"
     with init_state_db(db_path) as conn:
+        cc = conn.execute("SELECT club_name FROM custom_clubs WHERE club_id=?", (cid,)).fetchone()
+        if cc and str(cc[0]).strip():
+            club_name = str(cc[0]).strip()
         cr = conn.execute("SELECT file_path FROM fm_assets WHERE club_id=? AND kind='club_logo'", (cid,)).fetchone()
         crest_path = cr[0] if cr and Path(cr[0]).is_file() else None
         ov = conn.execute("SELECT primary_hex, secondary_hex, collar_hex, pattern FROM kit_overrides WHERE club_id=?", (cid,)).fetchone()

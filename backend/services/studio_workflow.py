@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from collections import OrderedDict
 import io
+import math
 from pathlib import Path
 import threading
 from typing import Any
@@ -28,17 +29,44 @@ from backend.services.head_neck import (
     suggest_safe_crop_viewport,
     viewport_to_head_fit,
 )
-from backend.services.kits import KitSpec, dress_or_frame_portrait, resolve_club_kit
+from backend.services.kits import KitSpec, dress_or_frame_portrait, load_merged_clubs, resolve_club_kit
 from backend.services.templates import (
+    IMAGE_EXTS,
     ShirtTemplate,
+    delete_shirt_template,
     extract_collar_profile,
     rename_shirt_template,
     sanitize_shirt_template_rgba,
     save_new_shirt_template,
+    set_active_club_shirt_template,
     sync_tshirt_templates_dir,
 )
 
 MAX_CACHED_HEADS = 48
+MAX_CACHED_SHIRTS = 48
+
+
+def _finite_float(val: Any, default: float, lo: float, hi: float) -> float:
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(f):
+        return default
+    return float(np.clip(f, lo, hi))
+
+
+def _infer_raw_ext(raw_bytes: bytes, file_name: str = "") -> str:
+    ext = Path(file_name).suffix.lower() if file_name else ""
+    if ext in IMAGE_EXTS:
+        return ext
+    if raw_bytes.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if raw_bytes[:4] == b"RIFF" and raw_bytes[8:12] == b"WEBP":
+        return ".webp"
+    if len(raw_bytes) >= 12 and raw_bytes[4:12] in (b"ftypavif", b"ftypavis"):
+        return ".avif"
+    return ".png"
 
 
 def _png_data_url(img: Image.Image, compress_level: int = 4) -> str:
@@ -83,11 +111,15 @@ class ModularWorkflowSession:
         self._crop_name: str = ""
         self._crop_suggested_vp: CropViewport = CropViewport()
 
-        # Staged raw shirt for interactive template extraction
+        # Staged raw shirt for interactive template extraction (with LRU for multi-upload Undo/Redo)
+        self._shirt_seq = 0
+        self._shirt_sources: OrderedDict[str, tuple[Image.Image, bytes, str]] = OrderedDict()
+        self._shirt_active_id: str = ""
         self._shirt_raw_img: Image.Image | None = None
         self._shirt_raw_bytes: bytes | None = None
+        self._shirt_raw_ext: str = ".png"
         self._shirt_preview_img: Image.Image | None = None
-        self._shirt_preview_params: tuple[bool, float, float, float, float] | None = None
+        self._shirt_preview_params: tuple[str, bool, float, float, float, float, float] | None = None
 
     def _put_head_asset(self, asset: HeadNeckAsset) -> str:
         with self._lock:
@@ -308,6 +340,9 @@ class ModularWorkflowSession:
                         "filename": t.filename,
                         "displayName": t.display_name,
                         "clubId": t.club_id,
+                        "clubName": t.club_name,
+                        "season": t.season,
+                        "isActiveForClub": t.is_active_for_club,
                         "collarWidth": t.collar.collar_width,
                         "apexY": t.collar.apex[1],
                         "thumbDataUrl": self._cached_thumb(t.file_path),
@@ -329,42 +364,78 @@ class ModularWorkflowSession:
 
     def stage_raw_shirt(self, raw_bytes: bytes, file_name: str = "") -> dict[str, Any]:
         g = load_guarded_image(raw_bytes)
-        clean = sanitize_shirt_template_rgba(g.image, symmetrize_shoulders=True, shoulder_boost=0.0)
+        raw_ext = _infer_raw_ext(raw_bytes, file_name)
         with self._lock:
+            self._shirt_seq += 1
+            sid = f"shirt-src-{self._shirt_seq}"
+            self._shirt_sources[sid] = (g.image, raw_bytes, raw_ext)
+            while len(self._shirt_sources) > MAX_CACHED_SHIRTS:
+                self._shirt_sources.popitem(last=False)
+            self._shirt_active_id = sid
             self._shirt_raw_img = g.image
             self._shirt_raw_bytes = raw_bytes
-            self._shirt_preview_img = clean
-            self._shirt_preview_params = (True, 0.0, 1.0, 0.0, 0.0)
-        collar = extract_collar_profile(clean)
+            self._shirt_raw_ext = raw_ext
+            self._shirt_preview_img = None
+            self._shirt_preview_params = None
+        w, h = g.image.size
         stem = Path(file_name).stem if file_name else "Camiseta_Club"
         return {
+            "shirtSourceId": sid,
             "rawDataUrl": _png_data_url(g.image),
-            "cleanShirtDataUrl": _png_data_url(clean),
-            "collarWidth": collar.collar_width,
-            "apexY": collar.apex[1],
+            "width": w,
+            "height": h,
             "suggestedName": stem,
+            "suggestedViewport": {"zoom": 1.0, "panX": 0.0, "panY": 0.0},
         }
 
-    def preview_shirt(self, opts: dict[str, Any]) -> dict[str, Any]:
+    def _resolve_shirt_source(self, source_id: str) -> tuple[str, Image.Image | None, bytes | None, str]:
         with self._lock:
-            raw_img = self._shirt_raw_img
+            if source_id:
+                if source_id not in self._shirt_sources:
+                    raise ValueError(
+                        "La camiseta original ya no está en memoria; vuelve a subirla antes de extraer o guardar."
+                    )
+                self._shirt_sources.move_to_end(source_id)
+                im, rb, ext = self._shirt_sources[source_id]
+                return source_id, im, rb, ext
+            return self._shirt_active_id, self._shirt_raw_img, self._shirt_raw_bytes, self._shirt_raw_ext
+
+    @staticmethod
+    def _parse_shirt_params(sid: str, opts: dict[str, Any]) -> tuple[str, bool, float, float, float, float, float]:
+        return (
+            sid,
+            bool(opts.get("symmetrizeShoulders", True)),
+            round(_finite_float(opts.get("shoulderBoost", 0.0), 0.0, 0.0, 1.0), 4),
+            round(_finite_float(opts.get("zoom", 1.0), 1.0, 0.20, 4.0), 4),
+            round(_finite_float(opts.get("panX", 0.0), 0.0, -2000.0, 2000.0), 2),
+            round(_finite_float(opts.get("panY", 0.0), 0.0, -2000.0, 2000.0), 2),
+            round(_finite_float(opts.get("detailCrispness", 0.35), 0.35, 0.0, 1.0), 4),
+        )
+
+    @staticmethod
+    def _ensure_nonempty_shirt(clean_rgba: Image.Image) -> None:
+        opaque_px = int((np.asarray(clean_rgba, dtype=np.uint8)[:, :, 3] > 128).sum())
+        if opaque_px < 200:
+            raise ValueError(
+                "No se detectó ninguna camiseta en la zona inferior del lienzo; ajusta la posición hacia la guía verde antes de extraer."
+            )
+
+    def preview_shirt(self, opts: dict[str, Any]) -> dict[str, Any]:
+        req_sid = str(opts.get("shirtSourceId") or "").strip()
+        sid, raw_img, _, _ = self._resolve_shirt_source(req_sid)
         if raw_img is None:
             raise ValueError("Sube primero una imagen con camiseta para extraer la plantilla.")
-        params = (
-            bool(opts.get("symmetrizeShoulders", True)),
-            round(float(opts.get("shoulderBoost", 0.0)), 4),
-            round(float(opts.get("zoom", 1.0)), 4),
-            round(float(opts.get("panX", 0.0)), 2),
-            round(float(opts.get("panY", 0.0)), 2),
-        )
+        params = self._parse_shirt_params(sid, opts)
         clean = sanitize_shirt_template_rgba(
             raw_img,
-            symmetrize_shoulders=params[0],
-            shoulder_boost=params[1],
-            zoom=params[2],
-            pan_x=params[3],
-            pan_y=params[4],
+            symmetrize_shoulders=params[1],
+            shoulder_boost=params[2],
+            zoom=params[3],
+            pan_x=params[4],
+            pan_y=params[5],
+            detail_crispness=params[6],
         )
+        self._ensure_nonempty_shirt(clean)
         with self._lock:
             self._shirt_preview_img = clean
             self._shirt_preview_params = params
@@ -376,34 +447,38 @@ class ModularWorkflowSession:
         }
 
     def save_staged_shirt(self, opts: dict[str, Any]) -> dict[str, Any]:
+        req_sid = str(opts.get("shirtSourceId") or "").strip()
+        sid, raw_img, raw_bytes, raw_ext = self._resolve_shirt_source(req_sid)
         with self._lock:
-            raw_img = self._shirt_raw_img
-            raw_bytes = self._shirt_raw_bytes
             prev_img = self._shirt_preview_img
             prev_params = self._shirt_preview_params
         if prev_img is None and raw_img is None:
             raise ValueError("Extrae primero una camiseta antes de guardarla en tshirt_templates.")
-        if raw_img is not None and any(k in opts for k in ("symmetrizeShoulders", "shoulderBoost", "zoom", "panX", "panY")):
-            req_params = (
-                bool(opts.get("symmetrizeShoulders", True)),
-                round(float(opts.get("shoulderBoost", 0.0)), 4),
-                round(float(opts.get("zoom", 1.0)), 4),
-                round(float(opts.get("panX", 0.0)), 2),
-                round(float(opts.get("panY", 0.0)), 2),
+        if raw_img is not None and (
+            prev_img is None
+            or (prev_params is not None and prev_params[0] != sid)
+            or any(
+                k in opts
+                for k in ("symmetrizeShoulders", "shoulderBoost", "zoom", "panX", "panY", "detailCrispness")
             )
+        ):
+            req_params = self._parse_shirt_params(sid, opts)
             if prev_params != req_params or prev_img is None:
                 prev_img = sanitize_shirt_template_rgba(
                     raw_img,
-                    symmetrize_shoulders=req_params[0],
-                    shoulder_boost=req_params[1],
-                    zoom=req_params[2],
-                    pan_x=req_params[3],
-                    pan_y=req_params[4],
+                    symmetrize_shoulders=req_params[1],
+                    shoulder_boost=req_params[2],
+                    zoom=req_params[3],
+                    pan_x=req_params[4],
+                    pan_y=req_params[5],
+                    detail_crispness=req_params[6],
                 )
+                self._ensure_nonempty_shirt(prev_img)
                 with self._lock:
                     self._shirt_preview_img = prev_img
                     self._shirt_preview_params = req_params
         assert prev_img is not None
+        self._ensure_nonempty_shirt(prev_img)
         tpl = save_new_shirt_template(
             clean_rgba=prev_img,
             raw_bytes=raw_bytes,
@@ -413,18 +488,60 @@ class ModularWorkflowSession:
             tpl_dir=self.templates_dir,
             raw_archive_dir=self.raw_archive_dir,
             db_path=self.db_path,
+            raw_ext=raw_ext,
+            club_name=str(opts.get("clubName", "")),
+            season=str(opts.get("season", "")),
+            is_active_for_club=bool(opts.get("isActiveForClub", True)),
+            replace_previous_for_club=bool(opts.get("replacePreviousForClub", False)),
         )
-        return {"savedTemplateId": tpl.template_id, "templates": self.list_templates()}
+        return {
+            "savedTemplateId": tpl.template_id,
+            "templates": self.list_templates(),
+            "clubs": load_merged_clubs(self.db_path),
+        }
 
-    def update_template_meta(self, template_id: str, display_name: str, club_id: str = "") -> dict[str, Any]:
+    def update_template_meta(
+        self,
+        template_id: str,
+        display_name: str,
+        club_id: str = "",
+        club_name: str = "",
+        season: str = "",
+        is_active_for_club: bool = True,
+    ) -> dict[str, Any]:
         rename_shirt_template(
             template_id=template_id,
             display_name=display_name,
             club_id=club_id,
             tpl_dir=self.templates_dir,
             db_path=self.db_path,
+            club_name=club_name,
+            season=season,
+            is_active_for_club=is_active_for_club,
         )
-        return {"templates": self.list_templates()}
+        return {"templates": self.list_templates(), "clubs": load_merged_clubs(self.db_path)}
+
+    def activate_club_template(self, template_id: str) -> dict[str, Any]:
+        tpl = set_active_club_shirt_template(
+            template_id=template_id,
+            tpl_dir=self.templates_dir,
+            db_path=self.db_path,
+        )
+        return {"activeTemplateId": tpl.template_id, "templates": self.list_templates()}
+
+    def delete_template(self, template_id: str) -> dict[str, Any]:
+        deleted_id = delete_shirt_template(
+            template_id=template_id,
+            tpl_dir=self.templates_dir,
+            db_path=self.db_path,
+        )
+        with self._lock:
+            target_prefix = str((self.templates_dir / f"{deleted_id}.png").resolve()).lower()
+            for cache_dict in (self._shirt_png_cache, self._thumb_cache):
+                stale_keys = [k for k in cache_dict if k[0].lower() == target_prefix]
+                for sk in stale_keys:
+                    cache_dict.pop(sk, None)
+        return {"deletedTemplateId": deleted_id, "templates": self.list_templates()}
 
     # --- Tool 3: Step-by-Step Modular Layer Composer ---
 

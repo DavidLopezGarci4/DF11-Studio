@@ -35,8 +35,40 @@ def _to_data_url(img: Any) -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+_MAX_B64_CHARS = (_MAX_IMAGE_BYTES * 4) // 3 + 4096
+
+
 def _decode_b64(s: str) -> bytes:
-    return base64.b64decode(s.split(",", 1)[1] if "," in s else s)
+    payload = s.split(",", 1)[1] if "," in s else s
+    if len(payload) > _MAX_B64_CHARS:
+        from backend.core.image_guard import ImageGuardError
+
+        raise ImageGuardError("El archivo supera el límite máximo permitido de 20 MB.")
+    raw = base64.b64decode(payload)
+    if len(raw) > _MAX_IMAGE_BYTES:
+        from backend.core.image_guard import ImageGuardError
+
+        raise ImageGuardError("El archivo supera el límite máximo permitido de 20 MB.")
+    return raw
+
+
+def _read_guarded_file(path: Path) -> bytes:
+    if not path.is_file():
+        from backend.core.image_guard import ImageGuardError
+
+        raise ImageGuardError(f"No se encontró el archivo de imagen: {path.name}")
+    if path.stat().st_size > _MAX_IMAGE_BYTES:
+        from backend.core.image_guard import ImageGuardError
+
+        raise ImageGuardError("El archivo supera el límite máximo permitido de 20 MB.")
+    with path.open("rb") as fh:
+        data = fh.read(_MAX_IMAGE_BYTES + 1)
+    if len(data) > _MAX_IMAGE_BYTES:
+        from backend.core.image_guard import ImageGuardError
+
+        raise ImageGuardError("El archivo supera el límite máximo permitido de 20 MB.")
+    return data
 
 
 class StudioBridge:
@@ -130,7 +162,7 @@ class StudioBridge:
         return r
 
     def get_bootstrap_state(self) -> dict[str, Any]:
-        from backend.services.kits import load_seed_kits
+        from backend.services.kits import load_merged_clubs
         from backend.services.sync import check_fm_storage_health
 
         saved_export = self._get_pref("last_export_dir")
@@ -147,7 +179,7 @@ class StudioBridge:
         theme = raw_theme if raw_theme in ("dark", "light") else "dark"
         return {
             "version": __version__,
-            "clubs": load_seed_kits(),
+            "clubs": load_merged_clubs(self._db_path),
             "vaultDir": str(self._vault_dir),
             "exportDir": str(self._export_dir),
             "storageHealth": asdict(check_fm_storage_health(self._export_dir)),
@@ -227,7 +259,7 @@ class StudioBridge:
         chosen = self._pick_image_file("last_image_dir")
         if chosen is None:
             return None
-        b64 = "data:image/png;base64," + base64.b64encode(chosen.read_bytes()).decode("ascii")
+        b64 = "data:image/png;base64," + base64.b64encode(_read_guarded_file(chosen)).decode("ascii")
         out = self.upload_studio_image(b64, remove_bg=remove_bg, harmonize=harmonize, extract_bg=extract_bg, params=params)
         return {**out, "fileName": chosen.name, "directory": str(chosen.parent)}
 
@@ -235,7 +267,7 @@ class StudioBridge:
         chosen = self._pick_image_file("last_bg_dir")
         if chosen is None:
             return None
-        b64 = "data:image/png;base64," + base64.b64encode(chosen.read_bytes()).decode("ascii")
+        b64 = "data:image/png;base64," + base64.b64encode(_read_guarded_file(chosen)).decode("ascii")
         out = self.upload_custom_background(b64, params=params)
         return {**out, "fileName": chosen.name, "directory": str(chosen.parent)}
 
@@ -471,7 +503,7 @@ class StudioBridge:
         matched_tpl = get_club_shirt_template(club_id, tpl_dir=self._templates_dir, db_path=self._db_path) if club_id else None
         tpl_id = matched_tpl.template_id if matched_tpl is not None else ""
 
-        raw_bytes = e[uid].read_bytes()
+        raw_bytes = _read_guarded_file(e[uid])
         b64 = "data:image/png;base64," + base64.b64encode(raw_bytes).decode("ascii")
         staged = self._mod().stage_raw_face(raw_bytes, file_name=f"{uid}.png")
         ext_opts = {
@@ -505,7 +537,7 @@ class StudioBridge:
         chosen = self._pick_image_file("last_image_dir")
         if chosen is None:
             return None
-        out = self._mod().stage_raw_face(chosen.read_bytes(), file_name=chosen.name)
+        out = self._mod().stage_raw_face(_read_guarded_file(chosen), file_name=chosen.name)
         self._sync_legacy_raw(self._mod()._crop_raw_img, self._mod()._crop_is_precut)
         return {**out, "directory": str(chosen.parent)}
 
@@ -540,7 +572,7 @@ class StudioBridge:
         chosen = self._pick_image_file("last_shirt_dir")
         if chosen is None:
             return None
-        out = self._mod().stage_raw_shirt(chosen.read_bytes(), file_name=chosen.name)
+        out = self._mod().stage_raw_shirt(_read_guarded_file(chosen), file_name=chosen.name)
         return {**out, "directory": str(chosen.parent)}
 
     def load_raw_shirt_source(self, data_url: str, file_name: str = "") -> dict[str, Any]:
@@ -552,8 +584,62 @@ class StudioBridge:
     def save_shirt_template(self, opts: dict[str, Any]) -> dict[str, Any]:
         return self._mod().save_staged_shirt(opts)
 
-    def update_shirt_template_meta(self, template_id: str, display_name: str, club_id: str = "") -> dict[str, Any]:
-        return self._mod().update_template_meta(template_id, display_name, club_id)
+    def update_shirt_template_meta(
+        self,
+        template_id: str | dict[str, Any],
+        display_name: str = "",
+        club_id: str = "",
+        club_name: str = "",
+        season: str = "",
+        is_active_for_club: bool = True,
+    ) -> dict[str, Any]:
+        if isinstance(template_id, dict):
+            d = template_id
+            return self._mod().update_template_meta(
+                template_id=str(d.get("templateId", "")),
+                display_name=str(d.get("displayName", "")),
+                club_id=str(d.get("clubId", "")),
+                club_name=str(d.get("clubName", "")),
+                season=str(d.get("season", "")),
+                is_active_for_club=bool(d.get("isActiveForClub", True)),
+            )
+        return self._mod().update_template_meta(
+            template_id=str(template_id),
+            display_name=display_name,
+            club_id=club_id,
+            club_name=club_name,
+            season=season,
+            is_active_for_club=bool(is_active_for_club),
+        )
+
+    def set_active_club_shirt_template(self, template_id: str) -> dict[str, Any]:
+        return self._mod().activate_club_template(str(template_id))
+
+    def delete_shirt_template(self, template_id: str) -> dict[str, Any]:
+        return self._mod().delete_template(str(template_id))
+
+    def upsert_custom_club(self, club_id: str, club_name: str) -> dict[str, Any]:
+        from backend.services.kits import upsert_custom_club_entry
+
+        clubs = upsert_custom_club_entry(club_id, club_name, db_path=self._db_path)
+        return {"clubs": clubs, "templates": self._mod().list_templates()}
+
+    def import_clubs_from_fm_graphics(self) -> dict[str, Any] | None:
+        import webview
+        from backend.services.kits import index_fm_graphics_packs, load_merged_clubs
+
+        if not self._window:
+            return None
+        init_dir = self._resolve_dialog_dir("last_fm_graphics_dir", self._export_dir.parent)
+        res = self._window.create_file_dialog(webview.FOLDER_DIALOG, directory=init_dir)
+        if not res:
+            return None
+        chosen = Path(res[0]).resolve()
+        if not chosen.is_dir():
+            return None
+        self._set_pref("last_fm_graphics_dir", str(chosen))
+        count = index_fm_graphics_packs(chosen, db_path=self._db_path)
+        return {"path": str(chosen), "importedCount": count, "clubs": load_merged_clubs(self._db_path)}
 
     def auto_fit_head_to_template(self, head_asset_id: str, template_id: str) -> dict[str, float]:
         return self._mod().compute_auto_fit(head_asset_id, template_id)

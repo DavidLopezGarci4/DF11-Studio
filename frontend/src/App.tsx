@@ -1,10 +1,10 @@
-import { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { HelpCircle, Info, Moon, Sun } from 'lucide-react';
 import AboutModal from './components/AboutModal';
 import FaqModal from './components/FaqModal';
 import RegensSyncView from './components/RegensSyncView';
 import StudioView, { StudioJumpPayload } from './components/StudioView';
-import { BootstrapState, StorageHealth, callBridge } from './lib/ipc';
+import { BootstrapState, ClubSeed, StorageHealth, callBridge } from './lib/ipc';
 
 const AppArchitectureGraph = lazy(() => import('./components/AppArchitectureGraph'));
 
@@ -14,6 +14,7 @@ export default function App() {
   const [tab, setTab] = useState<'studio' | 'sync'>('studio');
   const [modal, setModal] = useState<'faq' | 'about' | 'graph' | null>(null);
   const [boot, setBoot] = useState<BootstrapState | null>(null);
+  const [clubs, setClubs] = useState<Record<string, ClubSeed>>({});
   const [vaultDir, setVaultDir] = useState('D:\\DF11Studio\\NG_Regens_Vault');
   const [exportDir, setExportDir] = useState('D:\\DF11Studio\\Exports\\000_DF11_Regens_Override');
   const [storageHealth, setStorageHealth] = useState<StorageHealth | null>(null);
@@ -25,18 +26,28 @@ export default function App() {
     localStorage.setItem('df11_theme', dark ? 'dark' : 'light');
   }, [dark]);
 
-  useEffect(() => {
-    callBridge<BootstrapState>('get_bootstrap_state').then((b) => {
-      setBoot(b);
-      if (b?.vaultDir) setVaultDir(b.vaultDir);
-      if (b?.exportDir) setExportDir(b.exportDir);
-      if (b?.storageHealth) setStorageHealth(b.storageHealth);
-      if (typeof b?.liveWatching === 'boolean') setLiveWatching(b.liveWatching);
-      if (!hadStoredTheme.current && (b?.theme === 'light' || b?.theme === 'dark')) {
-        setDark(b.theme === 'dark');
-      }
-    });
+  const loadBootstrap = useCallback(() => {
+    void callBridge<BootstrapState>('get_bootstrap_state')
+      .then((b) => {
+        if (!b) return;
+        setBoot(b);
+        if (b.clubs) setClubs(b.clubs);
+        if (b.vaultDir) setVaultDir(b.vaultDir);
+        if (b.exportDir) setExportDir(b.exportDir);
+        if (b.storageHealth) setStorageHealth(b.storageHealth);
+        if (typeof b.liveWatching === 'boolean') setLiveWatching(b.liveWatching);
+        if (!hadStoredTheme.current && (b.theme === 'light' || b.theme === 'dark')) {
+          setDark(b.theme === 'dark');
+        }
+      })
+      .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    loadBootstrap();
+    window.addEventListener('pywebviewready', loadBootstrap);
+    return () => window.removeEventListener('pywebviewready', loadBootstrap);
+  }, [loadBootstrap]);
 
   const navBtn = (active: boolean) => `px-3 py-1 text-xs font-medium rounded-md transition ${active ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs' : 'text-slate-600 dark:text-slate-400'}`;
 
@@ -46,7 +57,7 @@ export default function App() {
         <div className="flex items-center gap-2.5">
           <img src="./icon-128.png" alt="Logo DF11 Face Studio" className="w-7 h-7 rounded-md" />
           <span className="font-semibold tracking-tight text-sm text-slate-900 dark:text-white">DF11 Face Studio</span>
-          <span className="text-xs px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 tabular-nums">v{boot?.version ?? '1.1.0'}</span>
+          <span className="text-xs px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 tabular-nums">v{boot?.version ?? '1.2.0'}</span>
         </div>
         <nav className="flex items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800">
           <button type="button" onClick={() => setTab('studio')} className={navBtn(tab === 'studio')}>Estudio</button>
@@ -67,7 +78,8 @@ export default function App() {
       <main className="flex-1 p-5 max-w-6xl w-full mx-auto">
         {tab === 'studio' ? (
           <StudioView
-            clubs={boot?.clubs ?? {}}
+            clubs={clubs}
+            onClubsUpdated={setClubs}
             exportDir={exportDir}
             onExportDirChange={(dir, sh) => { setExportDir(dir); if (sh) setStorageHealth(sh); }}
             initialJump={studioJump}
@@ -75,7 +87,7 @@ export default function App() {
           />
         ) : (
           <RegensSyncView
-            clubs={boot?.clubs ?? {}}
+            clubs={clubs}
             vaultDir={vaultDir}
             exportDir={exportDir}
             storageHealth={storageHealth}
