@@ -13,7 +13,16 @@ from pathlib import Path
 from typing import Any
 
 from backend import __version__
-from backend.core.paths import get_default_vault_dir, get_models_dir, get_state_db_path, get_studio_root
+from backend.core.paths import (
+    get_caras_prueba_dir,
+    get_default_vault_dir,
+    get_extracted_faces_dir,
+    get_models_dir,
+    get_raw_tshirt_archive_dir,
+    get_state_db_path,
+    get_studio_root,
+    get_tshirt_templates_dir,
+)
 
 
 class CapabilityError(PermissionError):
@@ -31,12 +40,28 @@ def _decode_b64(s: str) -> bytes:
 
 
 class StudioBridge:
-    def __init__(self, vault_dir: Path | None = None, export_dir: Path | None = None, db_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        vault_dir: Path | None = None,
+        export_dir: Path | None = None,
+        db_path: Path | None = None,
+        templates_dir: Path | None = None,
+        raw_archive_dir: Path | None = None,
+        extracted_faces_dir: Path | None = None,
+        sample_faces_dir: Path | None = None,
+    ) -> None:
         self._db_path = db_path or get_state_db_path()
         self._vault_dir = (vault_dir or get_default_vault_dir()).resolve()
         self._export_dir = (export_dir or (get_studio_root() / "Exports" / "000_DF11_Regens_Override")).resolve()
+        self._templates_dir = (templates_dir or get_tshirt_templates_dir()).resolve()
+        self._raw_archive_dir = (raw_archive_dir or get_raw_tshirt_archive_dir()).resolve()
+        self._extracted_faces_dir = (extracted_faces_dir or get_extracted_faces_dir()).resolve()
+        self._sample_faces_dir = (sample_faces_dir or get_caras_prueba_dir()).resolve()
         self._approved_dirs: set[Path] = {self._export_dir}
         self._window: Any = None
+        self._mod_lock = threading.Lock()
+        self._sync_lock = threading.Lock()
+        self._mod_session: Any = None
         self._raw_img: Any = None
         self._raw_is_precut: bool = False
         self._fg_cut_cache: tuple[int, Any] | None = None
@@ -47,7 +72,53 @@ class StudioBridge:
         self._custom_bg_img: Any = None
         self._cancel_sync = threading.Event()
         self._watcher: Any = None
-        self._live_opts: dict[str, Any] = {"applyClubKits": True, "harmonize": True}
+        self._live_opts: dict[str, Any] = {"applyClubKits": True, "harmonize": True, "bgMode": "white_df11"}
+
+    def _mod(self) -> Any:
+        if self._mod_session is None:
+            with self._mod_lock:
+                if self._mod_session is None:
+                    from backend.services.studio_workflow import ModularWorkflowSession
+
+                    self._mod_session = ModularWorkflowSession(
+                        templates_dir=self._templates_dir,
+                        raw_archive_dir=self._raw_archive_dir,
+                        extracted_faces_dir=self._extracted_faces_dir,
+                        sample_faces_dir=self._sample_faces_dir,
+                        db_path=self._db_path,
+                    )
+        return self._mod_session
+
+    def _get_pref(self, key: str, default: str = "") -> str:
+        from backend.services.kits import init_state_db
+
+        if not self._db_path.is_file():
+            return default
+        with init_state_db(self._db_path) as c:
+            row = c.execute("SELECT pref_val FROM app_prefs WHERE pref_key=?", (key,)).fetchone()
+            return str(row[0]) if row and row[0] else default
+
+    def _set_pref(self, key: str, val: str) -> None:
+        from backend.services.kits import init_state_db
+
+        with init_state_db(self._db_path) as c:
+            c.execute("INSERT OR REPLACE INTO app_prefs VALUES (?, ?)", (key, str(val)))
+
+    def _resolve_dialog_dir(self, pref_key: str, fallback: Path | None = None) -> str:
+        saved = self._get_pref(pref_key)
+        if saved:
+            cand = Path(saved)
+            if cand.is_dir():
+                return str(cand.resolve())
+            if cand.parent.is_dir():
+                return str(cand.parent.resolve())
+        if fallback:
+            if fallback.is_dir():
+                return str(fallback.resolve())
+            if fallback.parent.is_dir():
+                return str(fallback.parent.resolve())
+        pics = Path.home() / "Pictures"
+        return str(pics.resolve()) if pics.is_dir() else str(Path.home().resolve())
 
     def _attach_window(self, window: Any) -> None:
         self._window = window
@@ -59,17 +130,21 @@ class StudioBridge:
         return r
 
     def get_bootstrap_state(self) -> dict[str, Any]:
-        from backend.services.kits import init_state_db, load_seed_kits
+        from backend.services.kits import load_seed_kits
         from backend.services.sync import check_fm_storage_health
+
+        saved_export = self._get_pref("last_export_dir")
+        if saved_export and Path(saved_export).resolve() != self._vault_dir and (Path(saved_export).is_dir() or Path(saved_export).parent.is_dir()):
+            self._export_dir = Path(saved_export).resolve()
+            self._approved_dirs.add(self._export_dir)
+        saved_vault = self._get_pref("last_vault_dir")
+        if saved_vault and Path(saved_vault).is_dir() and Path(saved_vault).resolve() != self._export_dir:
+            self._vault_dir = Path(saved_vault).resolve()
 
         m = get_models_dir()
         ok = all((m / f).is_file() for f in ("face_detection_yunet_2023mar.onnx", "selfie_multiclass_256x256.onnx", "birefnet-general-lite.onnx"))
-        theme = "dark"
-        if self._db_path.is_file():
-            with init_state_db(self._db_path) as c:
-                row = c.execute("SELECT pref_val FROM app_prefs WHERE pref_key='theme'").fetchone()
-                if row and row[0] in ("dark", "light"):
-                    theme = row[0]
+        raw_theme = self._get_pref("theme", "dark")
+        theme = raw_theme if raw_theme in ("dark", "light") else "dark"
         return {
             "version": __version__,
             "clubs": load_seed_kits(),
@@ -82,11 +157,8 @@ class StudioBridge:
         }
 
     def set_ui_theme(self, theme: str) -> dict[str, str]:
-        from backend.services.kits import init_state_db
-
         val = "light" if str(theme).lower() == "light" else "dark"
-        with init_state_db(self._db_path) as c:
-            c.execute("INSERT OR REPLACE INTO app_prefs VALUES ('theme', ?)", (val,))
+        self._set_pref("theme", val)
         return {"theme": val}
 
     def warmup_vision_async(self) -> bool:
@@ -108,18 +180,64 @@ class StudioBridge:
         import webview
         from backend.services.sync import check_fm_storage_health
 
-        res = self._window.create_file_dialog(webview.FOLDER_DIALOG) if self._window else None
+        pref_key = "last_vault_dir" if role == "vault" else "last_export_dir"
+        fallback = self._vault_dir if role == "vault" else self._export_dir
+        init_dir = self._resolve_dialog_dir(pref_key, fallback)
+        res = self._window.create_file_dialog(webview.FOLDER_DIALOG, directory=init_dir) if self._window else None
         if not res:
             return None
         c = Path(res[0]).resolve()
         if role == "vault":
+            if c == self._export_dir:
+                raise CapabilityError("La bóveda NG_Regens de solo lectura no puede coincidir con la carpeta de salida.")
             self._vault_dir = c
         else:
             if c == self._vault_dir:
                 raise CapabilityError("La carpeta de salida no puede coincidir con la bóveda NG_Regens de solo lectura.")
             self._approved_dirs.add(c)
             self._export_dir = c
+        self._set_pref(pref_key, str(c))
         return {"path": str(c), "storageHealth": asdict(check_fm_storage_health(c))}
+
+    def _pick_image_file(self, pref_key: str) -> Path | None:
+        import webview
+
+        if not self._window:
+            return None
+        init_dir = self._resolve_dialog_dir(pref_key, self._vault_dir)
+        res = self._window.create_file_dialog(
+            webview.OPEN_DIALOG,
+            directory=init_dir,
+            allow_multiple=False,
+            file_types=("Imágenes DF11 (*.png;*.jpg;*.jpeg;*.webp;*.avif)",),
+        )
+        if not res:
+            return None
+        chosen = Path(res[0]).resolve()
+        if not chosen.is_file():
+            return None
+        self._set_pref(pref_key, str(chosen.parent))
+        if pref_key != "last_image_dir":
+            self._set_pref("last_image_dir", str(chosen.parent))
+        return chosen
+
+    def pick_and_upload_studio_image(
+        self, remove_bg: bool = True, harmonize: bool = True, extract_bg: bool = False, params: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        chosen = self._pick_image_file("last_image_dir")
+        if chosen is None:
+            return None
+        b64 = "data:image/png;base64," + base64.b64encode(chosen.read_bytes()).decode("ascii")
+        out = self.upload_studio_image(b64, remove_bg=remove_bg, harmonize=harmonize, extract_bg=extract_bg, params=params)
+        return {**out, "fileName": chosen.name, "directory": str(chosen.parent)}
+
+    def pick_and_upload_custom_background(self, params: dict[str, Any] | None = None) -> dict[str, str] | None:
+        chosen = self._pick_image_file("last_bg_dir")
+        if chosen is None:
+            return None
+        b64 = "data:image/png;base64," + base64.b64encode(chosen.read_bytes()).decode("ascii")
+        out = self.upload_custom_background(b64, params=params)
+        return {**out, "fileName": chosen.name, "directory": str(chosen.parent)}
 
     def _get_fg_cutout(self) -> Any:
         from backend.services.vision import remove_background_birefnet
@@ -203,13 +321,31 @@ class StudioBridge:
         return {"isPreCutout": g.is_pre_cutout, "originalSize": list(g.original_size), "previewDataUrl": _to_data_url(self._compose(merged)), "cleanBgDataUrl": bg_url}
 
     def extract_studio_background(self, params: dict[str, Any] | None = None) -> dict[str, str]:
-        from backend.services.vision import extract_clean_background
+        from backend.services.vision import extract_clean_background, remove_background_birefnet
+
+        merged = {**(params or {}), "removeBg": True, "bgMode": "custom"}
+        if merged.get("modular"):
+            head_id = str(merged.get("headAssetId", "")).strip()
+            asset = self._mod().get_head_asset(head_id) if head_id else None
+            if asset is not None:
+                if asset.is_pre_cutout or asset.source_rgba is None:
+                    raise ValueError("Esta imagen ya viene recortada sin fondo; elige un fondo de estudio o sube un fondo propio.")
+                alpha = asset.source_fg_alpha or remove_background_birefnet(asset.source_rgba).getchannel("A")
+                self._custom_bg_img = extract_clean_background(asset.source_rgba, alpha)
+            else:
+                if self._raw_img is None:
+                    raise ValueError("Sube o pega primero un retrato en el Estudio para extraer su fondo.")
+                if self._raw_is_precut:
+                    raise ValueError("Esta imagen ya viene recortada sin fondo; elige un fondo de estudio o sube un fondo propio.")
+                alpha = self._get_fg_cutout().getchannel("A")
+                self._custom_bg_img = extract_clean_background(self._raw_img, alpha)
+            card = self._mod().compose_step_card(merged, custom_bg=self._custom_bg_img)
+            return {"cleanBgDataUrl": _to_data_url(self._custom_bg_img), "previewDataUrl": _to_data_url(card)}
 
         if self._raw_img is None:
             raise ValueError("Sube o pega primero un retrato en el Estudio para extraer su fondo.")
         alpha = self._get_fg_cutout().getchannel("A")
         self._custom_bg_img = extract_clean_background(self._raw_img, alpha)
-        merged = {**(params or {}), "removeBg": True, "bgMode": "custom"}
         return {"cleanBgDataUrl": _to_data_url(self._custom_bg_img), "previewDataUrl": _to_data_url(self._compose(merged))}
 
     def upload_custom_background(self, data_url: str, params: dict[str, Any] | None = None) -> dict[str, str]:
@@ -217,7 +353,8 @@ class StudioBridge:
 
         self._custom_bg_img = load_guarded_image(_decode_b64(data_url)).image
         merged = {**(params or {}), "bgMode": "custom"}
-        return {"bgDataUrl": _to_data_url(self._custom_bg_img), "previewDataUrl": _to_data_url(self._compose(merged))}
+        card = self._mod().compose_step_card(merged, custom_bg=self._custom_bg_img) if merged.get("modular") else self._compose(merged)
+        return {"bgDataUrl": _to_data_url(self._custom_bg_img), "previewDataUrl": _to_data_url(card)}
 
     def render_studio_preview(self, params: dict[str, Any]) -> dict[str, str]:
         return {"previewDataUrl": _to_data_url(self._compose(params))}
@@ -269,19 +406,22 @@ class StudioBridge:
     def start_regens_sync(self, o: dict[str, Any]) -> dict[str, Any]:
         from backend.services.sync import sync_ng_regens_batch
 
+        out_dir = self._require_approved(self._export_dir)
         self._cancel_sync.clear()
-        return asdict(
-            sync_ng_regens_batch(
-                self._vault_dir,
-                self._export_dir,
-                db_path=self._db_path,
-                apply_club_kits=bool(o.get("applyClubKits", True)),
-                harmonize=bool(o.get("harmonize", True)),
-                bg_mode=o.get("bgMode", "white_df11"),
-                allow_shrink=bool(o.get("allowShrink", False)),
-                cancel_event=self._cancel_sync,
+        with self._sync_lock:
+            return asdict(
+                sync_ng_regens_batch(
+                    self._vault_dir,
+                    out_dir,
+                    db_path=self._db_path,
+                    apply_club_kits=bool(o.get("applyClubKits", True)),
+                    harmonize=bool(o.get("harmonize", True)),
+                    bg_mode=o.get("bgMode", "white_df11"),
+                    allow_shrink=bool(o.get("allowShrink", False)),
+                    cancel_event=self._cancel_sync,
+                    templates_dir=self._templates_dir,
+                )
             )
-        )
 
     def cancel_regens_sync(self) -> bool:
         self._cancel_sync.set()
@@ -295,29 +435,166 @@ class StudioBridge:
             self._watcher = None
         if not enabled:
             return {"watching": False}
+        self._require_approved(self._export_dir)
         if opts:
             self._live_opts = dict(opts)
-        self._watcher = QuiescentVaultWatcher(
-            lambda: self._vault_dir,
-            on_quiescent=lambda: sync_ng_regens_batch(
-                self._vault_dir,
-                self._export_dir,
-                db_path=self._db_path,
-                apply_club_kits=bool(self._live_opts.get("applyClubKits", True)),
-                harmonize=bool(self._live_opts.get("harmonize", True)),
-            ),
-        )
+
+        def _run_live() -> None:
+            with self._sync_lock:
+                sync_ng_regens_batch(
+                    self._vault_dir,
+                    self._require_approved(self._export_dir),
+                    db_path=self._db_path,
+                    apply_club_kits=bool(self._live_opts.get("applyClubKits", True)),
+                    harmonize=bool(self._live_opts.get("harmonize", True)),
+                    bg_mode=self._live_opts.get("bgMode", "white_df11"),
+                    templates_dir=self._templates_dir,
+                )
+
+        self._watcher = QuiescentVaultWatcher(lambda: self._vault_dir, on_quiescent=_run_live)
         self._watcher.start()
         return {"watching": True}
 
     def load_regen_into_studio(self, uid: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        from backend.services.kits import init_state_db
         from backend.services.sync import scan_ng_regens_vault
+        from backend.services.templates import get_club_shirt_template
 
         e = scan_ng_regens_vault(self._vault_dir)
         if uid not in e:
             raise ValueError(f"Regen {uid} no encontrado.")
-        b64 = "data:image/png;base64," + base64.b64encode(e[uid].read_bytes()).decode("ascii")
-        return {"uid": uid, **self.upload_studio_image(b64, remove_bg=True, harmonize=True, extract_bg=False, params=params)}
+        club_id = ""
+        if self._db_path.is_file():
+            with init_state_db(self._db_path) as c:
+                row = c.execute("SELECT club_id FROM squad_map WHERE uid=?", (uid,)).fetchone()
+                club_id = str(row[0]) if row and row[0] else ""
+        matched_tpl = get_club_shirt_template(club_id, tpl_dir=self._templates_dir, db_path=self._db_path) if club_id else None
+        tpl_id = matched_tpl.template_id if matched_tpl is not None else ""
+
+        raw_bytes = e[uid].read_bytes()
+        b64 = "data:image/png;base64," + base64.b64encode(raw_bytes).decode("ascii")
+        staged = self._mod().stage_raw_face(raw_bytes, file_name=f"{uid}.png")
+        ext_opts = {
+            **staged["suggestedViewport"],
+            "templateId": tpl_id,
+            "wearMode": "template" if tpl_id else ("club" if club_id else "none"),
+            "clubId": club_id or "1736",
+        }
+        extracted = self._mod().extract_staged_face(ext_opts, custom_bg=self._custom_bg_img)
+        legacy = self.upload_studio_image(b64, remove_bg=True, harmonize=True, extract_bg=False, params=params)
+        return {
+            **legacy,
+            "uid": uid,
+            "clubId": club_id,
+            "matchedTemplateId": tpl_id,
+            "headAssetId": extracted["headAssetId"],
+            "autoFit": extracted["autoFit"],
+            "previewDataUrl": extracted["previewDataUrl"],
+        }
+
+    # --- Modular 3-Tool & Step-by-Step Layer API ---
+
+    def _sync_legacy_raw(self, raw_img: Any, is_precut: bool) -> None:
+        self._raw_img = raw_img
+        self._raw_is_precut = is_precut
+        self._fg_cut_cache = None
+        self._cutout_key = None
+        self._dressed_key = None
+
+    def pick_raw_face_source(self) -> dict[str, Any] | None:
+        chosen = self._pick_image_file("last_image_dir")
+        if chosen is None:
+            return None
+        out = self._mod().stage_raw_face(chosen.read_bytes(), file_name=chosen.name)
+        self._sync_legacy_raw(self._mod()._crop_raw_img, self._mod()._crop_is_precut)
+        return {**out, "directory": str(chosen.parent)}
+
+    def load_raw_face_source(self, data_url: str, file_name: str = "") -> dict[str, Any]:
+        out = self._mod().stage_raw_face(_decode_b64(data_url), file_name=file_name)
+        self._sync_legacy_raw(self._mod()._crop_raw_img, self._mod()._crop_is_precut)
+        return out
+
+    def extract_face_from_crop(self, opts: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._mod().extract_staged_face(opts or {}, custom_bg=self._custom_bg_img)
+
+    def list_saved_faces(self) -> list[dict[str, str]]:
+        return self._mod().list_faces()
+
+    def load_saved_face(self, face_id: str, template_id: str = "", params: dict[str, Any] | None = None) -> dict[str, Any]:
+        from backend.core.image_guard import load_guarded_image
+
+        out = self._mod().load_face_from_library(face_id, template_id=template_id, extra_params=params, custom_bg=self._custom_bg_img)
+        src_path = out.get("sourcePath")
+        if src_path and Path(src_path).is_file():
+            g = load_guarded_image(Path(src_path))
+            self._sync_legacy_raw(g.image, g.is_pre_cutout)
+        return out
+
+    def save_extracted_face(self, head_asset_id: str, name: str) -> dict[str, Any]:
+        return self._mod().save_face_to_library(head_asset_id, name)
+
+    def list_shirt_templates(self) -> list[dict[str, Any]]:
+        return self._mod().list_templates()
+
+    def pick_raw_shirt_source(self) -> dict[str, Any] | None:
+        chosen = self._pick_image_file("last_shirt_dir")
+        if chosen is None:
+            return None
+        out = self._mod().stage_raw_shirt(chosen.read_bytes(), file_name=chosen.name)
+        return {**out, "directory": str(chosen.parent)}
+
+    def load_raw_shirt_source(self, data_url: str, file_name: str = "") -> dict[str, Any]:
+        return self._mod().stage_raw_shirt(_decode_b64(data_url), file_name=file_name)
+
+    def preview_shirt_extraction(self, opts: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._mod().preview_shirt(opts or {})
+
+    def save_shirt_template(self, opts: dict[str, Any]) -> dict[str, Any]:
+        return self._mod().save_staged_shirt(opts)
+
+    def update_shirt_template_meta(self, template_id: str, display_name: str, club_id: str = "") -> dict[str, Any]:
+        return self._mod().update_template_meta(template_id, display_name, club_id)
+
+    def auto_fit_head_to_template(self, head_asset_id: str, template_id: str) -> dict[str, float]:
+        return self._mod().compute_auto_fit(head_asset_id, template_id)
+
+    def render_modular_preview(self, params: dict[str, Any]) -> dict[str, str]:
+        return {"previewDataUrl": _to_data_url(self._mod().compose_step_card(params, custom_bg=self._custom_bg_img))}
+
+    def export_modular_card(self, params: dict[str, Any]) -> dict[str, str]:
+        from backend.core.compositor import export_df11_bytes
+        from backend.core.fm_config import safe_ntfs_replace, upsert_fm_config_xml, validate_fm_uid
+        from backend.services.kits import save_kit_override
+
+        head_id = str(params.get("headAssetId", "")).strip()
+        tpl_id = str(params.get("templateId", "")).strip()
+        wear_mode = str(params.get("wearMode", "template"))
+        if head_id:
+            if self._mod().get_head_asset(head_id) is None:
+                raise ValueError("La cara activa ya no está en memoria; vuelve a cargarla antes de exportar.")
+        else:
+            if wear_mode != "template" or not tpl_id or self._mod()._find_template(tpl_id) is None:
+                raise ValueError("Añade una cara o selecciona una plantilla válida antes de exportar la ficha DF11.")
+        uid = validate_fm_uid(str(params.get("uid", "")))
+        fmt = "jpg" if str(params.get("fmt", "png")).lower() in ("jpg", "jpeg") else "png"
+        tdir = self._require_approved(Path(params["outDir"]) if params.get("outDir") else self._export_dir)
+        if params.get("customKitDirty") and wear_mode in ("club", "staff_polo", "staff_suit"):
+            kit = self._resolve_studio_kit(str(params.get("clubId", "1736")), params)
+            save_kit_override(kit.club_id, kit.primary, kit.secondary, pattern=kit.pattern, db_path=self._db_path)
+
+        card = self._mod().compose_step_card(params, custom_bg=self._custom_bg_img)
+        tdir.mkdir(parents=True, exist_ok=True)
+        fd, tname = tempfile.mkstemp(prefix=f".{uid}_", suffix=".tmp", dir=str(tdir))
+        tp, dst = Path(tname), tdir / f"{uid}.{fmt}"
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(export_df11_bytes(card, fmt=fmt))  # type: ignore[arg-type]
+            safe_ntfs_replace(tp, dst)
+        finally:
+            tp.unlink(missing_ok=True)
+        if params.get("updateConfigXml", True) and fmt == "png":
+            upsert_fm_config_xml(tdir / "config.xml", [uid])
+        return {"savedPath": str(dst)}
 
     def probe_architecture_health(self) -> dict[str, Any]:
         try:

@@ -1,7 +1,7 @@
 {
   "appName": "DF11 Face Studio",
-  "version": "1.0.0",
-  "category": "Estudio Fotográfico Local & Sincronizador DF11 para Football Manager",
+  "version": "1.1.0",
+  "category": "Estudio Fotográfico Modular & Sincronizador DF11 para Football Manager",
   "description": "Arquitectura de escritorio 100% local en proceso único: interfaz React 19 sobre WebView2 conectada sin puertos de red a un motor Python 3.12 con inferencia GPU DirectML y persistencia atómica NTFS/SQLite.",
   "nodes": [
     {
@@ -19,8 +19,8 @@
       "useCases": ["Encuadre interactivo DF11 con guías ópticas conmutables", "Gestión de lotes NG_Regens y resolución guiada frente a OneDrive"]
     },
     {
-      "id": "ipc_bridge", "label": "StudioBridge + Sync Pool", "version": "1.0.0",
-      "role": "Orquestador IPC, Centinela OneDrive y Watcher 650 ms", "category": "server_web_apps", "color": "#8b5cf6", "icon": "Workflow", "healthType": "native_bridge",
+      "id": "ipc_bridge", "label": "StudioBridge + Modular Session", "version": "1.1.0",
+      "role": "Orquestador IPC de Extractores, Capas y Watcher 650 ms", "category": "server_web_apps", "color": "#8b5cf6", "icon": "Workflow", "healthType": "native_bridge",
       "computationalModel": "Fachada síncrona/asíncrona con carga perezosa de librerías pesadas, ThreadPoolExecutor(8) y observador con estabilización de 650 ms.",
       "whyChosen": "Mantiene el arranque en frío instantáneo y procesa miles de regens en paralelo sin bloquear la ventana ni corromper lotes a mitad de escritura.",
       "useCases": ["Escaneo de solo lectura del almacén NG_Regens con freno Shrink Guard del 50%", "Detección de rutas OneDrive en Steam/Epic vs Game Pass"]

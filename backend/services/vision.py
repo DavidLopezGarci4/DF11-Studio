@@ -59,8 +59,10 @@ BIREFNET_SPEC = ModelSpec(
 )
 
 _VERIFIED_FILES: dict[Path, tuple[int, int]] = {}
-_SESSIONS: dict[str, tuple[ort.InferenceSession, threading.Lock]] = {}
+_SESSIONS: dict[str, ort.InferenceSession] = {}
+_SPEC_LOCKS: dict[str, threading.RLock] = {}
 _SESSION_INIT_LOCK = threading.Lock()
+_DML_DISABLED = False
 
 
 def _sha256_file(path: Path) -> str:
@@ -119,38 +121,62 @@ def ensure_model(
 
 
 def _build_session(model_path: Path, force_cpu: bool = False) -> ort.InferenceSession:
+    use_cpu = force_cpu or _DML_DISABLED
     so = ort.SessionOptions()
     so.log_severity_level = 3
-    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
-    so.intra_op_num_threads = 8
+    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL if use_cpu else ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    so.intra_op_num_threads = 2 if use_cpu else 8
     so.inter_op_num_threads = 1
     so.enable_mem_pattern = False
+    if use_cpu:
+        so.enable_cpu_mem_arena = False
     so.add_session_config_entry("session.intra_op.allow_spinning", "0")
     avail = ort.get_available_providers()
-    providers = ["CPUExecutionProvider"] if force_cpu or "DmlExecutionProvider" not in avail else ["DmlExecutionProvider", "CPUExecutionProvider"]
+    providers = ["CPUExecutionProvider"] if use_cpu or "DmlExecutionProvider" not in avail else ["DmlExecutionProvider", "CPUExecutionProvider"]
     return ort.InferenceSession(str(model_path), sess_options=so, providers=providers)
 
 
-def _get_session(spec: ModelSpec) -> tuple[ort.InferenceSession, threading.Lock]:
+def _get_spec_lock(spec: ModelSpec) -> threading.RLock:
     with _SESSION_INIT_LOCK:
-        if spec.filename in _SESSIONS:
-            return _SESSIONS[spec.filename]
-        sess = _build_session(ensure_model(spec), force_cpu=False)
-        pair = (sess, threading.Lock())
-        _SESSIONS[spec.filename] = pair
-        return pair
+        lock = _SPEC_LOCKS.get(spec.filename)
+        if lock is None:
+            lock = threading.RLock()
+            _SPEC_LOCKS[spec.filename] = lock
+        return lock
+
+
+def _get_or_create_session_locked(spec: ModelSpec) -> ort.InferenceSession:
+    with _SESSION_INIT_LOCK:
+        sess = _SESSIONS.get(spec.filename)
+        if sess is not None and not (_DML_DISABLED and "DmlExecutionProvider" in sess.get_providers()):
+            return sess
+        if sess is not None:
+            _SESSIONS.pop(spec.filename, None)
+    new_sess = _build_session(ensure_model(spec), force_cpu=_DML_DISABLED)
+    with _SESSION_INIT_LOCK:
+        _SESSIONS[spec.filename] = new_sess
+    return new_sess
 
 
 def _run_session(spec: ModelSpec, feed: dict[str, np.ndarray]) -> tuple[ort.InferenceSession, list[np.ndarray]]:
-    """Run ONNX inference; on DirectML DXGI_ERROR_DEVICE_RESET / CP1252 error, fall back cleanly to CPU."""
-    sess, lock = _get_session(spec)
+    """Run ONNX inference; on DirectML DXGI_ERROR_DEVICE_RESET / CP1252 error, release ALL D3D12 refs and fall back to CPU."""
+    global _DML_DISABLED
+    import gc
+
+    lock = _get_spec_lock(spec)
     with lock:
+        sess = _get_or_create_session_locked(spec)
         try:
             return sess, list(sess.run(None, feed))
         except Exception:
+            with _SESSION_INIT_LOCK:
+                _DML_DISABLED = True
+                _SESSIONS.clear()
+            del sess
+            gc.collect()
             cpu_sess = _build_session(ensure_model(spec), force_cpu=True)
             with _SESSION_INIT_LOCK:
-                _SESSIONS[spec.filename] = (cpu_sess, lock)
+                _SESSIONS[spec.filename] = cpu_sess
             return cpu_sess, list(cpu_sess.run(None, feed))
 
 
@@ -293,11 +319,20 @@ def harmonize_df11_studio_grade(img_rgba: Image.Image) -> Image.Image:
 
 
 def extract_clean_background(scene_rgba: Image.Image, fg_mask: np.ndarray | Image.Image) -> Image.Image:
-    """5-line Normalized Gaussian Convolution: seamless clean background without foreground ghosts."""
-    rgb = np.asarray(scene_rgba.convert("RGB"), dtype=np.float32)
+    """Normalized Gaussian Convolution: seamless clean background without foreground ghosts or transparent-zero black fill."""
+    rgba = np.asarray(scene_rgba.convert("RGBA"), dtype=np.float32)
+    rgb, scene_a = rgba[:, :, :3], rgba[:, :, 3:4] / 255.0
     mask_img = fg_mask if isinstance(fg_mask, Image.Image) else Image.fromarray(np.asarray(fg_mask, dtype=np.uint8), mode="L")
-    w_bg = 1.0 - np.asarray(mask_img.resize(scene_rgba.size, Image.Resampling.BILINEAR).filter(ImageFilter.MaxFilter(5)), dtype=np.float32)[..., None] / 255.0
+    w_bg = (
+        1.0
+        - np.asarray(mask_img.resize(scene_rgba.size, Image.Resampling.BILINEAR).filter(ImageFilter.MaxFilter(5)), dtype=np.float32)[..., None]
+        / 255.0
+    ) * scene_a
+    if float(w_bg.max()) < 1e-2:
+        return Image.new("RGBA", scene_rgba.size, (244, 245, 247, 255))
     premul = np.concatenate([rgb * w_bg, w_bg * 255.0], axis=-1).round().clip(0, 255).astype(np.uint8)
     blurred = np.asarray(Image.fromarray(premul, mode="RGBA").filter(ImageFilter.GaussianBlur(max(24.0, max(scene_rgba.size) * 0.24))), dtype=np.float32)
-    out_rgb = np.clip(np.round(blurred[:, :, :3] / np.maximum(blurred[:, :, 3:4] / 255.0, 1e-3)), 0, 255).astype(np.uint8)
+    denom = blurred[:, :, 3:4] / 255.0
+    neutral = np.array([244.0, 245.0, 247.0], dtype=np.float32)
+    out_rgb = np.clip(np.round(np.where(denom > 1e-3, blurred[:, :, :3] / np.maximum(denom, 1e-3), neutral)), 0, 255).astype(np.uint8)
     return Image.fromarray(out_rgb, mode="RGB").convert("RGBA")

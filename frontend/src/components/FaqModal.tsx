@@ -7,18 +7,18 @@ export interface FAQSection { id: string; title: string; description: string; it
 const SECTIONS: FAQSection[] = [
   {
     id: 'studio',
-    title: 'Estudio DF11 de 3 Capas',
-    description: 'Creación rápida de futbolistas y staff en 260 × 310 px.',
+    title: 'Montaje Paso a Paso en 4 Capas',
+    description: 'Lienzo DF11 con rueda, Deshacer/Rehacer y tecla Suprimir.',
     items: [
       {
         id: 'layers',
-        question: '¿Cómo funcionan las 3 capas para crear un futbolista o miembro del staff?',
-        badge: 'Esencial',
-        tags: ['capas', 'ctrl+v', 'marco', 'bokeh'],
+        question: '¿Cómo funciona el montaje paso a paso y los atajos del Lienzo Oficial DF11?',
+        badge: 'Novedad',
+        tags: ['capas', 'ctrl+z', 'ctrl+y', 'suprimir', 'paso', 'lienzo'],
         bullets: [
-          'Capa 3 (Marco Maestro DF11): Mantiene fijo el bisel simétrico y el anillo transparente oficial de 260 × 310 px.',
-          'Capa 2 (Persona): Arrastra una foto, pulsa Subir retrato o pega con Ctrl+V para recortar el fondo localmente.',
-          'Capa 1 (Fondo Opcional): Elige transparente, blanco DF11, fondos con bokeh o extrae el fondo limpio de tu foto.',
+          'Clic central con memoria de carpeta: Pulsa en el centro vacío del lienzo 260 × 310 px o en Subir retrato para abrir tu última carpeta usada.',
+          'Orden en 4 pasos: Paso 1 (Cara y Cuello), Paso 2 (Camiseta Plantilla o Club/Staff), Paso 3 (Fondo por defecto Blanco Estudio DF11) y Paso 4 (Exportación).',
+          'Deshacer, Rehacer y Suprimir: Usa los botones superiores o los atajos Ctrl+Z, Ctrl+Y y Supr para limpiar o recuperar cualquier edición.',
         ],
       },
       {
@@ -33,19 +33,37 @@ const SECTIONS: FAQSection[] = [
     ],
   },
   {
-    id: 'kits',
-    title: 'Equipaciones de Club y Staff',
-    description: 'Colores auténticos de camiseta, polo técnico y traje.',
+    id: 'face-extractor',
+    title: 'Extractor de Caras y Zona de Corte',
+    description: 'Encuadre previo con rueda del ratón y relleno natural de cuello.',
     items: [
       {
-        id: 'kit-fidelity',
-        question: '¿Cómo evita la app que queden logotipos antiguos o colores falsos en la camiseta?',
-        badge: 'Calidad 10/10',
-        tags: ['camiseta', 'escudo', 'pelo', 'barba', 'club'],
+        id: 'wheel-crop',
+        question: '¿Cómo evito cortar cabezas o pelos al subir una imagen nueva?',
+        badge: 'Esencial',
+        tags: ['rueda', 'corte', 'cabeza', 'pelo', 'cuello', 'extraer cara'],
         bullets: [
-          'Sustitución limpia: Al elegir Club, Polo Staff o Traje Staff, la ropa callejera anterior se elimina al 100%.',
-          'Colores reales: Prioriza tus packs 2D instalados o la base curada de clubes reales; el escudo solo se estampa como insignia.',
-          'Respeto anatómico: El pelo largo, la barba y las gafas quedan siempre por delante del cuello.',
+          'Zona de corte previa con rueda: Acerca o aleja con la rueda del ratón y arrastra la imagen antes de pulsar Aplicar zona de corte.',
+          'Aviso de tope de cabeza: Si el pelo toca el margen superior, verás un aviso con el botón Auto-proteger.',
+          'Relleno natural de cuello: Ajusta el deslizador Cuello para prolongar la piel suavemente hasta dentro del cuello de la camiseta.',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'shirt-extractor',
+    title: 'Extractor de Camisetas y Plantillas',
+    description: 'Creación de tshirt_templates limpias, incluidas equipaciones blancas.',
+    items: [
+      {
+        id: 'white-shirts',
+        question: '¿Cómo convierto cualquier imagen (incluidas camisetas blancas) en plantilla limpia?',
+        badge: 'Calidad 10/10',
+        tags: ['camiseta', 'blanca', 'hombros', 'tshirt_templates', 'club', 'plantilla'],
+        bullets: [
+          'Pestaña Extraer Camiseta: Sube una imagen para eliminar cabeza, cuello y fondo dejando únicamente la prenda sobre damero oscuro.',
+          'Hombros blancos completos: Activa Simetrizar hombros y Refuerzo hombro para mantener intactas las mangas blancas sobre fondos claros.',
+          'Vínculo por club: Ponle nombre, asóciala a un club y pulsa Guardar en tshirt_templates para reutilizarla siempre.',
         ],
       },
     ],
@@ -61,7 +79,7 @@ const SECTIONS: FAQSection[] = [
         tags: ['ng_regens', 'live', 'shrink', 'boveda'],
         bullets: [
           'Modo no destructivo: Apunta NG_Regens a D:\\DF11Studio\\NG_Regens_Vault; su config.xml nunca se renombra.',
-          'Actualización en caliente: Activa Live Disk Sync (650ms) para convertir solo los regens nuevos.',
+          'Actualización en caliente: Activa Live Disk Sync (650ms) para convertir solo los regens nuevos con las plantillas de cada club.',
         ],
       },
       {
@@ -123,9 +141,9 @@ export default function FaqModal({ onClose }: { onClose: () => void }) {
               <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar dudas, atajos o funciones..." className="w-full pl-8 pr-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" />
             </div>
             <div className="flex flex-wrap md:flex-col gap-1.5 text-xs">
-              <button type="button" onClick={() => setActiveSec('all')} className={`min-h-[40px] px-3 py-2 rounded-lg text-left font-medium ${activeSec === 'all' ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300'}`}>Todas las secciones ({allItemIds.length})</button>
+              <button type="button" onClick={() => setActiveSec('all')} className={`min-h-[44px] px-3 py-2 rounded-lg text-left font-medium ${activeSec === 'all' ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300'}`}>Todas las secciones ({allItemIds.length})</button>
               {SECTIONS.map((s) => (
-                <button key={s.id} type="button" onClick={() => setActiveSec(s.id)} className={`min-h-[40px] px-3 py-2 rounded-lg text-left font-medium ${activeSec === s.id ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300'}`}>
+                <button key={s.id} type="button" onClick={() => setActiveSec(s.id)} className={`min-h-[44px] px-3 py-2 rounded-lg text-left font-medium ${activeSec === s.id ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300'}`}>
                   {s.title} ({s.items.length})
                 </button>
               ))}
@@ -146,7 +164,7 @@ export default function FaqModal({ onClose }: { onClose: () => void }) {
                     const isOpen = Boolean(qNorm) || Boolean(openIds[it.id]);
                     return (
                       <div key={it.id} className="p-3.5 text-xs">
-                        <button type="button" onClick={() => setOpenIds((p) => ({ ...p, [it.id]: !isOpen }))} className="w-full min-h-[36px] flex items-center justify-between gap-2 text-left font-semibold text-slate-900 dark:text-white">
+                        <button type="button" onClick={() => setOpenIds((p) => ({ ...p, [it.id]: !isOpen }))} className="w-full min-h-[44px] flex items-center justify-between gap-2 text-left font-semibold text-slate-900 dark:text-white">
                           <span>{it.question}</span>
                           <span className="inline-flex items-center gap-1.5 shrink-0">
                             {it.badge && <span className="px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 text-[11px]">{it.badge}</span>}

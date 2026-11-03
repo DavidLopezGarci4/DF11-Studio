@@ -2,12 +2,53 @@ export interface ClubSeed { name: string; pattern: string; primary: string; seco
 export interface StorageHealth { target_path: string; in_onedrive: boolean; free_gb: number; warning: boolean; steam_launch_arg: string; gamepass_guide: string; }
 export interface BootstrapState { version: string; clubs: Record<string, ClubSeed>; vaultDir: string; exportDir: string; storageHealth: StorageHealth; hasModels: boolean; liveWatching?: boolean; theme?: 'dark' | 'light'; }
 
+export interface ShirtTemplateInfo {
+  templateId: string;
+  filename: string;
+  displayName: string;
+  clubId: string;
+  collarWidth: number;
+  apexY: number;
+  thumbDataUrl: string;
+}
+
+export interface SavedFaceInfo {
+  faceId: string;
+  name: string;
+  kind: string;
+  thumbDataUrl: string;
+}
+
+export interface CropViewportDTO {
+  zoom: number;
+  panX: number;
+  panY: number;
+}
+
+export interface StagedFaceResponse {
+  rawDataUrl: string;
+  width: number;
+  height: number;
+  isPreCutout: boolean;
+  crownSrcY: number;
+  suggestedViewport: CropViewportDTO;
+  fileName?: string;
+}
+
+export interface ExtractedFaceResponse {
+  headAssetId: string;
+  suggestedName: string;
+  headPreviewDataUrl: string;
+  autoFit: { scale: number; offsetX: number; offsetY: number; neckFill: number };
+  previewDataUrl: string;
+}
+
 declare global {
   interface Window { pywebview?: { api: Record<string, (...args: unknown[]) => Promise<unknown>> }; }
 }
 
 const FALLBACK_BOOT: BootstrapState = {
-  version: '1.0.0',
+  version: '1.1.0',
   clubs: {
     '1736': { name: 'Real Madrid', pattern: 'solid', primary: '#F7F8FA', secondary: '#1E293B', collar: '#D4AF37' },
     '1708': { name: 'FC Barcelona', pattern: 'stripes', primary: '#004D98', secondary: '#A50044', collar: '#EDBB00' },
@@ -22,5 +63,6 @@ export async function callBridge<T>(method: string, ...args: unknown[]): Promise
   if (window.pywebview?.api?.[method]) return (await window.pywebview.api[method](...args)) as T;
   if (method === 'get_bootstrap_state') return FALLBACK_BOOT as unknown as T;
   if (method === 'probe_architecture_health') return null as unknown as T;
+  if (method === 'list_shirt_templates' || method === 'list_saved_faces') return [] as unknown as T;
   return {} as T;
 }

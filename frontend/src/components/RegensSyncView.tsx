@@ -105,8 +105,18 @@ export default function RegensSyncView({
   const handleJump = async (row: RegenRow) => {
     try {
       const params = row.clubId ? { kitMode: 'club', clubId: row.clubId } : { kitMode: 'original' };
-      const res = await callBridge<{ uid: string; previewDataUrl: string }>('load_regen_into_studio', row.uid, params);
-      if (res?.previewDataUrl) onJumpToStudio({ uid: row.uid, previewDataUrl: res.previewDataUrl, clubId: row.clubId || undefined });
+      const res = await callBridge<StudioJumpPayload>('load_regen_into_studio', row.uid, params);
+      if (res?.previewDataUrl) {
+        onJumpToStudio({
+          uid: row.uid,
+          previewDataUrl: res.previewDataUrl,
+          clubId: res.clubId || row.clubId || undefined,
+          headAssetId: res.headAssetId,
+          matchedTemplateId: res.matchedTemplateId,
+          isPreCutout: res.isPreCutout,
+          autoFit: res.autoFit,
+        });
+      }
     } catch (e) {
       setStatusMsg(e instanceof Error ? e.message : 'No se pudo abrir el regen en el Estudio.');
     }

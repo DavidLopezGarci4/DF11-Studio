@@ -1,18 +1,29 @@
 {
-  "currentVersion": "1.0.0",
-  "buildNumber": 10000,
-  "lastUpdated": "2026-11-02",
+  "currentVersion": "1.1.0",
+  "buildNumber": 10100,
+  "lastUpdated": "2026-11-03",
   "appName": "DF11 Face Studio",
-  "appDescription": "Estudio fotográfico de 3 capas y sincronizador automático de regens con formato oficial DF11 para Football Manager.",
+  "appDescription": "Estudio modular por capas con extractores de caras y camisetas y sincronizador DF11 para Football Manager.",
   "privacyPolicy": "Tus fotos y partidas nunca salen de tu PC: procesamiento 100% local, privado y sin suscripciones ni claves API.",
   "versions": [
+    {
+      "version": "1.1.0",
+      "build": 10100,
+      "date": "2026-11-03",
+      "title": "Extractores de Caras y Camisetas, Zona de Corte con Rueda y Montaje en 4 Pasos",
+      "highlights": [
+        "✂️ **Extractor de Caras sin cabezas cortadas:** Elige cualquier retrato recordando tu última carpeta, ajusta la zona de corte con la rueda del ratón antes de recortar y guarda caras limpias con cuello listo para reutilizar.",
+        "👕 **Extractor de Camisetas (incluidas las blancas):** Convierte cualquier equipación en una plantilla limpia con hombros completos, dale nombre y vincúlala al club que quieras.",
+        "🧩 **Montaje Paso a Paso con Deshacer y Rehacer:** Combina cara y relleno natural de cuello, camiseta plantilla, fondo oficial DF11 y exportación final con soporte para Ctrl+Z, Ctrl+Y y tecla Suprimir."
+      ]
+    },
     {
       "version": "1.0.0",
       "build": 10000,
       "date": "2026-11-02",
       "title": "Estudio DF11 de 3 Capas, Equipaciones de Club y Sincronizador FM27",
       "highlights": [
-        "🖼️ **Fichas DF11 en segundos:** Sube o pega cualquier retrato para recortar el fondo en tu PC y encuadrarlo en el marco oficial de 260 × 310 píxeles.",
+        "🖼️ **Fichas DF11 en segundos:** Sube con un clic (recordando siempre tu última carpeta), arrastra o pega cualquier retrato para recortar el fondo en tu PC y encuadrarlo en 260 × 310 píxeles.",
         "👕 **Equipaciones reales para jugadores y staff:** Viste tus fotos o tus regens con los colores auténticos de tu club, polo técnico o traje de entrenador sin logotipos antiguos.",
         "⚡ **Sincronizador masivo para NG_Regens y FM27:** Convierte miles de caras nuevas en segundo plano sin tocar tus archivos originales y protege tu disco frente a OneDrive."
       ]

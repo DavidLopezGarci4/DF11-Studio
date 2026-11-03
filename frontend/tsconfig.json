@@ -11,6 +11,10 @@
     "resolveJsonModule": true,
     "typeRoots": ["D:/DF11Studio/web_toolchain/node_modules/@types"],
     "paths": {
+      "react": ["D:/DF11Studio/web_toolchain/node_modules/@types/react"],
+      "react/*": ["D:/DF11Studio/web_toolchain/node_modules/@types/react/*"],
+      "react-dom": ["D:/DF11Studio/web_toolchain/node_modules/@types/react-dom"],
+      "react-dom/*": ["D:/DF11Studio/web_toolchain/node_modules/@types/react-dom/*"],
       "*": ["D:/DF11Studio/web_toolchain/node_modules/*"]
     }
   },

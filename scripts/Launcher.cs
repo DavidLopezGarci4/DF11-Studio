@@ -5,11 +5,11 @@ using System.Reflection;
 using System.Windows.Forms;
 
 [assembly: AssemblyTitle("DF11 Face Studio")]
-[assembly: AssemblyDescription("Estudio DF11 de 3 Capas y Sincronizador NG_Regens / FM27")]
+[assembly: AssemblyDescription("Estudio Modular DF11 por Capas y Sincronizador NG_Regens / FM27")]
 [assembly: AssemblyCompany("DF11 Face Studio Local")]
 [assembly: AssemblyProduct("DF11 Face Studio")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 namespace DF11FaceStudio
 {
@@ -33,7 +33,7 @@ namespace DF11FaceStudio
                 MessageBox.Show(
                     "No se encontró el entorno aislado en " + studioRoot + ".\n\n" +
                     "Ejecuta primero: powershell -ExecutionPolicy Bypass -File scripts\\bootstrap_d_drive.ps1",
-                    "DF11 Face Studio v1.0.0",
+                    "DF11 Face Studio v1.1.0",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning
                 );
@@ -63,7 +63,7 @@ namespace DF11FaceStudio
             {
                 MessageBox.Show(
                     "Error al iniciar DF11 Face Studio:\n" + ex.Message,
-                    "DF11 Face Studio v1.0.0",
+                    "DF11 Face Studio v1.1.0",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error
                 );

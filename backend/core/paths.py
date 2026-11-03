@@ -29,3 +29,19 @@ def get_webview_profile_dir() -> Path:
 
 def get_default_vault_dir() -> Path:
     return get_studio_root() / "NG_Regens_Vault"
+
+
+def get_tshirt_templates_dir() -> Path:
+    return get_studio_root() / "tshirt_templates"
+
+
+def get_raw_tshirt_archive_dir() -> Path:
+    return get_studio_root() / "cache" / "raw_tshirt_sources"
+
+
+def get_caras_prueba_dir() -> Path:
+    return get_studio_root() / "caras_prueba"
+
+
+def get_extracted_faces_dir() -> Path:
+    return get_studio_root() / "caras_extraidas"

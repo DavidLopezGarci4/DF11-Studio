@@ -56,6 +56,7 @@ _SCHEMA_SQL = (
     "CREATE TABLE IF NOT EXISTS squad_map (uid TEXT PRIMARY KEY, club_id TEXT NOT NULL);"
     "CREATE TABLE IF NOT EXISTS regen_manifest (uid TEXT PRIMARY KEY, mtime_ns INTEGER, size INTEGER, sig TEXT);"
     "CREATE TABLE IF NOT EXISTS app_prefs (pref_key TEXT PRIMARY KEY, pref_val TEXT NOT NULL);"
+    "CREATE TABLE IF NOT EXISTS shirt_templates (template_id TEXT PRIMARY KEY, filename TEXT NOT NULL, display_name TEXT NOT NULL, club_id TEXT NOT NULL DEFAULT '', sha256 TEXT NOT NULL, mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL, collar_json TEXT NOT NULL);"
 )
 
 
