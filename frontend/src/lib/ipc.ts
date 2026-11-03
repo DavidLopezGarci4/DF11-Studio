@@ -82,7 +82,7 @@ declare global {
 }
 
 const FALLBACK_BOOT: BootstrapState = {
-  version: '1.2.0',
+  version: '1.3.0',
   clubs: {
     '1736': { name: 'Real Madrid', pattern: 'solid', primary: '#F7F8FA', secondary: '#1E293B', collar: '#D4AF37' },
     '1708': { name: 'FC Barcelona', pattern: 'stripes', primary: '#004D98', secondary: '#A50044', collar: '#EDBB00' },

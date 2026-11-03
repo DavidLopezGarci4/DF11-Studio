@@ -1,11 +1,23 @@
 {
-  "currentVersion": "1.2.0",
-  "buildNumber": 10200,
+  "currentVersion": "1.3.0",
+  "buildNumber": 10300,
   "lastUpdated": "2026-11-03",
   "appName": "DF11 Face Studio",
-  "appDescription": "Estudio modular por capas con extractores de caras y camisetas y sincronizador DF11 para Football Manager.",
+  "appDescription": "Estudio modular por capas con extractores de caras y camisetas, edición de fichas de Facepacks y sincronizador DF11 para Football Manager.",
   "privacyPolicy": "Tus fotos y partidas nunca salen de tu PC: procesamiento 100% local, privado y sin suscripciones ni claves API.",
   "versions": [
+    {
+      "version": "1.3.0",
+      "build": 10300,
+      "date": "2026-11-03",
+      "title": "Precisión Numérica y Flechas en Paso 1, Engrosamiento Real de Cuello, Pestañas Plantilla/Staff y Edición de Packs de Faces FM",
+      "highlights": [
+        "🎯 **Control milimétrico de cabeza y cuello en el Paso 1:** Mueve la cabeza con el ratón o con las flechas del teclado y escribe o ajusta con flechas arriba/abajo el porcentaje exacto de Zoom y de engrosamiento progresivo del Cuello hasta llenar la camiseta.",
+        "👔 **Paso 2 limpio con Plantilla y Staff reales:** Eliminados los acabados programados de baja calidad; ahora trabajas solo con prendas reales de alta nitidez clasificadas en «Plantilla» o «Staff» al extraerlas o editarlas.",
+        "🔄 **Edición directa de fichas ya montadas de tu Pack de Faces:** Carga cualquier futbolista de tu facepack de Football Manager para cambiarle la camiseta por una de tus plantillas o sustituirle la cara conservando su equipación actual.",
+        "📁 **Doble destino de guardado en el Paso 4:** Elige entre guardar en tu carpeta de creaciones o actualizar directamente la carpeta del Pack de Faces de Football Manager con el número oficial asignado al jugador."
+      ]
+    },
     {
       "version": "1.2.0",
       "build": 10200,

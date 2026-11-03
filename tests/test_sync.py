@@ -128,3 +128,117 @@ def test_batch_sync_isolates_corrupt_regen_without_losing_valid_cards(tmp_path: 
     assert (out_dir / "r-501.png").is_file()
     cfg_text = (out_dir / "config.xml").read_text(encoding="utf-8")
     assert "r-501" in cfg_text and "r-502" not in cfg_text
+
+
+def test_batch_sync_ignores_staff_and_archived_templates_and_uses_active_player_kit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from PIL import ImageDraw
+    import backend.services.vision as vision_mod
+    from backend.services.templates import save_new_shirt_template
+    from backend.services.vision import FacePose
+
+    def _fake_pose(_im: Image.Image, score_thresh: float = 0.55) -> FacePose:
+        w, h = _im.size
+        return FacePose(
+            right_eye=(w * 0.40, h * 0.35),
+            left_eye=(w * 0.60, h * 0.35),
+            nose=(w * 0.50, h * 0.44),
+            eye_center=(w * 0.50, h * 0.35),
+            ipd=w * 0.20,
+            yaw=0.0,
+            bbox=(w * 0.30, h * 0.14, w * 0.40, h * 0.42),
+        )
+
+    def _fake_seg(im: Image.Image) -> np.ndarray:
+        arr = np.asarray(im.convert("RGBA"))
+        h, w = arr.shape[:2]
+        probs = np.zeros((h, w, 6), dtype=np.float32)
+        fg = arr[:, :, 3] > 20
+        is_cloth = fg & (arr[:, :, 2] > 170)
+        probs[:, :, 4] = np.where(is_cloth, 0.94, 0.01)
+        probs[:, :, 3] = np.where(fg & ~is_cloth, 0.92, 0.01)
+        probs[:, :, 0] = np.clip(1.0 - probs[:, :, 4] - probs[:, :, 3], 0.0, 1.0)
+        return probs
+
+    monkeypatch.setattr(vision_mod, "detect_face_pose", _fake_pose)
+    monkeypatch.setattr(vision_mod, "segment_portrait_classes", _fake_seg)
+    monkeypatch.setattr(vision_mod, "remove_background_birefnet", lambda im: im.convert("RGBA"))
+
+    db, vault, out_dir, tpl_dir = tmp_path / "sync_cat.db", tmp_path / "vault_cat", tmp_path / "out_cat", tmp_path / "tpl_cat"
+    _make_cutout_png(vault / "rm_regen.png")
+    _make_cutout_png(vault / "fcb_regen.png")
+    (vault / "config.xml").write_text(
+        '<record><list id="maps">'
+        '<record from="rm_regen" to="graphics/pictures/person/r-4001/portrait"/>'
+        '<record from="fcb_regen" to="graphics/pictures/person/r-4002/portrait"/>'
+        "</list></record>",
+        encoding="utf-8",
+    )
+    assign_uids_to_club(["r-4001"], "1736", db_path=db)
+    assign_uids_to_club(["r-4002"], "999777", db_path=db)
+
+    def _shirt_rgba(rgb: tuple[int, int, int]) -> Image.Image:
+        im = Image.new("RGBA", (260, 310), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        d.polygon([(19, 224), (92, 196), (130, 228), (168, 196), (241, 224), (241, 292), (19, 292)], fill=(*rgb, 255))
+        return im
+
+    # Alphabetically first 'Abrigo_Staff' (green) is STAFF; 'Club_2025_26' (yellow) is archived player;
+    # 'Zz_Titular_2627' (crimson red) is the ONLY active player shirt for #1736!
+    save_new_shirt_template(
+        clean_rgba=_shirt_rgba((15, 190, 45)),
+        raw_bytes=None,
+        display_name="Abrigo Staff",
+        template_id="Abrigo_Staff",
+        club_id="1736",
+        category="staff",
+        is_active_for_club=True,
+        tpl_dir=tpl_dir,
+        db_path=db,
+    )
+    save_new_shirt_template(
+        clean_rgba=_shirt_rgba((210, 200, 15)),
+        raw_bytes=None,
+        display_name="Club 2025/26",
+        template_id="Club_2025_26",
+        club_id="1736",
+        category="player",
+        is_active_for_club=False,
+        tpl_dir=tpl_dir,
+        db_path=db,
+    )
+    save_new_shirt_template(
+        clean_rgba=_shirt_rgba((205, 22, 35)),
+        raw_bytes=None,
+        display_name="Zz Titular 26/27",
+        template_id="Zz_Titular_2627",
+        club_id="1736",
+        category="player",
+        is_active_for_club=True,
+        tpl_dir=tpl_dir,
+        db_path=db,
+    )
+    # Club #999777 ONLY has a Staff suit (bright green) -> regen r-4002 must NOT wear the Staff suit!
+    save_new_shirt_template(
+        clean_rgba=_shirt_rgba((15, 210, 45)),
+        raw_bytes=None,
+        display_name="Traje Mister 999777",
+        template_id="Aa_Staff_999777",
+        club_id="999777",
+        category="staff",
+        is_active_for_club=True,
+        tpl_dir=tpl_dir,
+        db_path=db,
+    )
+
+    rep = sync_ng_regens_batch(vault, out_dir, db_path=db, apply_club_kits=True, templates_dir=tpl_dir)
+    assert rep.processed == 2 and rep.failed == 0
+    card_rm = np.asarray(Image.open(out_dir / "r-4001.png").convert("RGBA"))
+    # Chest pixel (255, 80) must be crimson red from Zz_Titular_2627 (R > 160, G < 60), NOT green staff or yellow archive!
+    assert int(card_rm[255, 80, 0]) > 160 and int(card_rm[255, 80, 1]) < 60
+
+    card_other = np.asarray(Image.open(out_dir / "r-4002.png").convert("RGBA"))
+    # Must NOT wear bright green Aa_Staff_999777 (G > R + 120)
+    assert not (int(card_other[255, 80, 1]) > int(card_other[255, 80, 0]) + 100)
+

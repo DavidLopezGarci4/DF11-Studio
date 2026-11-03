@@ -21,7 +21,7 @@ def _sample_png_data_url() -> str:
 def test_bridge_bootstrap_and_capability_guard_blocks_unapproved_paths(tmp_path: Path) -> None:
     bridge = StudioBridge(vault_dir=tmp_path / "vault", export_dir=tmp_path / "approved_out", db_path=tmp_path / "state.sqlite3")
     boot = bridge.get_bootstrap_state()
-    assert boot["version"] == "1.2.0" and "1736" in boot["clubs"] and "1744" in boot["clubs"]
+    assert boot["version"] == "1.3.0" and "1736" in boot["clubs"] and "1744" in boot["clubs"]
     bridge.upload_studio_image(_sample_png_data_url(), remove_bg=False, harmonize=True, extract_bg=False)
     with pytest.raises(CapabilityError):
         bridge.export_studio_card({"uid": "29184012", "fmt": "png", "outDir": str(tmp_path / "unapproved_evil")})
@@ -868,6 +868,138 @@ def test_v130_template_categories_facepack_remix_and_dual_export_targets(
                 "templateId": "Navy_Player",
             }
         )
+
+
+def test_v130_round1_vault_overlap_adhoc_eviction_and_regen_jump_guards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import numpy as np
+    import backend.services.vision as vision_mod
+    from backend.services.sync import assign_uids_to_club
+    from backend.services.templates import get_club_shirt_template
+
+    monkeypatch.setattr(vision_mod, "segment_portrait_classes", lambda im: np.zeros((im.height, im.width, 6), dtype=np.float32))
+    monkeypatch.setattr(vision_mod, "remove_background_birefnet", lambda im: im.convert("RGBA"))
+    monkeypatch.setattr(vision_mod, "detect_face_pose", lambda _im, score_thresh=0.55: None)
+
+    vault_root = tmp_path / "ng_vault_parent" / "vault_ro"
+    vault_sub = vault_root / "faces_sub"
+    vault_sub.mkdir(parents=True)
+    export_dir = tmp_path / "creations_out"
+    facepack_dir = tmp_path / "fm_faces_out"
+    facepack_dir.mkdir(parents=True)
+    tpl_dir = tmp_path / "tshirt_templates"
+    tpl_dir.mkdir(parents=True)
+    db_path = tmp_path / "round1.sqlite3"
+
+    raw_png = base64.b64decode(_sample_png_data_url().split(",", 1)[1])
+    (vault_sub / "r1.png").write_bytes(raw_png)
+    (vault_root / "config.xml").write_text(
+        '<record><list id="maps"><record from="faces_sub/r1" to="graphics/pictures/person/r-8801/portrait"/></list></record>',
+        encoding="utf-8",
+    )
+
+    bridge = StudioBridge(
+        vault_dir=vault_root,
+        export_dir=export_dir,
+        db_path=db_path,
+        templates_dir=tpl_dir,
+        raw_archive_dir=tmp_path / "raw_archive",
+        extracted_faces_dir=tmp_path / "caras_extraidas",
+        sample_faces_dir=tmp_path / "caras_prueba",
+    )
+
+    # 1. Bidirectional vault overlap guard on choose_directory (both subfolder & parent of vault_ro must be blocked!)
+    class _DirWin:
+        def __init__(self, target: Path) -> None:
+            self.target = target
+            self.last_init_dir = ""
+
+        def create_file_dialog(self, _dtype: int = 20, directory: str = "", **_kw: object) -> tuple[str, ...]:
+            self.last_init_dir = directory
+            return (str(self.target),)
+
+    for bad_dir in (vault_sub, vault_root.parent):
+        bridge._attach_window(_DirWin(bad_dir))
+        with pytest.raises(CapabilityError):
+            bridge.choose_directory("facepack")
+        with pytest.raises(CapabilityError):
+            bridge.choose_directory("export")
+
+    # 2. pick_facepack_card must NOT default to vault_root, must NOT overwrite last_image_dir, and must NOT approve vault_sub!
+    portraits_dir = tmp_path / "MyPortraits"
+    portraits_dir.mkdir()
+    (portraits_dir / "me.png").write_bytes(raw_png)
+    bridge._attach_window(_DirWin(portraits_dir / "me.png"))
+    bridge.pick_raw_face_source()
+    assert Path(bridge._get_pref("last_image_dir")).resolve() == portraits_dir.resolve()
+
+    vault_file_win = _DirWin(vault_sub / "r1.png")
+    bridge._attach_window(vault_file_win)
+    remix_vault = bridge.pick_facepack_card("swap_shirt", "", {"bgMode": "transparent"})
+    assert remix_vault is not None
+    # Initial dialog directory for unset last_facepack_dir must fall back to export_dir (not vault_root!)
+    assert not Path(vault_file_win.last_init_dir).resolve().is_relative_to(vault_root.resolve())
+    # Picking a file inside vault_sub must NEVER set facepackDir or clobber last_image_dir
+    assert remix_vault["facepackDir"] == ""
+    assert bridge.get_bootstrap_state()["facepackDir"] == ""
+    assert Path(bridge._get_pref("last_image_dir")).resolve() == portraits_dir.resolve()
+
+    # 3. Missing/evicted templateId or adhoc:shirt-N in export_modular_card must raise ValueError even when headAssetId is valid!
+    with pytest.raises(ValueError, match="camiseta|plantilla"):
+        bridge.export_modular_card(
+            {
+                "uid": "29184012",
+                "exportTarget": "creations",
+                "headAssetId": remix_vault["headAssetId"],
+                "wearMode": "template",
+                "templateId": "adhoc:shirt-9999",
+            }
+        )
+
+    # 4. Club #555000 has ONLY a 'staff' suit -> get_club_shirt_template & load_regen_into_studio must NOT assign Staff to regen!
+    shirt_im = Image.new("RGBA", (260, 310), (0, 0, 0, 0))
+    shirt_im.paste((25, 65, 165, 255), (25, 205, 235, 290))
+    s_buf = io.BytesIO()
+    shirt_im.save(s_buf, format="PNG")
+    s_url = "data:image/png;base64," + base64.b64encode(s_buf.getvalue()).decode("ascii")
+    st_src = bridge.load_raw_shirt_source(s_url, file_name="Staff555.png")
+    bridge.preview_shirt_extraction({"shirtSourceId": st_src["shirtSourceId"]})
+    bridge.save_shirt_template(
+        {
+            "shirtSourceId": st_src["shirtSourceId"],
+            "displayName": "Traje Staff 555",
+            "templateId": "Staff_555000",
+            "clubId": "555000",
+            "category": "staff",
+            "isActiveForClub": True,
+        }
+    )
+    assert get_club_shirt_template("555000", tpl_dir=tpl_dir, db_path=db_path) is None
+    assert get_club_shirt_template("555000", tpl_dir=tpl_dir, db_path=db_path, category="staff") is not None
+
+    assign_uids_to_club(["r-8801"], "555000", db_path=db_path)
+    jumped = bridge.load_regen_into_studio("r-8801")
+    assert jumped["matchedTemplateId"] == ""
+
+    # Staff-only catalog must NOT auto-select a Staff suit when remixing a footballer card in swap_shirt mode
+    remix_staff_only = bridge.load_facepack_card(s_url, "29184012.png", "swap_shirt", "", {})
+    assert remix_staff_only["templateId"] == ""
+
+    # 5. export_studio_card (legacy-jump path) supports exportTarget='facepack' into approved facepackDir
+    bridge._attach_window(_DirWin(facepack_dir))
+    bridge.choose_directory("facepack")
+    exp_legacy_fp = bridge.export_studio_card(
+        {
+            "uid": "r-8801",
+            "exportTarget": "facepack",
+            "fmt": "jpg",
+            "updateConfigXml": True,
+        }
+    )
+    assert Path(exp_legacy_fp["savedPath"]).resolve() == (facepack_dir / "r-8801.png").resolve()
+    assert (facepack_dir / "r-8801.png").is_file()
+
 
 
 

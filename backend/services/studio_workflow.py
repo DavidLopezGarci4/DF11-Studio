@@ -647,7 +647,7 @@ class ModularWorkflowSession:
         target_tid = str(active_template_id or "").strip()
         if not target_tid or target_tid.startswith("adhoc:") or not self.has_shirt_reference(target_tid):
             items = sync_tshirt_templates_dir(tpl_dir=self.templates_dir, raw_archive_dir=self.raw_archive_dir, db_path=self.db_path)
-            first_player = next((t for t in items if t.category == "player"), None) or (items[0] if items else None)
+            first_player = next((t for t in items if t.category == "player"), None)
             target_tid = first_player.template_id if first_player else ""
 
         fit_dict = self.compute_auto_fit(aid, target_tid)

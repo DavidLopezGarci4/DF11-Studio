@@ -14,11 +14,13 @@ describe('FAQ and About human metadata modals', () => {
     expect(screen.getByText(/Game Pass/i)).toBeInTheDocument();
     fireEvent.change(search, { target: { value: 'barra de título' } });
     expect(screen.getByText(/Importar #IDs FM/i)).toBeInTheDocument();
+    fireEvent.change(search, { target: { value: 'facepack' } });
+    expect(screen.getAllByText(/ficha ya montada/i).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders human-readable v1.2.0 release highlights and collapsible previous history without developer jargon', () => {
+  it('renders human-readable v1.3.0 release highlights and collapsible previous history without developer jargon', () => {
     render(<AboutModal onClose={() => {}} onOpenGraph={() => {}} />);
-    expect(screen.getAllByText(/v1\.2\.0/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/v1\.3\.0/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/100% Local/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/Historial de versiones anteriores/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Inspeccionar Salud de la Arquitectura/i })).toBeInTheDocument();

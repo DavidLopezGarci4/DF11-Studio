@@ -7,27 +7,28 @@ export interface FAQSection { id: string; title: string; description: string; it
 const SECTIONS: FAQSection[] = [
   {
     id: 'studio',
-    title: 'Montaje Paso a Paso en 4 Capas',
-    description: 'Lienzo DF11 con rueda, Deshacer/Rehacer y tecla Suprimir.',
+    title: 'Montaje Paso a Paso y Packs de Faces FM',
+    description: 'Flechas direccionales, controles exactos de Zoom y Cuello, remix de Facepacks y doble destino.',
     items: [
       {
         id: 'layers',
-        question: '¿Cómo funciona el montaje paso a paso y los atajos del Lienzo Oficial DF11?',
-        badge: 'Novedad',
-        tags: ['capas', 'ctrl+z', 'ctrl+y', 'suprimir', 'paso', 'lienzo'],
+        question: '¿Cómo funciona el Paso 1 (ratón, flechas, Zoom y engrosamiento de Cuello) y los atajos del lienzo?',
+        badge: 'Novedad v1.3',
+        tags: ['capas', 'ctrl+z', 'ctrl+y', 'suprimir', 'flechas', 'teclado', 'zoom', 'cuello', 'lienzo'],
         bullets: [
-          'Clic central con memoria de carpeta: Pulsa en el centro vacío del lienzo 260 × 310 px o en Subir retrato para abrir tu última carpeta usada.',
-          'Orden en 4 pasos: Paso 1 (Cara y Cuello), Paso 2 (Camiseta Plantilla con buscador o Club/Staff), Paso 3 (Fondo por defecto Blanco Estudio DF11) y Paso 4 (Exportación).',
-          'Deshacer, Rehacer y Suprimir: Usa los botones superiores o los atajos Ctrl+Z, Ctrl+Y y Supr para limpiar o recuperar cualquier edición.',
+          'Movimiento con ratón y flechas del teclado: Con el Paso 1 seleccionado, arrastra la cabeza con el ratón o muévela píxel a píxel con ← ↑ ↓ → (mantén Shift para saltos de 5 px).',
+          'Zoom y Cuello con número exacto y flechas arriba/abajo: Tanto en Zoom como en Cuello puedes usar la barra deslizante, escribir el porcentaje exacto en el cuadro numérico o ajustarlo de 1% en 1% con las dos flechas a su derecha; el control Cuello engrosa progresivamente el ancho del cuello para llenar cualquier camiseta.',
+          'Deshacer, Rehacer y Suprimir: Usa los botones superiores o Ctrl+Z, Ctrl+Y y Supr para deshacer o limpiar cualquier paso.',
         ],
       },
       {
-        id: 'formats',
-        question: '¿En qué formato debo exportar mis fichas para Football Manager?',
-        tags: ['png', 'jpg', 'config.xml'],
+        id: 'facepack-remix-export',
+        question: '¿Cómo edito una ficha ya montada de mi Pack de Faces de FM o guardo con su número original?',
+        badge: 'Novedad v1.3',
+        tags: ['facepack', 'pack', 'faces', 'ficha', 'renombrar', 'creaciones', 'png', 'jpg', 'config.xml'],
         bullets: [
-          'PNG Oficial (Recomendado): Conserva el anillo transparente exterior y actualiza config.xml automáticamente.',
-          'JPG Ligero: Aplana la tarjeta sobre blanco puro a máxima nitidez para compartirla fuera del juego.',
+          'Editar ficha ya montada de un Facepack: En el Paso 1 usa «Cambiar camiseta a ficha FM» (conserva la cabeza del futbolista y le viste una prenda tuya) o «Cambiar cara (conservar su camiseta)» (aísla la equipación exacta que trae esa tarjeta para ponerle otra cara, pudiendo conmutar entre ambos modos o guardarla en plantillas).',
+          'Doble destino en el Paso 4: Elige «1. Nuestras creaciones» para guardar en tu carpeta personal o «2. Pack de Faces FM» para indicar la carpeta gráfica de Football Manager y guardar el PNG con el número oficial asignado al futbolista actualizando config.xml sin pérdidas.',
         ],
       },
     ],
@@ -35,7 +36,7 @@ const SECTIONS: FAQSection[] = [
   {
     id: 'face-extractor',
     title: 'Extractor de Caras y Zona de Corte',
-    description: 'Encuadre previo con rueda del ratón y relleno natural de cuello.',
+    description: 'Encuadre previo con rueda del ratón y relleno progresivo de cuello.',
     items: [
       {
         id: 'wheel-crop',
@@ -43,26 +44,26 @@ const SECTIONS: FAQSection[] = [
         badge: 'Esencial',
         tags: ['rueda', 'corte', 'cabeza', 'pelo', 'cuello', 'extraer cara'],
         bullets: [
-          'Zona de corte previa con rueda: Acerca o aleja con la rueda del ratón y arrastra la imagen antes de pulsar Aplicar zona de corte.',
+          'Zona de corte previa con rueda y flechas: Acerca o aleja con la rueda del ratón y encuadra con ratón o flechas antes de pulsar Aplicar zona de corte.',
           'Aviso de tope de cabeza: Si el pelo toca el margen superior, verás un aviso con el botón Auto-proteger.',
-          'Relleno natural de cuello: Ajusta el deslizador Cuello para prolongar la piel suavemente hasta dentro del cuello de la camiseta.',
+          'Engrosamiento natural de cuello: Regula el porcentaje de Cuello (0% a 150%) para estrechar o ensanchar el cuello hasta encajar sin huecos en el escote de la camiseta.',
         ],
       },
     ],
   },
   {
     id: 'shirt-extractor',
-    title: 'Extractor de Camisetas, #ID y Temporadas',
-    description: 'Extracción nítida 2× SSAA, buscador, #ID de club FM y temporadas.',
+    title: 'Extractor de Camisetas, Plantilla / Staff y #ID',
+    description: 'Clasificación Plantilla | Staff, extracción 2× SSAA, buscador, #ID de club FM y temporadas.',
     items: [
       {
         id: 'white-shirts',
-        question: '¿Cómo convierto cualquier imagen (incluidas camisetas blancas) en plantilla nítida?',
-        badge: 'Calidad 2× SSAA',
-        tags: ['camiseta', 'blanca', 'hombros', 'tshirt_templates', 'nitidez', 'plantilla'],
+        question: '¿Cómo extraigo camisetas de jugador o trajes de Staff con máxima nitidez?',
+        badge: 'Plantilla y Staff',
+        tags: ['camiseta', 'staff', 'traje', 'blanca', 'hombros', 'tshirt_templates', 'nitidez', 'plantilla'],
         bullets: [
-          'Encuadre previo sobre el lienzo: Al subir una imagen en Extraer Camiseta, ajústala en tamaño (rueda o deslizador Tamaño) y posición con Deshacer y Rehacer (Ctrl+Z / Ctrl+Y).',
-          'Nitidez textil y cuellos limpios: Regula Nitidez textil para realzar escudos, marcas y ribetes de cuello y pulsa «Extraer solo la camiseta».',
+          'Clasificación Plantilla o Staff al extraer: En Extraer Camiseta elige si el recorte irá a la pestaña «Plantilla» (jugadores) o «Staff» (cuerpo técnico, polos y trajes) del Paso 2.',
+          'Encuadre previo y Nitidez textil 2× SSAA: Ajusta posición y tamaño en el lienzo con Deshacer/Rehacer, regula Nitidez textil y pulsa «Extraer solo la camiseta».',
           'Hombros completos sin halos: Simetrizar hombros y Refuerzo hombro reconstruyen camisetas blancas sin contaminar mangas oscuras.',
         ],
       },

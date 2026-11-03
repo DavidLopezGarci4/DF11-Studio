@@ -71,6 +71,11 @@ def _read_guarded_file(path: Path) -> bytes:
     return data
 
 
+def _paths_overlap(a: Path, b: Path) -> bool:
+    ra, rb = a.resolve(), b.resolve()
+    return ra == rb or ra.is_relative_to(rb) or rb.is_relative_to(ra)
+
+
 class StudioBridge:
     def __init__(
         self,
@@ -158,7 +163,7 @@ class StudioBridge:
 
     def _require_approved(self, folder: Path) -> Path:
         r = folder.resolve()
-        if r == self._vault_dir or r not in self._approved_dirs:
+        if _paths_overlap(r, self._vault_dir) or r not in self._approved_dirs:
             raise CapabilityError(f"Directorio de escritura no autorizado: {r}")
         return r
 
@@ -167,16 +172,29 @@ class StudioBridge:
         from backend.services.sync import check_fm_storage_health
 
         saved_export = self._get_pref("last_export_dir")
-        if saved_export and Path(saved_export).resolve() != self._vault_dir and (Path(saved_export).is_dir() or Path(saved_export).parent.is_dir()):
-            self._export_dir = Path(saved_export).resolve()
-            self._approved_dirs.add(self._export_dir)
         saved_facepack = self._get_pref("last_facepack_dir")
-        if saved_facepack and Path(saved_facepack).is_dir() and Path(saved_facepack).resolve() != self._vault_dir:
-            self._facepack_dir = Path(saved_facepack).resolve()
-            self._approved_dirs.add(self._facepack_dir)
         saved_vault = self._get_pref("last_vault_dir")
-        if saved_vault and Path(saved_vault).is_dir() and Path(saved_vault).resolve() != self._export_dir and Path(saved_vault).resolve() != self._facepack_dir:
-            self._vault_dir = Path(saved_vault).resolve()
+
+        cand_export = (
+            Path(saved_export).resolve()
+            if saved_export and (Path(saved_export).is_dir() or Path(saved_export).parent.is_dir())
+            else None
+        )
+        cand_facepack = Path(saved_facepack).resolve() if saved_facepack and Path(saved_facepack).is_dir() else None
+
+        if saved_vault and Path(saved_vault).is_dir():
+            cand_v = Path(saved_vault).resolve()
+            eff_exp = cand_export if cand_export is not None else self._export_dir
+            if not _paths_overlap(cand_v, eff_exp) and (cand_facepack is None or not _paths_overlap(cand_v, cand_facepack)):
+                self._vault_dir = cand_v
+                self._approved_dirs = {d for d in self._approved_dirs if not _paths_overlap(d, self._vault_dir)}
+
+        if cand_export is not None and not _paths_overlap(cand_export, self._vault_dir):
+            self._export_dir = cand_export
+            self._approved_dirs.add(self._export_dir)
+        if cand_facepack is not None and not _paths_overlap(cand_facepack, self._vault_dir):
+            self._facepack_dir = cand_facepack
+            self._approved_dirs.add(self._facepack_dir)
 
         m = get_models_dir()
         ok = all((m / f).is_file() for f in ("face_detection_yunet_2023mar.onnx", "selfie_multiclass_256x256.onnx", "birefnet-general-lite.onnx"))
@@ -233,28 +251,36 @@ class StudioBridge:
             return None
         c = Path(res[0]).resolve()
         if role == "vault":
-            if c == self._export_dir or (self._facepack_dir is not None and c == self._facepack_dir):
-                raise CapabilityError("La bóveda NG_Regens de solo lectura no puede coincidir con la carpeta de salida.")
+            if _paths_overlap(c, self._export_dir) or (
+                self._facepack_dir is not None and _paths_overlap(c, self._facepack_dir)
+            ):
+                raise CapabilityError("La bóveda NG_Regens de solo lectura no puede solaparse con la carpeta de salida.")
             self._vault_dir = c
+            self._approved_dirs = {d for d in self._approved_dirs if not _paths_overlap(d, c)}
         elif role == "facepack":
-            if c == self._vault_dir:
-                raise CapabilityError("La carpeta del Pack de Faces no puede coincidir con la bóveda NG_Regens de solo lectura.")
+            if _paths_overlap(c, self._vault_dir):
+                raise CapabilityError("La carpeta del Pack de Faces no puede solaparse con la bóveda NG_Regens de solo lectura.")
             self._approved_dirs.add(c)
             self._facepack_dir = c
         else:
-            if c == self._vault_dir:
-                raise CapabilityError("La carpeta de salida no puede coincidir con la bóveda NG_Regens de solo lectura.")
+            if _paths_overlap(c, self._vault_dir):
+                raise CapabilityError("La carpeta de salida no puede solaparse con la bóveda NG_Regens de solo lectura.")
             self._approved_dirs.add(c)
             self._export_dir = c
         self._set_pref(pref_key, str(c))
         return {"path": str(c), "storageHealth": asdict(check_fm_storage_health(c))}
 
-    def _pick_image_file(self, pref_key: str) -> Path | None:
+    def _pick_image_file(
+        self,
+        pref_key: str,
+        fallback_dir: Path | None = None,
+        sync_last_image: bool = True,
+    ) -> Path | None:
         import webview
 
         if not self._window:
             return None
-        init_dir = self._resolve_dialog_dir(pref_key, self._vault_dir)
+        init_dir = self._resolve_dialog_dir(pref_key, fallback_dir if fallback_dir is not None else self._vault_dir)
         res = self._window.create_file_dialog(
             webview.OPEN_DIALOG,
             directory=init_dir,
@@ -266,8 +292,9 @@ class StudioBridge:
         chosen = Path(res[0]).resolve()
         if not chosen.is_file():
             return None
-        self._set_pref(pref_key, str(chosen.parent))
-        if pref_key != "last_image_dir":
+        if pref_key != "last_facepack_dir" or not _paths_overlap(chosen.parent, self._vault_dir):
+            self._set_pref(pref_key, str(chosen.parent))
+        if sync_last_image and pref_key != "last_image_dir":
             self._set_pref("last_image_dir", str(chosen.parent))
         return chosen
 
@@ -416,8 +443,18 @@ class StudioBridge:
 
         if self._raw_img is None:
             raise ValueError("Sube o selecciona un retrato antes de exportar la ficha DF11.")
-        uid, fmt = validate_fm_uid(str(params.get("uid", ""))), ("jpg" if str(params.get("fmt", "png")).lower() in ("jpg", "jpeg") else "png")
-        tdir = self._require_approved(Path(params["outDir"]) if params.get("outDir") else self._export_dir)
+        uid = validate_fm_uid(str(params.get("uid", "")))
+        export_target = str(params.get("exportTarget", "creations")).strip().lower()
+        fmt = "jpg" if str(params.get("fmt", "png")).lower() in ("jpg", "jpeg") else "png"
+        if export_target == "facepack":
+            fmt = "png"
+            raw_out = str(params.get("outDir") or "").strip()
+            cand_dir = Path(raw_out) if raw_out else self._facepack_dir
+            if cand_dir is None:
+                raise ValueError("Selecciona primero la carpeta del Pack de Faces de Football Manager.")
+            tdir = self._require_approved(cand_dir)
+        else:
+            tdir = self._require_approved(Path(params["outDir"]) if params.get("outDir") else self._export_dir)
         if params.get("customKitDirty") and params.get("kitMode", "original") != "original":
             kit = self._resolve_studio_kit(str(params.get("clubId", "1736")), params)
             save_kit_override(kit.club_id, kit.primary, kit.secondary, pattern=kit.pattern, db_path=self._db_path)
@@ -527,7 +564,7 @@ class StudioBridge:
         ext_opts = {
             **staged["suggestedViewport"],
             "templateId": tpl_id,
-            "wearMode": "template" if tpl_id else ("club" if club_id else "none"),
+            "wearMode": "template",
             "clubId": club_id or "1736",
         }
         extracted = self._mod().extract_staged_face(ext_opts, custom_bg=self._custom_bg_img)
@@ -666,11 +703,15 @@ class StudioBridge:
     def pick_facepack_card(
         self, remix_mode: str = "swap_shirt", active_template_id: str = "", params: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
-        chosen = self._pick_image_file("last_facepack_dir")
+        chosen = self._pick_image_file(
+            "last_facepack_dir",
+            fallback_dir=self._facepack_dir or self._export_dir,
+            sync_last_image=False,
+        )
         if chosen is None:
             return None
         parent_dir = chosen.parent.resolve()
-        if parent_dir != self._vault_dir:
+        if not _paths_overlap(parent_dir, self._vault_dir):
             self._facepack_dir = parent_dir
             self._approved_dirs.add(parent_dir)
             self._set_pref("last_facepack_dir", str(parent_dir))
@@ -730,11 +771,13 @@ class StudioBridge:
         head_id = str(params.get("headAssetId", "")).strip()
         tpl_id = str(params.get("templateId", "")).strip()
         wear_mode = str(params.get("wearMode", "template"))
+        if wear_mode == "template" and tpl_id and not self._mod().has_shirt_reference(tpl_id):
+            raise ValueError("La camiseta seleccionada ya no está disponible; vuelve a elegir una plantilla antes de exportar.")
         if head_id:
             if self._mod().get_head_asset(head_id) is None:
                 raise ValueError("La cara activa ya no está en memoria; vuelve a cargarla antes de exportar.")
         else:
-            if wear_mode != "template" or not tpl_id or not self._mod().has_shirt_reference(tpl_id):
+            if wear_mode != "template" or not tpl_id:
                 raise ValueError("Añade una cara o selecciona una plantilla válida antes de exportar la ficha DF11.")
         uid = validate_fm_uid(str(params.get("uid", "")))
         export_target = str(params.get("exportTarget", "creations")).strip().lower()

@@ -42,46 +42,55 @@ def safe_ntfs_replace(src: Path, dst: Path, retries: int = 5) -> None:
 
 def upsert_fm_config_xml(config_path: Path, uids: Iterable[str]) -> int:
     """Idempotently merge portrait mappings for uids into config.xml using atomic NTFS replace."""
-    validated = [validate_fm_uid(u) for u in uids]
-    records: dict[str, str] = {}
+    validated = list(dict.fromkeys(validate_fm_uid(u) for u in uids))
+    records_by_to: dict[str, str] = {}
+    preload_val = "false"
+    amap_val = "false"
 
-    target_tos = {f"graphics/pictures/person/{u}/portrait" for u in validated}
-    validated_set = set(validated)
     if config_path.is_file():
-        matched_exact: set[str] = set()
-        conflict_found = False
+        duplicate_to_found = False
         try:
             tree = SafeET.parse(config_path)
-            for rec in tree.getroot().findall(".//record"):
+            root = tree.getroot()
+            for btag in root.findall("./boolean"):
+                bid = btag.attrib.get("id", "").strip()
+                bval = btag.attrib.get("value", "").strip().lower()
+                if bid == "preload" and bval in ("true", "false"):
+                    preload_val = bval
+                elif bid == "amap" and bval in ("true", "false"):
+                    amap_val = bval
+            for rec in root.findall(".//record"):
                 frm = rec.attrib.get("from", "").strip()
                 to = rec.attrib.get("to", "").strip()
                 if not frm or not to:
                     continue
-                if to in target_tos:
-                    if frm in validated_set and to == f"graphics/pictures/person/{frm}/portrait" and frm not in matched_exact:
-                        matched_exact.add(frm)
-                    else:
-                        conflict_found = True
-                elif frm in validated_set:
-                    conflict_found = True
-                else:
-                    records[frm] = to
+                if to in records_by_to and records_by_to[to] != frm:
+                    duplicate_to_found = True
+                records_by_to[to] = frm
         except Exception as exc:
             raise FMConfigError(f"No se pudo leer config.xml de forma segura: {exc}") from exc
-        if validated_set and not conflict_found and len(matched_exact) == len(validated_set):
-            return len(records) + len(matched_exact)
+        if (
+            validated
+            and not duplicate_to_found
+            and all(records_by_to.get(f"graphics/pictures/person/{u}/portrait") == u for u in validated)
+        ):
+            return len(records_by_to)
 
     for uid in validated:
-        records[uid] = f"graphics/pictures/person/{uid}/portrait"
+        records_by_to[f"graphics/pictures/person/{uid}/portrait"] = uid
 
     lines = [
         "<record>",
-        '\t<boolean id="preload" value="false"/>',
-        '\t<boolean id="amap" value="false"/>',
+        f'\t<boolean id="preload" value={quoteattr(preload_val)}/>',
+        f'\t<boolean id="amap" value={quoteattr(amap_val)}/>',
         '\t<list id="maps">',
     ]
-    for frm in sorted(records.keys(), key=lambda k: (k.startswith("r-"), k)):
-        lines.append(f"\t\t<record from={quoteattr(frm)} to={quoteattr(records[frm])}/>")
+    sorted_pairs = sorted(
+        ((frm, to) for to, frm in records_by_to.items()),
+        key=lambda item: (item[0].startswith("r-"), item[0], item[1]),
+    )
+    for frm, to in sorted_pairs:
+        lines.append(f"\t\t<record from={quoteattr(frm)} to={quoteattr(to)}/>")
     lines.extend(["\t</list>", "</record>", ""])
     payload = "\n".join(lines).encode("utf-8")
 
@@ -97,4 +106,4 @@ def upsert_fm_config_xml(config_path: Path, uids: Iterable[str]) -> int:
     finally:
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
-    return len(records)
+    return len(records_by_to)

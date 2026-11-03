@@ -383,3 +383,86 @@ def test_progressive_neck_thickening_scales_monotonically_across_collar_opening(
 
     assert skin_counts[0.0] < skin_counts[0.35] < skin_counts[0.70] < skin_counts[1.00] < skin_counts[1.40], skin_counts
 
+
+def test_progressive_neck_narrows_already_wide_neck_and_unframes_transparent_wide_hair(monkeypatch) -> None:
+    import backend.services.vision as vision_mod
+    from backend.core.compositor import render_df11_card
+    from backend.services.head_neck import HeadFitParams, prepare_facepack_card_for_head_extraction
+    from backend.services.templates import extract_collar_profile
+    from backend.services.vision import FacePose
+
+    shirt = Image.new("RGBA", (DF11_WIDTH, DF11_HEIGHT), (0, 0, 0, 0))
+    sdraw = ImageDraw.Draw(shirt)
+    sdraw.polygon(
+        [(19, 234), (86, 196), (130, 232), (174, 196), (241, 234), (241, 292), (19, 292)],
+        fill=(25, 65, 145, 255),
+    )
+    collar = extract_collar_profile(shirt)
+
+    # Portrait with an ALREADY WIDE real neck spanning x=76..180 all the way down to y=235
+    face_im = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+    fdraw = ImageDraw.Draw(face_im)
+    fdraw.ellipse([78, 34, 178, 174], fill=(216, 165, 138, 255))
+    fdraw.rectangle([76, 158, 180, 235], fill=(210, 158, 132, 255))
+
+    def _fake_pose(_im: Image.Image, score_thresh: float = 0.55) -> FacePose:
+        return FacePose(
+            right_eye=(102.0, 106.0),
+            left_eye=(154.0, 106.0),
+            nose=(128.0, 132.0),
+            eye_center=(128.0, 106.0),
+            ipd=52.0,
+            yaw=0.0,
+            bbox=(76.0, 32.0, 104.0, 158.0),
+        )
+
+    def _fake_seg(im: Image.Image) -> np.ndarray:
+        arr = np.asarray(im.convert("RGBA"))
+        h, w = arr.shape[:2]
+        probs = np.zeros((h, w, 6), dtype=np.float32)
+        fg = arr[:, :, 3] > 20
+        probs[:, :, 3] = np.where(fg, 0.92, 0.01)
+        probs[:, :, 0] = np.where(~fg, 0.97, 0.02)
+        return probs
+
+    monkeypatch.setattr(vision_mod, "detect_face_pose", _fake_pose)
+    monkeypatch.setattr(vision_mod, "segment_portrait_classes", _fake_seg)
+
+    vp = suggest_safe_crop_viewport(face_im)
+    head_asset = extract_clean_head_and_neck(face_im, is_pre_cutout=True, crop_viewport=vp)
+    base_fit = fit_head_to_shirt_template(head_asset, collar)
+
+    wide_counts: dict[float, int] = {}
+    for nf in (0.0, 0.35, 0.70, 1.00, 1.40):
+        card = compose_modular_df11(
+            head_asset=head_asset,
+            shirt_rgba=shirt,
+            collar=collar,
+            fit=HeadFitParams(
+                scale=base_fit.scale,
+                offset_x=base_fit.offset_x,
+                offset_y=base_fit.offset_y,
+                neck_fill=nf,
+                harmonize=False,
+            ),
+            bg_mode="transparent",
+        )
+        arr = np.asarray(card)
+        band = arr[184:218, 78:182]
+        is_skin_px = (band[:, :, 3] > 180) & (band[:, :, 0] > 120) & (band[:, :, 0].astype(int) > band[:, :, 2].astype(int) + 15)
+        wide_counts[nf] = int(is_skin_px.sum())
+
+    assert wide_counts[0.0] < wide_counts[0.35] < wide_counts[0.70] < wide_counts[1.00] < wide_counts[1.40], wide_counts
+
+    # Transparent DF11 card with wide dark hair covering upper-left window [24:90, 24:54] + chest while (40, 260) is (0,0,0,0)
+    afro_person = Image.new("RGBA", (DF11_WIDTH, DF11_HEIGHT), (0, 0, 0, 0))
+    adraw = ImageDraw.Draw(afro_person)
+    adraw.rectangle([20, 20, 180, 140], fill=(28, 24, 22, 255))
+    adraw.rectangle([90, 195, 170, 285], fill=(30, 60, 140, 255))
+    trans_card = render_df11_card(afro_person, bg_mode="transparent")
+    unframed, is_pre = prepare_facepack_card_for_head_extraction(trans_card)
+    assert is_pre is False
+    px_r, px_g, px_b, px_a = unframed.getpixel((40, 260))
+    assert px_a == 255 and px_r > 200 and px_g > 200 and px_b > 200
+
+

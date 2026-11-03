@@ -920,15 +920,19 @@ def get_club_shirt_template(
     club_id: str,
     tpl_dir: Path | None = None,
     db_path: Path | None = None,
+    category: str | None = "player",
 ) -> ShirtTemplate | None:
-    """Return the active titular player ShirtTemplate bound to club_id (or fallback to any matching club_id)."""
+    """Return the active titular ShirtTemplate bound to club_id matching category (defaults strictly to 'player')."""
     cid = club_id.strip().lstrip("#")
     if not cid:
         return None
     items = sync_tshirt_templates_dir(tpl_dir=tpl_dir, db_path=db_path)
+    if category in ("player", "staff"):
+        return (
+            next((t for t in items if t.club_id == cid and t.category == category and t.is_active_for_club), None)
+            or next((t for t in items if t.club_id == cid and t.category == category), None)
+        )
     return (
-        next((t for t in items if t.club_id == cid and t.category == "player" and t.is_active_for_club), None)
-        or next((t for t in items if t.club_id == cid and t.category == "player"), None)
-        or next((t for t in items if t.club_id == cid and t.is_active_for_club), None)
+        next((t for t in items if t.club_id == cid and t.is_active_for_club), None)
         or next((t for t in items if t.club_id == cid), None)
     )

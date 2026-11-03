@@ -1,5 +1,24 @@
 # Changelog Técnico — DF11 Face Studio
 
+## [1.3.0] - 2026-11-03
+### Added
+- **Controles de precisión milimétrica en Paso 1 (`StudioView.tsx` + `backend/services/head_neck.py`)**:
+  - Desplazamiento de la cabeza y de la zona de corte tanto con el ratón como con las teclas direccionales `←` `↑` `↓` `→` (`1 px` normal, `5 px` con `Shift`) con agrupación inteligente en la pila `Deshacer / Rehacer`.
+  - Componente `PercentStepperControl` para **`Zoom`** (`15%–220%`) y **`Cuello`** (`0%–150%`): barra deslizante + cuadro de texto numérico exacto + botones de flecha arriba/abajo (`±1%`) situados inmediatamente a su derecha.
+- **Clasificación exclusiva `Plantilla` | `Staff` en plantillas textiles (`kits.py` v3, `templates.py`, `ShirtExtractorTool.tsx`, `StudioView.tsx`)**:
+  - Eliminadas del Paso 2 las pestañas generativas de baja calidad (`Original / Sin`, `Club`, `Polo Staff`, `Traje Staff`), dejando únicamente **`Plantilla`** (`player`) y **`Staff`** (`staff`).
+  - Migración automática SQLite `PRAGMA user_version = 3` con columna `category` e invariante de prenda titular activa independiente por par `(club_id, category)`.
+  - Selector de destino `Plantilla` | `Staff` al extraer o editar prendas en `Extraer Camiseta` y en el Paso 2.
+- **Remix de fichas ya montadas de Packs de Faces FM (`studio_workflow.py`, `head_neck.py`, `bridge.py`, `StudioView.tsx`)**:
+  - Endpoints IPC `pick_facepack_card`, `load_facepack_card`, `switch_facepack_remix_mode` y `save_adhoc_shirt_template`.
+  - Modo `swap_shirt` (*Cambiar camiseta a ficha FM*): des-enmarca anillos exteriores `Alpha = 0` de tarjetas DF11 con fondo opaco (`prepare_facepack_card_for_head_extraction`) antes de ejecutar `BiRefNet`, extrae cabeza y cuello limpios y autocompleta el `<UID>` del jugador.
+  - Modo `swap_face` (*Cambiar cara conservando su camiseta*): aísla la camiseta original de la ficha en una capa en memoria `adhoc:shirt-<N>` para vestir cualquier cara nueva o guardarla en `tshirt_templates`.
+- **Doble destino de exportación en Paso 4 (`bridge.py`, `fm_config.py`, `StudioView.tsx`)**:
+  - Selector explícito entre **1. Nuestras creaciones** (`exportDir`) y **2. Pack de Faces FM** (`facepackDir`, guardando `<UID>.png` con validación de ruta aprobada `_require_approved` y fast-path idempotente en `upsert_fm_config_xml` para no reescribir `config.xml` masivos cuando el `<UID>` ya está registrado).
+
+### Fixed
+- **Engrosamiento progresivo real del cuello (`Cuello` / `neckFill`) en `backend/services/head_neck.py`**: corregido `_build_directional_neck_bridge` y `_build_collar_funnel_mask`, donde `in_lower_socket` forzaba antes el 100% del ancho del escote `[x_l+2 .. x_r-2]` para todo `neck_fill > 0.01`; ahora `neck_fill` interpola de forma continua y monótona la anchura anatómica del cuello desde perfil estrecho hasta llenado convexo completo del cuello de la camiseta (`0%` a `150%`).
+
 ## [1.2.0] - 2026-11-03
 ### Added
 - **Motor de extracción textil `2× SSAA` (`520 × 620 -> 260 × 310`) en `backend/services/templates.py`**: super-muestreo `2×` con *Edge-Guided Collar Matting* en espacio perceptual `OKLab`, descontaminación exclusiva de borde (`fg_shirt < 0.93` preservando el 100% del RGB interior de escudos y patrocinadores), micro-contraste regulable en luminancia (`detailCrispness` / `Nitidez textil`), reducción `Lanczos` premultiplicada sin halos oscuros y compresión PNG `optimize=True, compress_level=9` (`~28–45 KB` por plantilla, `0 MB` extra en modelos).

@@ -116,31 +116,40 @@ const INITIAL_SNAP: LayerSnapshot = {
 };
 
 interface PercentStepperProps {
+  sessionPrefix: string;
   label: string;
   sliderAriaLabel: string;
   inputAriaLabel: string;
   upAriaLabel: string;
   downAriaLabel: string;
+  titleHint?: string;
   value: number;
   minPct: number;
   maxPct: number;
-  onChangeValue: (nextRatio: number) => void;
+  onChangeValue: (nextRatio: number, sessionKey?: string) => void;
+  onEndSession: (sessionKey?: string) => void;
 }
 
 function PercentStepperControl({
+  sessionPrefix,
   label,
   sliderAriaLabel,
   inputAriaLabel,
   upAriaLabel,
   downAriaLabel,
+  titleHint,
   value,
   minPct,
   maxPct,
   onChangeValue,
+  onEndSession,
 }: PercentStepperProps) {
   const pct = Math.round(value * 100);
   const [draft, setDraft] = useState(() => String(pct));
   const focusedRef = useRef(false);
+  const sliderDragRef = useRef(false);
+  const inputSessionKey = `${sessionPrefix}:input`;
+  const sliderSessionKey = `${sessionPrefix}:slider`;
 
   useEffect(() => {
     if (!focusedRef.current) {
@@ -148,14 +157,14 @@ function PercentStepperControl({
     }
   }, [pct]);
 
-  const applyClampedPct = (rawPct: number) => {
+  const applyClampedPct = (rawPct: number, sessionKey?: string) => {
     const clamped = Math.min(maxPct, Math.max(minPct, Math.round(rawPct)));
     setDraft(String(clamped));
-    onChangeValue(Number((clamped / 100).toFixed(2)));
+    onChangeValue(Number((clamped / 100).toFixed(2)), sessionKey);
   };
 
   return (
-    <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300 tabular-nums">
+    <div title={titleHint} className="flex items-center gap-2 text-slate-700 dark:text-slate-300 tabular-nums">
       <span className="shrink-0 font-medium">{label}</span>
       <input
         aria-label={sliderAriaLabel}
@@ -164,7 +173,23 @@ function PercentStepperControl({
         max={maxPct}
         step={1}
         value={pct}
-        onChange={(e) => applyClampedPct(Number(e.target.value))}
+        onPointerDown={() => {
+          sliderDragRef.current = true;
+          onEndSession();
+        }}
+        onPointerUp={() => {
+          sliderDragRef.current = false;
+          onEndSession(sliderSessionKey);
+        }}
+        onPointerCancel={() => {
+          sliderDragRef.current = false;
+          onEndSession(sliderSessionKey);
+        }}
+        onBlur={() => {
+          sliderDragRef.current = false;
+          onEndSession(sliderSessionKey);
+        }}
+        onChange={(e) => applyClampedPct(Number(e.target.value), sliderDragRef.current ? sliderSessionKey : undefined)}
         className="w-full min-w-[68px] accent-emerald-600"
       />
       <div className="shrink-0 inline-flex items-center">
@@ -176,6 +201,7 @@ function PercentStepperControl({
             value={draft}
             onFocus={() => {
               focusedRef.current = true;
+              onEndSession();
             }}
             onChange={(e) => {
               const cleaned = e.target.value.replace(/[^0-9]/g, '').slice(0, 3);
@@ -183,7 +209,7 @@ function PercentStepperControl({
               if (cleaned !== '') {
                 const parsed = Number(cleaned);
                 if (parsed >= minPct && parsed <= maxPct) {
-                  onChangeValue(Number((parsed / 100).toFixed(2)));
+                  onChangeValue(Number((parsed / 100).toFixed(2)), inputSessionKey);
                 }
               }
             }}
@@ -191,20 +217,26 @@ function PercentStepperControl({
               focusedRef.current = false;
               if (draft === '') {
                 setDraft(String(pct));
+                onEndSession(inputSessionKey);
                 return;
               }
-              applyClampedPct(Number(draft));
+              applyClampedPct(Number(draft), inputSessionKey);
+              onEndSession(inputSessionKey);
             }}
             onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y')) {
+                e.currentTarget.blur();
+                return;
+              }
               if (e.key === 'Enter') {
                 e.preventDefault();
                 e.currentTarget.blur();
               } else if (e.key === 'ArrowUp') {
                 e.preventDefault();
-                applyClampedPct((draft !== '' ? Number(draft) : pct) + 1);
+                applyClampedPct((draft !== '' ? Number(draft) : pct) + 1, inputSessionKey);
               } else if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                applyClampedPct((draft !== '' ? Number(draft) : pct) - 1);
+                applyClampedPct((draft !== '' ? Number(draft) : pct) - 1, inputSessionKey);
               }
             }}
             className="w-14 pl-1.5 pr-4 py-1 text-right text-xs font-mono rounded-l-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
@@ -255,12 +287,19 @@ export default function StudioView({
 
   const [templates, setTemplates] = useState<ShirtTemplateInfo[]>([]);
   const templatesRef = useRef<ShirtTemplateInfo[]>([]);
+  const allowInitialAutoSelectRef = useRef(!initialJump);
   const [faces, setFaces] = useState<SavedFaceInfo[]>([]);
 
-  const [history, setHistory] = useState<{ past: LayerSnapshot[]; present: LayerSnapshot; future: LayerSnapshot[] }>({
+  const [history, setHistory] = useState<{
+    past: LayerSnapshot[];
+    present: LayerSnapshot;
+    future: LayerSnapshot[];
+    sessionKey: string | null;
+  }>({
     past: [],
     present: INITIAL_SNAP,
     future: [],
+    sessionKey: null,
   });
   const snap = history.present;
 
@@ -274,12 +313,18 @@ export default function StudioView({
     label: string;
     detectedUid: string;
     mode: 'swap_shirt' | 'swap_face';
+    headAssetId?: string;
+    adhocShirtId?: string;
   } | null>(null);
-  const [adhocShirt, setAdhocShirt] = useState<{
-    id: string;
-    label: string;
-    thumbDataUrl: string;
-  } | null>(null);
+  const [adhocShirtsById, setAdhocShirtsById] = useState<
+    Record<string, { id: string; label: string; thumbDataUrl: string }>
+  >({});
+  const [latestAdhocShirtId, setLatestAdhocShirtId] = useState('');
+  const adhocShirt = snap.templateId.startsWith('adhoc:')
+    ? (adhocShirtsById[snap.templateId] ?? (latestAdhocShirtId ? adhocShirtsById[latestAdhocShirtId] : null) ?? null)
+    : latestAdhocShirtId
+    ? (adhocShirtsById[latestAdhocShirtId] ?? null)
+    : null;
 
   const [previewUrl, setPreviewUrl] = useState('');
   const [busy, setBusy] = useState(false);
@@ -314,6 +359,7 @@ export default function StudioView({
   const effectiveFacepackDir = facepackDir || localFacepackDir;
 
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number; baseSnap?: LayerSnapshot } | null>(null);
+  const bokehDragRef = useRef(false);
   const arrowBurstTsRef = useRef(0);
   const reqSeqRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -321,14 +367,47 @@ export default function StudioView({
   const facepackInputRef = useRef<HTMLInputElement>(null);
   const pendingRemixModeRef = useRef<'swap_shirt' | 'swap_face'>('swap_shirt');
 
-  const commitSnap = useCallback((updater: (prev: LayerSnapshot) => LayerSnapshot) => {
+  const endEditSession = useCallback((sessionKey?: string) => {
     setHistory((h) => {
-      const next = updater(h.present);
-      if (JSON.stringify(next) === JSON.stringify(h.present)) return h;
-      const past = [...h.past.slice(-34), h.present];
-      return { past, present: next, future: [] };
+      if (!h.sessionKey) return h;
+      if (sessionKey && h.sessionKey !== sessionKey) return h;
+      return { ...h, sessionKey: null };
     });
   }, []);
+
+  const commitSnap = useCallback((updater: (prev: LayerSnapshot) => LayerSnapshot) => {
+    allowInitialAutoSelectRef.current = false;
+    setHistory((h) => {
+      const next = updater(h.present);
+      if (JSON.stringify(next) === JSON.stringify(h.present)) {
+        return h.sessionKey ? { ...h, sessionKey: null } : h;
+      }
+      const past = [...h.past.slice(-34), h.present];
+      return { past, present: next, future: [], sessionKey: null };
+    });
+  }, []);
+
+  const commitSessionSnap = useCallback(
+    (sessionKey: string | undefined, updater: (prev: LayerSnapshot) => LayerSnapshot) => {
+      if (!sessionKey) {
+        commitSnap(updater);
+        return;
+      }
+      allowInitialAutoSelectRef.current = false;
+      setHistory((h) => {
+        const next = updater(h.present);
+        if (JSON.stringify(next) === JSON.stringify(h.present)) return h;
+        if (h.sessionKey === sessionKey) {
+          if (h.past.length > 0 && JSON.stringify(next) === JSON.stringify(h.past[h.past.length - 1])) {
+            return { past: h.past.slice(0, -1), present: next, future: [], sessionKey: null };
+          }
+          return { ...h, present: next };
+        }
+        return { past: [...h.past.slice(-34), h.present], present: next, future: [], sessionKey };
+      });
+    },
+    [commitSnap],
+  );
 
   const replaceLiveSnap = useCallback((updater: (prev: LayerSnapshot) => LayerSnapshot) => {
     setHistory((h) => ({ ...h, present: updater(h.present) }));
@@ -340,7 +419,7 @@ export default function StudioView({
     setHistory((h) => {
       if (h.past.length === 0) return h;
       const prev = h.past[h.past.length - 1];
-      return { past: h.past.slice(0, -1), present: prev, future: [h.present, ...h.future] };
+      return { past: h.past.slice(0, -1), present: prev, future: [h.present, ...h.future], sessionKey: null };
     });
   }, []);
 
@@ -350,7 +429,7 @@ export default function StudioView({
     setHistory((h) => {
       if (h.future.length === 0) return h;
       const [next, ...rest] = h.future;
-      return { past: [...h.past, h.present], present: next, future: rest };
+      return { past: [...h.past, h.present], present: next, future: rest, sessionKey: null };
     });
   }, []);
 
@@ -359,8 +438,10 @@ export default function StudioView({
       setCropStage(null);
       return;
     }
-    if (!snap.headAssetId && !previewUrl) return;
-    setPreviewUrl('');
+    if (!snap.headAssetId) return;
+    if (!snap.templateId) {
+      setPreviewUrl('');
+    }
     setCanExtractBg(false);
     commitSnap((s) => ({
       ...s,
@@ -370,28 +451,46 @@ export default function StudioView({
       offsetX: 0,
       offsetY: 0,
     }));
-  }, [cropStage, snap.headAssetId, previewUrl, commitSnap]);
+  }, [cropStage, snap.headAssetId, snap.templateId, commitSnap]);
 
   const handleTemplatesUpdated = useCallback((nextTemplates: ShirtTemplateInfo[]) => {
+    const prevTemplates = templatesRef.current;
     templatesRef.current = nextTemplates;
     setTemplates(nextTemplates);
     setConfirmDeleteTpl(false);
+    const shouldSeedInitialPlayer = allowInitialAutoSelectRef.current;
+    if (nextTemplates.length > 0) {
+      allowInitialAutoSelectRef.current = false;
+    }
     setHistory((h) => {
       const validIds = new Set(nextTemplates.map((t) => t.templateId));
       const firstPlayer = nextTemplates.find((t) => (t.category ?? 'player') === 'player');
-      const fallbackTid = (firstPlayer ?? nextTemplates[0])?.templateId ?? '';
+      const firstStaff = nextTemplates.find((t) => t.category === 'staff');
       let changed = false;
-      const fixSnap = (sn: LayerSnapshot): LayerSnapshot => {
-        if (sn.templateId.startsWith('adhoc:')) return sn;
-        if (!sn.templateId ? !fallbackTid : validIds.has(sn.templateId)) return sn;
-        if (sn.templateId === fallbackTid) return sn;
+      const fixDeletedSnap = (sn: LayerSnapshot): LayerSnapshot => {
+        if (!sn.templateId || sn.templateId.startsWith('adhoc:') || validIds.has(sn.templateId)) {
+          return sn;
+        }
+        const prevCat = prevTemplates.find((t) => t.templateId === sn.templateId)?.category ?? 'player';
+        const replacementTid = prevCat === 'staff' ? (firstStaff?.templateId ?? '') : (firstPlayer?.templateId ?? '');
+        if (sn.templateId === replacementTid) return sn;
         changed = true;
-        return { ...sn, templateId: fallbackTid };
+        return { ...sn, templateId: replacementTid };
       };
-      const nextPresent = fixSnap(h.present);
-      const nextPast = h.past.map(fixSnap);
-      const nextFuture = h.future.map(fixSnap);
-      return changed ? { past: nextPast, present: nextPresent, future: nextFuture } : h;
+      let nextPresent = fixDeletedSnap(h.present);
+      if (
+        shouldSeedInitialPlayer &&
+        !nextPresent.templateId &&
+        !nextPresent.headAssetId &&
+        h.past.length === 0 &&
+        firstPlayer
+      ) {
+        changed = true;
+        nextPresent = { ...nextPresent, templateId: firstPlayer.templateId };
+      }
+      const nextPast = h.past.map(fixDeletedSnap);
+      const nextFuture = h.future.map(fixDeletedSnap);
+      return changed ? { ...h, past: nextPast, present: nextPresent, future: nextFuture } : h;
     });
   }, []);
 
@@ -431,6 +530,9 @@ export default function StudioView({
   // Handle jump from NG_Regens Sync tab
   useEffect(() => {
     if (!initialJump) return;
+    allowInitialAutoSelectRef.current = false;
+    setLoadedFacepackCard(null);
+    setLatestAdhocShirtId('');
     setToolTab('composer');
     setActiveStep(1);
     setCropStage(null);
@@ -446,17 +548,15 @@ export default function StudioView({
       : jumpClubId
       ? templates.find(
           (t) => t.clubId === jumpClubId && (t.category ?? 'player') === 'player' && t.isActiveForClub !== false,
-        ) || templates.find((t) => t.clubId === jumpClubId)
+        ) || templates.find((t) => t.clubId === jumpClubId && (t.category ?? 'player') === 'player')
       : undefined;
-    if (matchedTpl?.category) {
-      setStep2Category(matchedTpl.category === 'staff' ? 'staff' : 'player');
-    }
+    setStep2Category(matchedTpl?.category === 'staff' ? 'staff' : 'player');
     commitSnap((s) => ({
       ...s,
       headAssetId: initialJump.headAssetId ?? 'legacy-jump',
       faceLabel: initialJump.uid,
       wearMode: 'template',
-      templateId: matchedTpl ? matchedTpl.templateId : s.templateId,
+      templateId: matchedTpl ? matchedTpl.templateId : '',
       clubId: jumpClubId || s.clubId,
       scale: initialJump.autoFit?.scale ?? 1.0,
       offsetX: initialJump.autoFit?.offsetX ?? 0,
@@ -661,7 +761,7 @@ export default function StudioView({
   );
 
   const applyFacepackRemixResult = useCallback(
-    (res: FacepackRemixResponse) => {
+    (res: FacepackRemixResponse, isSameCardSwitch: boolean) => {
       reqSeqRef.current += 1;
       setCropStage(null);
       setErrorMsg('');
@@ -674,18 +774,22 @@ export default function StudioView({
         setExportTarget('facepack');
         setFmt('png');
       }
-      setLoadedFacepackCard({
+      setLoadedFacepackCard((prev) => ({
         label: res.cardLabel || res.detectedUid || 'Ficha FM',
         detectedUid: res.detectedUid ?? '',
         mode: res.remixMode,
-      });
+        headAssetId: isSameCardSwitch ? (res.headAssetId || prev?.headAssetId) : res.headAssetId,
+        adhocShirtId: isSameCardSwitch ? (res.adhocShirtId || prev?.adhocShirtId) : res.adhocShirtId,
+      }));
 
       if (res.remixMode === 'swap_face' && res.adhocShirtId) {
-        setAdhocShirt({
+        const entry = {
           id: res.adhocShirtId,
           label: res.adhocShirtLabel || `Camiseta ficha ${res.cardLabel}`,
           thumbDataUrl: res.adhocShirtThumbDataUrl || '',
-        });
+        };
+        setAdhocShirtsById((prev) => ({ ...prev, [entry.id]: entry }));
+        setLatestAdhocShirtId(entry.id);
         if (res.previewDataUrl) setPreviewUrl(res.previewDataUrl);
         commitSnap((s) => ({
           ...s,
@@ -700,10 +804,14 @@ export default function StudioView({
         return;
       }
 
+      if (!isSameCardSwitch) {
+        setLatestAdhocShirtId('');
+      }
       setActiveStep(1);
       setCanExtractBg(!res.isPreCutout);
       if (res.previewDataUrl) setPreviewUrl(res.previewDataUrl);
-      const nextTid = res.templateId || snap.templateId;
+      const fallbackPrevTid = snap.templateId.startsWith('adhoc:') ? '' : snap.templateId;
+      const nextTid = res.templateId !== undefined ? res.templateId : fallbackPrevTid;
       const foundTpl = templatesRef.current.find((t) => t.templateId === nextTid);
       if (foundTpl) {
         setStep2Category((foundTpl.category ?? 'player') === 'staff' ? 'staff' : 'player');
@@ -736,13 +844,14 @@ export default function StudioView({
       setErrorMsg('');
       setSavedMsg('');
       try {
+        const reqTemplateId = snap.templateId.startsWith('adhoc:') ? '' : snap.templateId;
         const res = await callBridge<FacepackRemixResponse | null>(
           'pick_facepack_card',
           mode,
-          snap.templateId,
+          reqTemplateId,
           composePayload,
         );
-        if (res) applyFacepackRemixResult(res);
+        if (res) applyFacepackRemixResult(res, false);
       } catch (e) {
         setErrorMsg(e instanceof Error ? e.message : 'No se pudo cargar la ficha del Pack de Faces.');
       } finally {
@@ -769,15 +878,16 @@ export default function StudioView({
           r.onerror = () => rej(new Error('No se pudo leer la ficha.'));
           r.readAsDataURL(file);
         });
+        const reqTemplateId = snap.templateId.startsWith('adhoc:') ? '' : snap.templateId;
         const out = await callBridge<FacepackRemixResponse>(
           'load_facepack_card',
           dataUrl,
           file.name,
           mode,
-          snap.templateId,
+          reqTemplateId,
           composePayload,
         );
-        if (out) applyFacepackRemixResult(out);
+        if (out) applyFacepackRemixResult(out, false);
       } catch (e) {
         setErrorMsg(e instanceof Error ? e.message : 'No se pudo desmontar la ficha de Football Manager.');
       } finally {
@@ -787,16 +897,25 @@ export default function StudioView({
     [busy, snap.templateId, composePayload, applyFacepackRemixResult],
   );
 
+  const isUsingCardFace = Boolean(
+    loadedFacepackCard?.headAssetId &&
+      snap.headAssetId === loadedFacepackCard.headAssetId &&
+      !snap.templateId.startsWith('adhoc:'),
+  );
+  const isUsingCardShirt = Boolean(
+    loadedFacepackCard?.adhocShirtId && snap.templateId === loadedFacepackCard.adhocShirtId,
+  );
+
   const handleSwitchFacepackMode = useCallback(
     async (mode: 'swap_shirt' | 'swap_face') => {
-      if (busy || !loadedFacepackCard || loadedFacepackCard.mode === mode) return;
+      if (busy || !loadedFacepackCard) return;
+      if (mode === 'swap_shirt' && isUsingCardFace) return;
+      if (mode === 'swap_face' && isUsingCardShirt) return;
       setBusy(true);
       setErrorMsg('');
       try {
         const targetTpl = snap.templateId.startsWith('adhoc:')
-          ? (templatesRef.current.find((t) => (t.category ?? 'player') === step2Category)?.templateId ??
-            templatesRef.current[0]?.templateId ??
-            '')
+          ? (templatesRef.current.find((t) => (t.category ?? 'player') === step2Category)?.templateId ?? '')
           : snap.templateId;
         const res = await callBridge<FacepackRemixResponse>(
           'switch_facepack_remix_mode',
@@ -804,14 +923,23 @@ export default function StudioView({
           targetTpl,
           composePayload,
         );
-        if (res) applyFacepackRemixResult(res);
+        if (res) applyFacepackRemixResult(res, true);
       } catch (e) {
         setErrorMsg(e instanceof Error ? e.message : 'No se pudo cambiar el modo de edición de la ficha.');
       } finally {
         setBusy(false);
       }
     },
-    [busy, loadedFacepackCard, snap.templateId, step2Category, composePayload, applyFacepackRemixResult],
+    [
+      busy,
+      loadedFacepackCard,
+      isUsingCardFace,
+      isUsingCardShirt,
+      snap.templateId,
+      step2Category,
+      composePayload,
+      applyFacepackRemixResult,
+    ],
   );
 
   const handleSaveAdhocShirt = async () => {
@@ -831,7 +959,7 @@ export default function StudioView({
       if (res?.clubs) onClubsUpdated?.(res.clubs);
       if (Array.isArray(res?.templates)) handleTemplatesUpdated(res.templates);
       if (res?.savedTemplateId) {
-        setAdhocShirt(null);
+        setLatestAdhocShirtId('');
         commitSnap((s) => ({ ...s, templateId: res.savedTemplateId }));
         setSavedMsg(`Camiseta guardada en plantillas (${step2Category === 'staff' ? 'Staff' : 'Plantilla'}): ${res.savedTemplateId}.png`);
       }
@@ -957,10 +1085,14 @@ export default function StudioView({
       const tag = el?.tagName?.toLowerCase();
       if (tag === 'textarea' || tag === 'select') return;
 
-      // Directional arrow keys move head/crop when Paso 1 is active and focus is NOT on any <input>
+      const inputType = tag === 'input' ? ((el as HTMLInputElement).type || 'text').toLowerCase() : '';
+      const blocksDirectionalArrows =
+        tag === 'input' && !['checkbox', 'radio', 'button', 'color', 'file'].includes(inputType);
+
+      // Directional arrow keys move head/crop when Paso 1 is active and focus is NOT on a text/numeric/range input
       if (
         activeStep === 1 &&
-        tag !== 'input' &&
+        !blocksDirectionalArrows &&
         (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight' || ev.key === 'ArrowUp' || ev.key === 'ArrowDown')
       ) {
         const step = ev.shiftKey ? 5 : 1;
@@ -983,8 +1115,8 @@ export default function StudioView({
               offsetY: h.present.offsetY + dy,
             };
             return shouldPush
-              ? { past: [...h.past.slice(-34), h.present], present: next, future: [] }
-              : { ...h, present: next };
+              ? { past: [...h.past.slice(-34), h.present], present: next, future: [], sessionKey: null }
+              : { ...h, present: next, sessionKey: null };
           });
           return;
         }
@@ -1134,14 +1266,12 @@ export default function StudioView({
     setErrorMsg('');
     try {
       const effectiveFmt = exportTarget === 'facepack' ? 'png' : fmt;
-      const method =
-        snap.headAssetId === 'legacy-jump' && exportTarget === 'creations'
-          ? 'export_studio_card'
-          : 'export_modular_card';
+      const method = snap.headAssetId === 'legacy-jump' ? 'export_studio_card' : 'export_modular_card';
       const res = await callBridge<{ savedPath: string }>(method, {
         uid: cleanUid,
         fmt: effectiveFmt,
         exportTarget,
+        outDir: exportTarget === 'facepack' ? activeFpDir : undefined,
         updateConfigXml: updateXml,
         ...composePayload,
       });
@@ -1287,7 +1417,7 @@ export default function StudioView({
                   type="button"
                   aria-label="Limpiar imagen editada"
                   title="Limpiar cara (Supr)"
-                  disabled={!cropStage && !snap.headAssetId && !previewUrl}
+                  disabled={!cropStage && !snap.headAssetId}
                   onClick={handleClearCanvas}
                   className="p-1.5 rounded-md bg-slate-100 dark:bg-slate-800 text-rose-600 dark:text-rose-400 disabled:opacity-35 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition"
                 >
@@ -1349,7 +1479,7 @@ export default function StudioView({
                     setHistory((h) =>
                       prevBase.offsetX === h.present.offsetX && prevBase.offsetY === h.present.offsetY
                         ? h
-                        : { past: [...h.past.slice(-34), prevBase], present: h.present, future: [] },
+                        : { past: [...h.past.slice(-34), prevBase], present: h.present, future: [], sessionKey: null },
                     );
                   }
                   dragRef.current = null;
@@ -1592,7 +1722,7 @@ export default function StudioView({
                         type="button"
                         disabled={busy}
                         onClick={() => void handleSwitchFacepackMode('swap_shirt')}
-                        className={segBtn(loadedFacepackCard.mode === 'swap_shirt')}
+                        className={segBtn(isUsingCardFace)}
                       >
                         Usar su cara
                       </button>
@@ -1600,7 +1730,7 @@ export default function StudioView({
                         type="button"
                         disabled={busy}
                         onClick={() => void handleSwitchFacepackMode('swap_face')}
-                        className={segBtn(loadedFacepackCard.mode === 'swap_face')}
+                        className={segBtn(isUsingCardShirt)}
                       >
                         Usar su camiseta
                       </button>
@@ -1638,6 +1768,7 @@ export default function StudioView({
                 </label>
                 <div className="sm:col-span-5">
                   <PercentStepperControl
+                    sessionPrefix="zoom"
                     label="Zoom"
                     sliderAriaLabel="Barra de Zoom de cabeza"
                     inputAriaLabel="Valor exacto de Zoom (%)"
@@ -1646,20 +1777,26 @@ export default function StudioView({
                     value={snap.scale}
                     minPct={15}
                     maxPct={220}
-                    onChangeValue={(nextScale) => commitSnap((s) => ({ ...s, scale: nextScale }))}
+                    onChangeValue={(nextScale, skey) => commitSessionSnap(skey, (s) => ({ ...s, scale: nextScale }))}
+                    onEndSession={endEditSession}
                   />
                 </div>
                 <div className="sm:col-span-5">
                   <PercentStepperControl
+                    sessionPrefix="neck"
                     label="Cuello"
                     sliderAriaLabel="Barra de engrosamiento de cuello"
                     inputAriaLabel="Valor exacto de Cuello (%)"
                     upAriaLabel="Subir Cuello"
                     downAriaLabel="Bajar Cuello"
+                    titleHint={
+                      !snap.templateId ? 'Se aplica al engarzar la cabeza con la camiseta o traje del Paso 2' : undefined
+                    }
                     value={snap.neckFill}
                     minPct={0}
                     maxPct={150}
-                    onChangeValue={(nextNeck) => commitSnap((s) => ({ ...s, neckFill: nextNeck }))}
+                    onChangeValue={(nextNeck, skey) => commitSessionSnap(skey, (s) => ({ ...s, neckFill: nextNeck }))}
+                    onEndSession={endEditSession}
                   />
                 </div>
               </div>
@@ -1982,7 +2119,28 @@ export default function StudioView({
                     step="0.5"
                     disabled={snap.bgMode === 'transparent'}
                     value={snap.bgBlur}
-                    onChange={(e) => commitSnap((s) => ({ ...s, bgBlur: Number(e.target.value) }))}
+                    onPointerDown={() => {
+                      bokehDragRef.current = true;
+                      endEditSession();
+                    }}
+                    onPointerUp={() => {
+                      bokehDragRef.current = false;
+                      endEditSession('bokeh:slider');
+                    }}
+                    onPointerCancel={() => {
+                      bokehDragRef.current = false;
+                      endEditSession('bokeh:slider');
+                    }}
+                    onBlur={() => {
+                      bokehDragRef.current = false;
+                      endEditSession('bokeh:slider');
+                    }}
+                    onChange={(e) =>
+                      commitSessionSnap(bokehDragRef.current ? 'bokeh:slider' : undefined, (s) => ({
+                        ...s,
+                        bgBlur: Number(e.target.value),
+                      }))
+                    }
                     className="w-full accent-emerald-600 disabled:opacity-40"
                   />
                   <span>{snap.bgBlur}px</span>

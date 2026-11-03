@@ -79,7 +79,14 @@ def prepare_facepack_card_for_head_extraction(raw_rgba: Image.Image, default_is_
     tl_opaque = float((alpha[24:90, 24:54] > 220).mean())
     tr_opaque = float((alpha[24:90, 206:236] > 220).mean())
     if max(tl_opaque, tr_opaque) >= 0.55:
-        # Opaque background inside DF11 bevel frame: replicate interior [21:290, 22:238] outward so BiRefNet strips wall cleanly
+        # Composite semi-transparent/transparent interior pixels over neutral light studio backdrop before solidifying alpha
+        a_f = arr[:, :, 3:4].astype(np.float32) / 255.0
+        arr[:, :, :3] = np.clip(
+            np.round(arr[:, :, :3].astype(np.float32) * a_f + 240.0 * (1.0 - a_f)),
+            0.0,
+            255.0,
+        ).astype(np.uint8)
+        # Replicate interior [21:290, 22:238] outward so BiRefNet strips wall cleanly
         arr[:21, 22:238, :3] = arr[21:22, 22:238, :3]
         arr[290:, 22:238, :3] = arr[289:290, 22:238, :3]
         arr[:, :22, :3] = arr[:, 22:23, :3]
@@ -384,13 +391,24 @@ def _build_collar_funnel_mask(
     w_col = float(max(x_r - x_l, 40))
     f_neck = float(np.clip(neck_fill, 0.0, 1.5)) if math.isfinite(float(neck_fill)) else 1.0
     ov = max(0.0, (f_neck - 1.0) / 0.5)
+    under = max(0.0, 1.0 - f_neck)
 
     ear_gate_y = max(40, int(round(chin_canvas_y - 40.0)))
     jaw_y = min(min(y_l, y_r) - 6, int(round(chin_canvas_y - 10.0)))
+    chin_neck_y = max(jaw_y + 4, min(min(y_l, y_r) - 2, int(round(chin_canvas_y + 2.0))))
     y_bot = min(DF11_HEIGHT - 1, y_v + 26)
     ear_half_w = (0.63 + 0.05 * ov) * w_col
     jaw_half_w = (0.50 + 0.14 * ov) * w_col
     rim_pad = int(round(3.0 * ov))
+    neck_inset_top = int(round(0.18 * w_col * under))
+    rim_inset = int(round(0.22 * w_col * under))
+
+    top_neck_r = round(min(cx + jaw_half_w + 2, max(cx + 12.0, x_r + 2 + rim_pad - neck_inset_top)))
+    top_neck_l = round(max(cx - jaw_half_w - 2, min(cx - 12.0, x_l - 2 - rim_pad + neck_inset_top)))
+    rim_r_x = round(max(cx + 10.0, x_r - 1 + rim_pad - rim_inset))
+    rim_l_x = round(min(cx - 10.0, x_l + 1 - rim_pad + rim_inset))
+    bot_r_x = round(max(cx + 12.0, x_r + 10 + rim_pad - rim_inset))
+    bot_l_x = round(min(cx - 12.0, x_l - 10 - rim_pad + rim_inset))
 
     mask_im = Image.new("L", (DF11_WIDTH, DF11_HEIGHT), 0)
     draw = ImageDraw.Draw(mask_im)
@@ -400,10 +418,12 @@ def _build_collar_funnel_mask(
             (round(cx - ear_half_w), ear_gate_y),
             (round(cx + ear_half_w), ear_gate_y),
             (round(cx + jaw_half_w + 2), jaw_y),
-            (x_r - 1 + rim_pad, y_r + 2),
-            (x_r + 10 + rim_pad, y_bot),
-            (x_l - 10 - rim_pad, y_bot),
-            (x_l + 1 - rim_pad, y_l + 2),
+            (top_neck_r, chin_neck_y),
+            (rim_r_x, y_r + 2),
+            (bot_r_x, y_bot),
+            (bot_l_x, y_bot),
+            (rim_l_x, y_l + 2),
+            (top_neck_l, chin_neck_y),
             (round(cx - jaw_half_w - 2), jaw_y),
         ],
         fill=255,

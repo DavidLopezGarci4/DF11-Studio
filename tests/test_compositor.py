@@ -110,3 +110,33 @@ def test_fm_config_xml_escapes_entities_and_deduplicates_subfolder_targets(tmp_p
     assert "club_a&amp;b/logo" in text
     assert "faces/29184012" not in text
     assert text.count("graphics/pictures/person/29184012/portrait") == 1
+
+
+def test_fm_config_xml_preserves_multi_target_from_icons_and_shared_defaults(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.xml"
+    cfg.write_text(
+        '<record>\n'
+        '\t<boolean id="preload" value="true"/>\n'
+        '\t<boolean id="amap" value="false"/>\n'
+        '\t<list id="maps">\n'
+        '\t\t<record from="10001" to="graphics/pictures/person/10001/portrait"/>\n'
+        '\t\t<record from="10001" to="graphics/pictures/person/10001/icon"/>\n'
+        '\t\t<record from="29184012" to="graphics/pictures/person/29184012/icon"/>\n'
+        '\t\t<record from="faces/29184012" to="graphics/pictures/person/29184012/portrait"/>\n'
+        '\t\t<record from="default" to="graphics/pictures/person/5001/portrait"/>\n'
+        '\t\t<record from="default" to="graphics/pictures/person/5002/portrait"/>\n'
+        '\t</list>\n'
+        '</record>\n',
+        encoding="utf-8",
+    )
+    upsert_fm_config_xml(cfg, ["29184012"])
+    text = cfg.read_text(encoding="utf-8")
+    assert 'id="preload" value="true"' in text
+    assert '<record from="10001" to="graphics/pictures/person/10001/portrait"/>' in text
+    assert '<record from="10001" to="graphics/pictures/person/10001/icon"/>' in text
+    assert '<record from="29184012" to="graphics/pictures/person/29184012/icon"/>' in text
+    assert '<record from="29184012" to="graphics/pictures/person/29184012/portrait"/>' in text
+    assert "faces/29184012" not in text
+    assert '<record from="default" to="graphics/pictures/person/5001/portrait"/>' in text
+    assert '<record from="default" to="graphics/pictures/person/5002/portrait"/>' in text
+

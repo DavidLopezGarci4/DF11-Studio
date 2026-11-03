@@ -216,7 +216,9 @@ def sync_ng_regens_batch(
         squad_clubs = dict(conn.execute("SELECT uid, club_id FROM squad_map").fetchall())
         club_tpls: dict[str, tuple[Path, str, str]] = {}
         for cid_raw, fname_raw, collar_raw, sha_raw in conn.execute(
-            "SELECT club_id, filename, collar_json, sha256 FROM shirt_templates WHERE club_id != '' ORDER BY LOWER(template_id) ASC"
+            "SELECT club_id, filename, collar_json, sha256 FROM shirt_templates "
+            "WHERE club_id != '' AND COALESCE(category, 'player') = 'player' "
+            "ORDER BY COALESCE(is_active_for_club, 1) DESC, LOWER(template_id) ASC"
         ).fetchall():
             cid_s, fname_s = str(cid_raw), str(fname_raw)
             if cid_s in club_tpls or not fname_s or Path(fname_s).name != fname_s or ".." in fname_s:

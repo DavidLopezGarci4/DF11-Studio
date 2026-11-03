@@ -1,92 +1,93 @@
 {
   "appName": "DF11 Face Studio",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "category": "Estudio Fotográfico Modular & Sincronizador DF11 para Football Manager",
-  "description": "Arquitectura de escritorio 100% local en proceso único: interfaz React 19 sobre WebView2 conectada sin puertos de red a un motor Python 3.12 con inferencia GPU DirectML y persistencia atómica NTFS/SQLite.",
+  "description": "Arquitectura de escritorio 100% local en proceso único: interfaz React 19 sobre WebView2 conectada sin puertos de red a un motor Python 3.12 con inferencia GPU DirectML, plantillas textiles reales 2× SSAA y persistencia atómica NTFS/SQLite.",
   "nodes": [
     {
       "id": "desktop_shell", "label": "pywebview 6.2 + WebView2", "version": "6.2.1",
       "role": "Contenedor Nativo de Escritorio sin Puertos HTTP", "category": "desktop_apps", "color": "#3b82f6", "icon": "Monitor", "healthType": "native_bridge",
-      "computationalModel": "Ventana nativa Win32/Edge WebView2 con canal IPC en proceso (window.pywebview.api) y aislamiento de capacidades de carpeta.",
+      "computationalModel": "Ventana nativa Win32/Edge WebView2 con canal IPC en proceso (window.pywebview.api) y aislamiento bidireccional de capacidades de carpeta.",
       "whyChosen": "Arranca en menos de 0.5 s reutilizando el motor WebView2 de Windows 11 sin empaquetar Chromium ni exponer puertos localhost.",
-      "useCases": ["Diálogos nativos de selección de carpetas con whitelist de capacidades", "Aislamiento de perfil en unidad D:\\ sin ensuciar C:\\ ni OneDrive"]
+      "useCases": ["Diálogos nativos con protección de solo lectura para NG_Regens", "Aislamiento de perfil en unidad D:\\ sin ensuciar C:\\ ni OneDrive"]
     },
     {
       "id": "ui_runtime", "label": "React 19 + Vite 6", "version": "19.0.0",
-      "role": "Interfaz de 3 Capas, Sincronizador y Visor Perezoso", "category": "local_web_apps", "color": "#f59e0b", "icon": "Atom", "healthType": "runtime",
-      "computationalModel": "Árbol declarativo Fiber con encuadre local a 60 FPS y sincronización diferida de 80 ms contra la fuente de verdad en Python.",
-      "whyChosen": "Garantiza arrastre fluido sin parpadeos y carga diferida (React.lazy) de herramientas secundarias con coste cero de arranque.",
-      "useCases": ["Encuadre interactivo DF11 con guías ópticas conmutables", "Gestión de lotes NG_Regens y resolución guiada frente a OneDrive"]
+      "role": "Estudio Modular de 4 Pasos, Extractores y Sincronizador", "category": "local_web_apps", "color": "#f59e0b", "icon": "Atom", "healthType": "runtime",
+      "computationalModel": "Árbol declarativo Fiber con encuadre por ratón y flechas direccionales, steppers exactos y carga diferida (React.lazy) del grafo TecnoRed.",
+      "whyChosen": "Garantiza arrastre fluido sin parpadeos, historial Undo/Redo coalescido y cero coste de arranque en modales secundarios.",
+      "useCases": ["Paso 1 con flechas ←↑↓→ y steppers exactos de Zoom y Cuello", "Paso 2 Plantilla/Staff, remix de fichas FM y Paso 4 de exportación dual"]
     },
     {
-      "id": "ipc_bridge", "label": "StudioBridge + Modular Session", "version": "1.2.0",
-      "role": "Orquestador IPC de Extractores, Capas y Watcher 650 ms", "category": "server_web_apps", "color": "#8b5cf6", "icon": "Workflow", "healthType": "native_bridge",
-      "computationalModel": "Fachada síncrona/asíncrona con carga perezosa de librerías pesadas, ThreadPoolExecutor(8) y observador con estabilización de 650 ms.",
-      "whyChosen": "Mantiene el arranque en frío instantáneo y procesa miles de regens en paralelo sin bloquear la ventana ni corromper lotes a mitad de escritura.",
-      "useCases": ["Escaneo de solo lectura del almacén NG_Regens con freno Shrink Guard del 50%", "Detección de rutas OneDrive en Steam/Epic vs Game Pass"]
+      "id": "ipc_bridge", "label": "StudioBridge + Modular Session", "version": "1.3.0",
+      "role": "Orquestador IPC de Extractores, Remix FM y Watcher 650 ms", "category": "server_web_apps", "color": "#8b5cf6", "icon": "Workflow", "healthType": "native_bridge",
+      "computationalModel": "Fachada síncrona/asíncrona con caché LRU acotada de caras/camisetas, ThreadPoolExecutor(8) y observador con estabilización de 650 ms.",
+      "whyChosen": "Mantiene el arranque en frío instantáneo y procesa miles de regens en paralelo sin bloquear la ventana ni corromper lotes.",
+      "useCases": ["Remix bidireccional de fichas ya montadas del Pack de Faces FM", "Sincronización NG_Regens aplicando solo plantillas titulares de jugador"]
     },
     {
       "id": "onnx_dml", "label": "ONNX Runtime DirectML", "version": "1.24.4",
       "role": "Inferencia GPU Local (BiRefNet-Lite, Selfie-Multiclass, YuNet)", "category": "ai_machine_learning", "color": "#f97316", "icon": "Cpu", "healthType": "hardware",
       "computationalModel": "Ejecución de grafos FP16/FP32 sobre DirectX 12 (AMD/NVIDIA/Intel) con ORT_ENABLE_BASIC y calentamiento en segundo plano.",
-      "whyChosen": "Ofrece recorte de cabello, segmentación de ropa (P_clothes = 0) y detección de pose facial 100% gratis y sin claves API.",
-      "useCases": ["Recorte sub-píxel de retratos caseros con limpieza de halo de 1.5 px", "Máscara multicapa de piel, pelo y torso para cambio limpio de camiseta"]
+      "whyChosen": "Ofrece recorte de cabello, aislamiento textil 2× SSAA y detección de pose facial 100% gratis y sin claves API.",
+      "useCases": ["Extracción limpia de cabeza/cuello y desmontaje de fichas DF11", "Extracción 2× SSAA de camisetas Plantilla y prendas Staff reales"]
     },
     {
       "id": "compositor_engine", "label": "Pillow 13 + Motor OKLab", "version": "13.0.0",
-      "role": "Compositor DF11 Exacto (260×310), Z-Stack y Tailwind v4", "category": "graphics_multimedia", "color": "#ec4899", "icon": "Layers", "healthType": "static",
-      "computationalModel": "Álgebra matricial RGBA en espacio perceptual OKLab (L ∈ [0.15, 0.95]), desenfoque gaussiano normalizado y marco DF11 sin pérdidas.",
-      "whyChosen": "Preserva pliegues y sombras textiles en equipaciones negras o blancas puras y clava el bisel y sombra exterior oficial DF11.",
-      "useCases": ["Apilado Z0..Z3 de camiseta de club, polo o traje sin cuellos antiguos", "Extracción de fondo limpio y exportación PNG 32-bit o JPG 4:4:4"]
+      "role": "Compositor DF11 Exacto (260×310), Puente de Cuello y Marco", "category": "graphics_multimedia", "color": "#ec4899", "icon": "Layers", "healthType": "static",
+      "computationalModel": "Álgebra matricial RGBA en espacio perceptual OKLab, puente columnar de cuello progresivo (0–150%) y marco DF11 con anillo Alpha = 0.",
+      "whyChosen": "Engarza cualquier cabeza sobre camisetas reales o trajes Staff sin cortes bruscos y clava el bisel y sombra oficial DF11.",
+      "useCases": ["Engrosamiento y estrechamiento continuo del cuello (0% a 150%)", "Exportación PNG 32-bit oficial o JPG 4:4:4 con iluminación OKLab"]
     },
     {
       "id": "local_storage", "label": "SQLite WAL + NTFS XML", "version": "ACID WAL",
-      "role": "Caché de Equipaciones, Plantillas y Escritura Atómica FM", "category": "local_persistence", "color": "#06b6d4", "icon": "Database", "healthType": "storage",
-      "computationalModel": "Base SQLite en modo WAL junto a reemplazo atómico NTFS con reintento ante bloqueo de antivirus/OneDrive y defusedxml.",
-      "whyChosen": "Impide corromper el config.xml de Football Manager incluso con el juego abierto y bloquea ataques XML/Path Traversal.",
-      "useCases": ["Persistencia de colores personalizados por club y mapeo UID → Club", "Generación atómica de 000_DF11_Regens_Override/config.xml"]
+      "role": "Catálogo Plantilla/Staff y Fusión Sin Pérdidas de config.xml", "category": "local_persistence", "color": "#06b6d4", "icon": "Database", "healthType": "storage",
+      "computationalModel": "Base SQLite v3 en modo WAL junto a reemplazo atómico NTFS con preservación de mapeos portrait/icon y defusedxml.",
+      "whyChosen": "Actualiza tanto carpetas de creaciones propias como Megapacks existentes de FM sin borrar iconos ni corromper config.xml.",
+      "useCases": ["Catálogo multi-temporada por #ID de club con categorías Plantilla y Staff", "Exportación directa a Nuestras creaciones o al Pack de Faces de FM"]
     }
   ],
   "links": [
     { "source": "desktop_shell", "target": "ui_runtime", "relation": "hospeda_vista", "type": "jerarquia", "protocol": "Edge WebView2 Host", "description": "Monta la aplicación compilada y gestiona el ciclo de vida nativo en Windows." },
-    { "source": "ui_runtime", "target": "ipc_bridge", "relation": "invoca_acciones", "type": "jerarquia", "protocol": "pywebview js_api IPC", "description": "Envía parámetros de composición y órdenes de sincronización sin abrir sockets." },
-    { "source": "desktop_shell", "target": "ipc_bridge", "relation": "autoriza_rutas", "type": "transversal", "protocol": "Capability Path Set", "description": "Registra en lista blanca únicamente las carpetas aprobadas en diálogo nativo." },
-    { "source": "ipc_bridge", "target": "onnx_dml", "relation": "ejecuta_inferencia", "type": "jerarquia", "protocol": "DirectML Tensor Session", "description": "Solicita recorte BiRefNet o segmentación multicapa solo cuando el retrato lo requiere." },
-    { "source": "ipc_bridge", "target": "compositor_engine", "relation": "compone_ficha", "type": "jerarquia", "protocol": "In-Memory RGBA Buffers", "description": "Orquesta el apilado de las 3 capas DF11 y la superposición textil Z0..Z3." },
-    { "source": "onnx_dml", "target": "compositor_engine", "relation": "entrega_mascaras", "type": "transversal", "protocol": "Alpha & Class Logits", "description": "Transfiere máscaras de pelo, piel y ropa para borrado P_clothes = 0 y armonizado OKLab." },
-    { "source": "ipc_bridge", "target": "local_storage", "relation": "persiste_lote", "type": "jerarquia", "protocol": "SQLite WAL + safe_ntfs_replace", "description": "Guarda mapeos de clubes y escribe PNG/JPG + config.xml de forma atómica." }
+    { "source": "ui_runtime", "target": "ipc_bridge", "relation": "invoca_acciones", "type": "jerarquia", "protocol": "pywebview js_api IPC", "description": "Envía parámetros de las 4 capas, remix de facepacks y órdenes de sincronización sin sockets." },
+    { "source": "desktop_shell", "target": "ipc_bridge", "relation": "autoriza_rutas", "type": "transversal", "protocol": "Capability Path Set", "description": "Autoriza carpetas de creaciones y facepacks bloqueando cualquier escritura sobre NG_Regens." },
+    { "source": "ipc_bridge", "target": "onnx_dml", "relation": "ejecuta_inferencia", "type": "jerarquia", "protocol": "DirectML Tensor Session", "description": "Solicita recorte BiRefNet, pose YuNet o segmentación textil 2× SSAA bajo demanda." },
+    { "source": "ipc_bridge", "target": "compositor_engine", "relation": "compone_ficha", "type": "jerarquia", "protocol": "In-Memory RGBA Buffers", "description": "Orquesta el engarce cabeza-cuello-camiseta, el fondo DF11 y el marco maestro 260×310." },
+    { "source": "onnx_dml", "target": "compositor_engine", "relation": "entrega_mascaras", "type": "transversal", "protocol": "Alpha & Class Logits", "description": "Transfiere máscaras de piel, pelo y prenda para engarce limpio sin cuellos antiguos." },
+    { "source": "ipc_bridge", "target": "local_storage", "relation": "persiste_lote", "type": "jerarquia", "protocol": "SQLite WAL + safe_ntfs_replace", "description": "Persiste plantillas Plantilla/Staff y fusiona UID.png + config.xml de forma atómica." }
   ],
   "flows": [
     {
-      "id": "studio_3layer_cutout", "title": "🖼️ Ficha DF11 de 3 Capas (Foto Casera → Juego)", "category": "graphics_multimedia",
-      "summary": "Transforma cualquier fotografía personal en una tarjeta DF11 oficial de 260×310 px con marco biselado transparente.",
-      "explanation": "Combina recorte neuronal en GPU, igualación de iluminación de estudio OKLab y escritura atómica de config.xml.",
+      "id": "studio_4step_modular", "title": "🖼️ Montaje Modular en 4 Pasos (Cara → Equipación → Fondo → Export)", "category": "graphics_multimedia",
+      "summary": "Construye fichas DF11 oficiales de 260×310 px combinando retratos, plantillas reales Plantilla/Staff y exportación dual.",
+      "explanation": "Une encuadre preciso por ratón/teclado, engrosamiento real del cuello en OKLab y guardado en creaciones o Pack de Faces FM.",
       "steps": [
-        { "nodeId": "ui_runtime", "role": "1. Captura la imagen arrastrada/pegada y el encuadre a 60 FPS" },
-        { "nodeId": "ipc_bridge", "role": "2. Valida formato/tamaño (anti-bombas de píxeles) y coordina el pipeline" },
-        { "nodeId": "onnx_dml", "role": "3. Recorta el sujeto con BiRefNet-Lite en GPU DirectML" },
-        { "nodeId": "compositor_engine", "role": "4. Armoniza luz en OKLab y sella Fondo + Persona + Marco DF11" },
-        { "nodeId": "local_storage", "role": "5. Escribe UID.png/jpg y actualiza config.xml sin pérdidas" }
+        { "nodeId": "ui_runtime", "role": "1. Ajusta posición (ratón o ←↑↓→) y steppers exactos de Zoom y Cuello" },
+        { "nodeId": "ipc_bridge", "role": "2. Valida capacidades de ruta, UID de FM y coordina la sesión modular" },
+        { "nodeId": "onnx_dml", "role": "3. Extrae cabeza/cuello y plantillas reales 2× SSAA en GPU DirectML" },
+        { "nodeId": "compositor_engine", "role": "4. Engarza cuello progresivo (0–150%), fondo DF11 y marco con Alpha = 0" },
+        { "nodeId": "local_storage", "role": "5. Guarda en Nuestras creaciones o renombra <UID>.png en el Pack de Faces FM" }
       ]
     },
     {
-      "id": "kit_zstack_swap", "title": "👕 Cambio de Equipación Z-Stack (Sin Cuellos Fantasma)", "category": "ai_machine_learning",
-      "summary": "Sustituye la ropa original de un regen o foto propia por la camiseta del club, polo técnico o traje.",
-      "explanation": "Borra primero la prenda antigua (P_clothes = 0) y tiñe la malla textil maestra en OKLab respetando barba y melena.",
+      "id": "facepack_card_remix", "title": "🔄 Remix Bidireccional de Fichas del Pack de Faces FM", "category": "ai_machine_learning",
+      "summary": "Toma cualquier ficha DF11 ya montada de un facepack para cambiarle la camiseta o cambiarle la cara conservando su equipación.",
+      "explanation": "Desmonta el bisel DF11 exterior, separa cabeza/cuello de la prenda original y detecta automáticamente el #UID del futbolista.",
       "steps": [
-        { "nodeId": "local_storage", "role": "1. Resuelve colores oficiales o personalizados del club en SQLite" },
-        { "nodeId": "onnx_dml", "role": "2. Separa piel, pelo y ropa con Selfie-Multiclass y pose YuNet" },
-        { "nodeId": "compositor_engine", "role": "3. Apila Piel (Z1) → Camiseta OKLab (Z2) → Pelo/Barba (Z3) + Marco" }
+        { "nodeId": "ui_runtime", "role": "1. Carga la ficha del facepack y permite alternar Usar su cara / Usar su camiseta" },
+        { "nodeId": "onnx_dml", "role": "2. Desmonta el fondo DF11 y aísla la cabeza o la camiseta original 2× SSAA" },
+        { "nodeId": "compositor_engine", "role": "3. Re-engarza la nueva combinación con puente de cuello OKLab y marco DF11" },
+        { "nodeId": "local_storage", "role": "4. Actualiza <UID>.png y config.xml conservando intactos iconos y resto del pack" }
       ]
     },
     {
       "id": "ng_regens_hotsync", "title": "⚡ Sincronización Masiva NG_Regens & FM27 en Caliente", "category": "local_persistence",
-      "summary": "Detecta caras nuevas de NG_Regens y genera la carpeta prioritaria 000_DF11_Regens_Override sin tocar el almacén original.",
-      "explanation": "Salta BiRefNet en pre-recortes transparentes para multiplicar la velocidad por 8 hilos y protege el disco frente a OneDrive.",
+      "summary": "Detecta caras nuevas de NG_Regens y genera la carpeta prioritaria 000_DF11_Regens_Override vistiendo la camiseta titular del club.",
+      "explanation": "Filtra estrictamente las plantillas ★ Titular activa de categoría Plantilla y protege el disco frente a OneDrive.",
       "steps": [
         { "nodeId": "ui_runtime", "role": "1. Configura rutas, verifica el Centinela OneDrive y activa vigilancia" },
         { "nodeId": "ipc_bridge", "role": "2. Espera 650 ms de calma, verifica Shrink Guard (50%) y reparte en 8 hilos" },
-        { "nodeId": "compositor_engine", "role": "3. Aplica equipación del club y marco DF11 por vía rápida" },
+        { "nodeId": "compositor_engine", "role": "3. Viste la plantilla titular de jugador de cada #ID de club y marco DF11" },
         { "nodeId": "local_storage", "role": "4. Conmuta PNGs y config.xml de golpe mediante reemplazo atómico NTFS" }
       ]
     }
