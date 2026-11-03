@@ -1,6 +1,7 @@
+export type TemplateCategory = 'player' | 'staff';
 export interface ClubSeed { name: string; pattern: string; primary: string; secondary: string; collar: string; }
 export interface StorageHealth { target_path: string; in_onedrive: boolean; free_gb: number; warning: boolean; steam_launch_arg: string; gamepass_guide: string; }
-export interface BootstrapState { version: string; clubs: Record<string, ClubSeed>; vaultDir: string; exportDir: string; storageHealth: StorageHealth; hasModels: boolean; liveWatching?: boolean; theme?: 'dark' | 'light'; }
+export interface BootstrapState { version: string; clubs: Record<string, ClubSeed>; vaultDir: string; exportDir: string; facepackDir?: string; storageHealth: StorageHealth; hasModels: boolean; liveWatching?: boolean; theme?: 'dark' | 'light'; }
 
 export interface ShirtTemplateInfo {
   templateId: string;
@@ -9,6 +10,7 @@ export interface ShirtTemplateInfo {
   clubId: string;
   clubName?: string;
   season?: string;
+  category?: TemplateCategory;
   isActiveForClub?: boolean;
   collarWidth: number;
   apexY: number;
@@ -51,6 +53,23 @@ export interface ExtractedFaceResponse {
   headAssetId: string;
   suggestedName: string;
   headPreviewDataUrl: string;
+  autoFit: { scale: number; offsetX: number; offsetY: number; neckFill: number };
+  previewDataUrl: string;
+}
+
+export interface FacepackRemixResponse {
+  remixMode: 'swap_shirt' | 'swap_face';
+  detectedUid?: string;
+  cardLabel: string;
+  facepackDir?: string;
+  headAssetId?: string;
+  templateId?: string;
+  isPreCutout?: boolean;
+  adhocShirtId?: string;
+  adhocShirtLabel?: string;
+  adhocShirtThumbDataUrl?: string;
+  collarWidth?: number;
+  apexY?: number;
   autoFit: { scale: number; offsetX: number; offsetY: number; neckFill: number };
   previewDataUrl: string;
 }
@@ -118,8 +137,12 @@ export async function callBridge<T>(method: string, ...args: unknown[]): Promise
   if (
     !window.pywebview?.api &&
     (method.startsWith('load_raw_') ||
+      method.startsWith('load_facepack_') ||
+      method.startsWith('pick_facepack_') ||
       method.startsWith('preview_shirt_') ||
       method.startsWith('save_shirt_') ||
+      method === 'save_adhoc_shirt_template' ||
+      method === 'switch_facepack_remix_mode' ||
       method.startsWith('delete_shirt_') ||
       method.startsWith('set_active_club_') ||
       method.startsWith('upsert_custom_club') ||

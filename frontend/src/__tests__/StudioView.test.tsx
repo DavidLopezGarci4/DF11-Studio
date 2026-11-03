@@ -18,7 +18,7 @@ const ONE_PX_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 describe('StudioView modular 3-tool & 4-step layer contract', () => {
-  it('renders the 3 studio tools, 4 chronological steps, and folds Club selector until Club mode is chosen', async () => {
+  it('renders the 3 studio tools, 4 chronological steps, and ONLY Plantilla and Staff tabs in Paso 2', async () => {
     render(<StudioView clubs={CLUBS} exportDir="D:\\DF11Studio\\Exports" onExportDirChange={() => {}} initialJump={null} />);
     await waitFor(() => expect(screen.getByRole('tab', { name: /Extraer Camiseta \(0\)/i })).toBeInTheDocument());
     expect(screen.getByRole('tab', { name: /Montaje Paso a Paso/i })).toBeInTheDocument();
@@ -29,9 +29,13 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
     expect(screen.getByText(/Paso 3 · Capa Fondo/i)).toBeInTheDocument();
     expect(screen.getByText(/Paso 4 · Marco Maestro DF11 y Exportación/i)).toBeInTheDocument();
 
-    expect(screen.queryByLabelText(/Selector de club/i)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Club$/i }));
-    expect(screen.getByLabelText(/Selector de club/i)).toBeInTheDocument();
+    // Procedural low-quality tabs must be completely gone; only Plantilla & Staff remain
+    expect(screen.getByRole('button', { name: /^Plantilla$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Staff$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Original \/ Sin/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Club$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Polo Staff/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Traje Staff/i })).not.toBeInTheDocument();
   });
 
   it('validates Football Manager numeric and r- regen UIDs before export', async () => {
@@ -378,6 +382,262 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
     } finally {
       delete window.pywebview;
       delete window.chrome;
+    }
+  });
+
+  it('supports Paso 1 directional arrow-key head movement and exact numeric + up/down arrow controls for Zoom & Cuello', async () => {
+    const previewPayloads: Array<Record<string, unknown>> = [];
+    window.pywebview = {
+      api: {
+        list_shirt_templates: async () => [
+          {
+            templateId: 'Navy_Player',
+            filename: 'Navy_Player.png',
+            displayName: 'Titular Local',
+            clubId: '1736',
+            category: 'player',
+            collarWidth: 79,
+            apexY: 228,
+            thumbDataUrl: ONE_PX_PNG,
+          },
+        ],
+        list_saved_faces: async () => [{ faceId: 'smp:Cara1.png', name: 'Cara1', kind: 'sample', thumbDataUrl: ONE_PX_PNG }],
+        load_saved_face: async () => ({
+          headAssetId: 'head-arrow-1',
+          name: 'Cara1',
+          isPreCutout: true,
+          autoFit: { scale: 1.0, offsetX: 0, offsetY: 0, neckFill: 1.0 },
+          previewDataUrl: ONE_PX_PNG,
+        }),
+        render_modular_preview: async (payload: unknown) => {
+          previewPayloads.push(payload as Record<string, unknown>);
+          return { previewDataUrl: ONE_PX_PNG };
+        },
+      },
+    };
+    try {
+      render(<StudioView clubs={CLUBS} exportDir="D:\\DF11Studio\\Exports" onExportDirChange={() => {}} initialJump={null} />);
+      const faceBtn = await screen.findByRole('button', { name: /Cara1/i });
+      fireEvent.click(faceBtn);
+      expect(await screen.findByText(/Activa: Cara1/i)).toBeInTheDocument();
+
+      // Select Paso 1 and move head with directional arrow keys (1px normal, 5px with Shift)
+      fireEvent.click(screen.getByText(/Paso 1 · Capa Cara y Cuello/i));
+      fireEvent.keyDown(window, { key: 'ArrowRight' });
+      fireEvent.keyDown(window, { key: 'ArrowDown' });
+      fireEvent.keyDown(window, { key: 'ArrowUp', shiftKey: true });
+      expect(screen.getByText(/X:1 · Y:-4/i)).toBeInTheDocument();
+
+      // Undo restores X:0 · Y:0
+      fireEvent.click(screen.getByRole('button', { name: 'Deshacer' }));
+      expect(screen.getByText(/X:0 · Y:0/i)).toBeInTheDocument();
+
+      // Exact numeric text box + immediate right up/down arrow buttons for Zoom
+      const zoomInput = screen.getByLabelText(/Valor exacto de Zoom/i);
+      fireEvent.change(zoomInput, { target: { value: '115' } });
+      fireEvent.blur(zoomInput);
+      expect(zoomInput).toHaveValue('115');
+      fireEvent.click(screen.getByRole('button', { name: /Subir Zoom/i }));
+      expect(zoomInput).toHaveValue('116');
+      fireEvent.click(screen.getByRole('button', { name: /Bajar Zoom/i }));
+      expect(zoomInput).toHaveValue('115');
+
+      // Exact numeric text box + immediate right up/down arrow buttons for Cuello (neck thickening)
+      const neckInput = screen.getByLabelText(/Valor exacto de Cuello/i);
+      fireEvent.change(neckInput, { target: { value: '62' } });
+      fireEvent.blur(neckInput);
+      expect(neckInput).toHaveValue('62');
+      fireEvent.click(screen.getByRole('button', { name: /Subir Cuello/i }));
+      expect(neckInput).toHaveValue('63');
+
+      await waitFor(() =>
+        expect(
+          previewPayloads.some(
+            (p) => Math.abs(Number(p.scale) - 1.15) < 1e-3 && Math.abs(Number(p.neckFill) - 0.63) < 1e-3,
+          ),
+        ).toBe(true),
+      );
+    } finally {
+      delete window.pywebview;
+    }
+  });
+
+  it('supports Staff category extraction/filtering, FM Facepack Card Remix (swap shirt & swap face), and Paso 4 dual export targets', async () => {
+    const calls: Array<{ fn: string; args: unknown[] }> = [];
+    let currentTemplates = [
+      {
+        templateId: 'Player_Kit',
+        filename: 'Player_Kit.png',
+        displayName: 'Equipación Jugador',
+        clubId: '1736',
+        category: 'player' as 'player' | 'staff',
+        collarWidth: 79,
+        apexY: 228,
+        thumbDataUrl: ONE_PX_PNG,
+      },
+    ];
+    let latestFacepackDir = '';
+
+    window.pywebview = {
+      api: {
+        list_shirt_templates: async () => currentTemplates,
+        list_saved_faces: async () => [],
+        pick_raw_shirt_source: async () => ({
+          shirtSourceId: 'suit-src-1',
+          rawDataUrl: ONE_PX_PNG,
+          width: 260,
+          height: 310,
+          suggestedName: 'Traje_Mister',
+          suggestedViewport: { zoom: 1.0, panX: 0, panY: 0 },
+        }),
+        preview_shirt_extraction: async () => ({
+          cleanShirtDataUrl: ONE_PX_PNG,
+          collarWidth: 76,
+          apexY: 230,
+        }),
+        save_shirt_template: async (payload: unknown) => {
+          calls.push({ fn: 'save_shirt_template', args: [payload] });
+          const next = {
+            templateId: 'Traje_Mister',
+            filename: 'Traje_Mister.png',
+            displayName: 'Traje_Mister',
+            clubId: '1736',
+            category: ((payload as { category?: 'player' | 'staff' })?.category ?? 'player') as 'player' | 'staff',
+            collarWidth: 76,
+            apexY: 230,
+            thumbDataUrl: ONE_PX_PNG,
+          };
+          currentTemplates = [...currentTemplates, next];
+          return { savedTemplateId: next.templateId, templates: currentTemplates };
+        },
+        pick_facepack_card: async (...args: unknown[]) => {
+          calls.push({ fn: 'pick_facepack_card', args });
+          const mode = String(args[0] || 'swap_shirt');
+          if (mode === 'swap_face') {
+            return {
+              remixMode: 'swap_face',
+              detectedUid: '29184012',
+              cardLabel: '29184012',
+              facepackDir: 'D:\\FM27\\graphics\\faces',
+              adhocShirtId: 'adhoc:shirt-1',
+              adhocShirtLabel: 'Camiseta ficha 29184012',
+              adhocShirtThumbDataUrl: ONE_PX_PNG,
+              collarWidth: 80,
+              apexY: 227,
+              autoFit: { scale: 1.0, offsetX: 0, offsetY: 0, neckFill: 1.0 },
+              previewDataUrl: ONE_PX_PNG,
+            };
+          }
+          return {
+            remixMode: 'swap_shirt',
+            detectedUid: '29184012',
+            cardLabel: '29184012',
+            facepackDir: 'D:\\FM27\\graphics\\faces',
+            headAssetId: 'head-remix-29184012',
+            templateId: 'Traje_Mister',
+            isPreCutout: false,
+            autoFit: { scale: 0.98, offsetX: 1, offsetY: -2, neckFill: 0.95 },
+            previewDataUrl: ONE_PX_PNG,
+          };
+        },
+        switch_facepack_remix_mode: async (...args: unknown[]) => {
+          calls.push({ fn: 'switch_facepack_remix_mode', args });
+          return {
+            remixMode: 'swap_face',
+            detectedUid: '29184012',
+            cardLabel: '29184012',
+            adhocShirtId: 'adhoc:shirt-1',
+            adhocShirtLabel: 'Camiseta ficha 29184012',
+            adhocShirtThumbDataUrl: ONE_PX_PNG,
+            collarWidth: 80,
+            apexY: 227,
+            autoFit: { scale: 1.0, offsetX: 0, offsetY: 0, neckFill: 1.0 },
+            previewDataUrl: ONE_PX_PNG,
+          };
+        },
+        choose_directory: async (which: unknown) => {
+          calls.push({ fn: 'choose_directory', args: [which] });
+          return { path: 'D:\\FM27\\graphics\\faces_megapack' };
+        },
+        export_modular_card: async (payload: unknown) => {
+          calls.push({ fn: 'export_modular_card', args: [payload] });
+          return { savedPath: 'D:\\FM27\\graphics\\faces\\29184012.png' };
+        },
+        render_modular_preview: async () => ({ previewDataUrl: ONE_PX_PNG }),
+      },
+    };
+
+    try {
+      render(
+        <StudioView
+          clubs={CLUBS}
+          exportDir="D:\\DF11Studio\\Exports"
+          facepackDir={latestFacepackDir}
+          onExportDirChange={() => {}}
+          onFacepackDirChange={(dir) => {
+            latestFacepackDir = dir;
+          }}
+          initialJump={null}
+        />,
+      );
+
+      await waitFor(() => expect(screen.getByText('Equipación Jugador')).toBeInTheDocument());
+
+      // 1. Switch to Staff tab in Paso 2 -> Player_Kit is hidden; click '+ Extraer' -> opens ShirtExtractorTool pre-set to 'staff'
+      fireEvent.click(screen.getByRole('button', { name: /^Staff$/i }));
+      expect(screen.queryByText('Equipación Jugador')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /\+ Extraer/i }));
+
+      fireEvent.click(screen.getByRole('button', { name: /Subir camiseta/i }));
+      expect(await screen.findByAltText(/Encuadre previo de camiseta/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Extraer solo la camiseta/i }));
+      expect(await screen.findByAltText(/Plantilla de camiseta limpia/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Guardar y usar en Montaje/i }));
+
+      await waitFor(() => expect(calls.some((c) => c.fn === 'save_shirt_template')).toBe(true));
+      expect(calls.find((c) => c.fn === 'save_shirt_template')?.args[0]).toMatchObject({ category: 'staff' });
+      expect(await screen.findByText('Traje_Mister')).toBeInTheDocument();
+
+      // 2. Load assembled FM Facepack card ('Cambiar camiseta a ficha FM') -> auto-populates UID '29184012' & facepackDir
+      fireEvent.click(screen.getByRole('button', { name: /Cambiar camiseta a ficha FM/i }));
+      await waitFor(() => expect(screen.getByLabelText(/ID Football Manager/i)).toHaveValue('29184012'));
+      expect(latestFacepackDir).toBe('D:\\FM27\\graphics\\faces');
+
+      // Switch loaded card to 'swap_face' -> mounts card's own shirt ('Camiseta ficha 29184012')
+      fireEvent.click(screen.getByRole('button', { name: /Usar su camiseta/i }));
+      expect(await screen.findByText(/Camiseta ficha 29184012/i)).toBeInTheDocument();
+
+      // 3. Paso 4 Dual Destination: export first to 'Nuestras creaciones', then to 'Pack de Faces FM'
+      fireEvent.click(screen.getByRole('button', { name: /Nuestras creaciones/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Exportar DF11/i }));
+      await waitFor(() =>
+        expect(
+          calls.some(
+            (c) =>
+              c.fn === 'export_modular_card' &&
+              (c.args[0] as { exportTarget?: string })?.exportTarget === 'creations',
+          ),
+        ).toBe(true),
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Pack de Faces FM/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Elegir carpeta Pack Faces FM/i }));
+      await waitFor(() => expect(calls.some((c) => c.fn === 'choose_directory' && c.args[0] === 'facepack')).toBe(true));
+
+      fireEvent.click(screen.getByRole('button', { name: /Exportar DF11/i }));
+      await waitFor(() =>
+        expect(
+          calls.some(
+            (c) =>
+              c.fn === 'export_modular_card' &&
+              (c.args[0] as { exportTarget?: string; uid?: string; fmt?: string })?.exportTarget === 'facepack' &&
+              (c.args[0] as { uid?: string })?.uid === '29184012' &&
+              (c.args[0] as { fmt?: string })?.fmt === 'png',
+          ),
+        ).toBe(true),
+      );
+    } finally {
+      delete window.pywebview;
     }
   });
 });

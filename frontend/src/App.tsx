@@ -17,6 +17,7 @@ export default function App() {
   const [clubs, setClubs] = useState<Record<string, ClubSeed>>({});
   const [vaultDir, setVaultDir] = useState('D:\\DF11Studio\\NG_Regens_Vault');
   const [exportDir, setExportDir] = useState('D:\\DF11Studio\\Exports\\000_DF11_Regens_Override');
+  const [facepackDir, setFacepackDir] = useState('');
   const [storageHealth, setStorageHealth] = useState<StorageHealth | null>(null);
   const [liveWatching, setLiveWatching] = useState(false);
   const [studioJump, setStudioJump] = useState<StudioJumpPayload | null>(null);
@@ -34,6 +35,7 @@ export default function App() {
         if (b.clubs) setClubs(b.clubs);
         if (b.vaultDir) setVaultDir(b.vaultDir);
         if (b.exportDir) setExportDir(b.exportDir);
+        if (typeof b.facepackDir === 'string') setFacepackDir(b.facepackDir);
         if (b.storageHealth) setStorageHealth(b.storageHealth);
         if (typeof b.liveWatching === 'boolean') setLiveWatching(b.liveWatching);
         if (!hadStoredTheme.current && (b.theme === 'light' || b.theme === 'dark')) {
@@ -81,7 +83,9 @@ export default function App() {
             clubs={clubs}
             onClubsUpdated={setClubs}
             exportDir={exportDir}
+            facepackDir={facepackDir}
             onExportDirChange={(dir, sh) => { setExportDir(dir); if (sh) setStorageHealth(sh); }}
+            onFacepackDirChange={setFacepackDir}
             initialJump={studioJump}
             onConsumeJump={() => setStudioJump(null)}
           />
