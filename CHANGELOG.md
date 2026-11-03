@@ -1,5 +1,21 @@
 # Changelog Técnico — DF11 Face Studio
 
+## [1.4.0] - 2026-11-03
+### Added
+- **Modo `Foto Directa + Marco DF11` en Paso 1 (`step1Mode: 'direct_photo'` en `StudioView.tsx`, `studio_workflow.py`, `compositor.py`, `bridge.py`)**:
+  - Vía ultrarrápida **100% offline y 0% IA** (`pick_direct_photo_source`, `load_direct_photo_source`, `ModularWorkflowSession.load_direct_photo`) que aplica directamente el bisel oficial `df11_frame_overlay.png` y el anillo exterior `Alpha = 0` (`df11_inner_mask.png`) sobre cualquier imagen sin invocar sesiones ONNX (`YuNet`, `BiRefNet`, `Selfie-Multiclass`).
+  - Cruceta táctil de **4 puntos cardinales** (`↑ N`, `↓ S`, `← O`, `→ E` + centrado `0,0`), arrastre con ratón y flechas del teclado (`1 px` / `5 px` con `Shift`).
+  - **`Zoom` (`35%–300%`) con pivote óptico central `(130, 155)` sin deriva acumulativa** (rueda del ratón, barra deslizante, cuadro numérico exacto y flechas arriba/abajo `±1%`), opción **`Ajustar a bordes`** (`clamp_direct_pan`) e historial `Deshacer / Rehacer` independiente de `Modo Capas`.
+- **Motor DSP de Óptica Pura Cero-IA (`backend/core/dsp.py` + control `Calidad óptica` en Paso 4)**:
+  - Tablas LUT vectorizadas `sRGB <-> luz lineal` (`8192` entradas) y conversión perceptual `sRGB <-> OKLab` con preservación de tono en compresión de gamut.
+  - Remuestreo subpíxel premultiplicado en luz lineal (`resample_linear_subpixel_rgba` en modos `raw`, `contain` y `cover`) con selección automática `Lanczos` (`eff_scale <= 1.35`) / `Bicubic` (`eff_scale > 1.35`) en ventana fuente `O(260 × 310)` constante.
+  - Deblocking adaptativo en fronteras `8×8` DCT (`deblock_jpeg_8x8_roi`) sobre la ROI recortada.
+  - Filtro guiado ponderado exacto **`WGIF` (`Weighted Guided Image Filter`) `O(1)`** sobre luminancia `OKLab L` (`enhance_df11_pure_optics`), con soft-coring $\tau(L)$ para tonos de piel oscuros y brillos especulares, techo `tanh` anti-doble-enfoque, moderación selectiva de piel excluyendo equipaciones rojas/naranjas y limpieza cromática guiada en `(a, b)`.
+
+### Fixed
+- **Doble premultiplicación de canal alfa en composiciones modulares**: sustituido `resample_rgba_premultiplied` con `Image.Resampling.LANCZOS` sobre imágenes ya convertidas a `"RGBa"` en `compositor.py` por `resample_linear_subpixel_rgba` en luz lineal sin oscurecimiento de semitransparencias de cabello.
+- **Protección de altas luces en `Luz DF11` para escenas completas**: `harmonize_oklab_pure_optics` (`np.all(fg)`) evalúa `p92_l` en el modo Foto Directa para no quemar fondos claros ni camisetas blancas cuando no existe máscara de recorte.
+
 ## [1.3.0] - 2026-11-03
 ### Added
 - **Controles de precisión milimétrica en Paso 1 (`StudioView.tsx` + `backend/services/head_neck.py`)**:

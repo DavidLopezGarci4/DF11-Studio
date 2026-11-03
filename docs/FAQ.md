@@ -1,22 +1,31 @@
 # Preguntas Frecuentes y Guía de Herramientas (FAQ) — DF11 Face Studio
 
 > Guía de referencia rápida y operativa sobre todas las funciones activas en la versión oficial.
-> **Versión:** `v1.3.0` • **Actualizado:** 2026-11-03 • **Módulos Auditados:** 4/4
+> **Versión:** `v1.4.0` • **Actualizado:** 2026-11-03 • **Módulos Auditados:** 4/4
 
 ---
 
 ## Índice Rápido
-1. [Montaje Paso a Paso y Packs de Faces FM](#1-montaje-paso-a-paso-y-packs-de-faces-fm)
+1. [Montaje Paso a Paso, Foto Directa y Packs de Faces FM](#1-montaje-paso-a-paso-foto-directa-y-packs-de-faces-fm)
 2. [Extractor de Caras y Zona de Corte](#2-extractor-de-caras-y-zona-de-corte)
 3. [Extractor de Camisetas, Plantilla / Staff y #ID de Clubes](#3-extractor-de-camisetas-plantilla--staff-y-id-de-clubes)
 4. [Sincronizador NG_Regens, FM27 y OneDrive](#4-sincronizador-ng_regens-fm27-y-onedrive)
 
 ---
 
-## 1. Montaje Paso a Paso y Packs de Faces FM
+## 1. Montaje Paso a Paso, Foto Directa y Packs de Faces FM
 
-### ¿Cómo funciona el Paso 1 (ratón, flechas, Zoom y engrosamiento de Cuello) y los atajos del lienzo?
-* **Movimiento con ratón y flechas del teclado:** Con el Paso 1 seleccionado (`Activo · Ratón o ←↑↓→`), arrastra la cabeza con el ratón sobre el lienzo `260 × 310 px` o muévela píxel a píxel con las teclas direccionales `←` `↑` `↓` `→` (mantén `Shift` para saltos rápidos de `5 px`).
+### ¿Cómo creo una ficha rápida con Foto Directa + Marco DF11 (4 puntos cardinales y Zoom)?
+* **Formato directo sin recortes ni IA:** En el Paso 1 pulsa **`Foto Directa + Marco DF11`** y sube, arrastra o pega cualquier foto para aplicarle directamente el marco biselado oficial DF11 (`260 × 310 px`) sin separar cabeza ni camiseta.
+* **Movimiento en los 4 puntos cardinales y Zoom con pivote central:** Desplaza la imagen en los 4 puntos cardinales mediante los botones **`↑ N`**, **`↓ S`**, **`← O`**, **`→ E`** (`0,0` para centrar), arrastrando con el ratón o con las flechas del teclado (`←` `↑` `↓` `→`, o `Shift` para mayor paso), y aumenta o disminuye por **`Zoom`** (`35%–300%`) con la rueda, la barra, el cuadro numérico exacto o las dos flechas arriba/abajo.
+* **Ajustar a bordes y alternancia libre:** Con **`Ajustar a bordes`** activo evitas dejar franjas vacías cuando la foto cubre todo el lienzo, y puedes alternar en cualquier momento con **`Modo Capas (Cara + Camiseta)`** conservando intacto el encuadre de cada modo.
+
+### ¿Cómo funciona «Calidad óptica» en el Paso 4 para mejorar la imagen final sin IA?
+* **Procesamiento 100% offline y 0% IA:** En el Paso 4 regula **`Calidad óptica`** (`0%` a `100%`) con barra deslizante, número exacto o flechas arriba/abajo; emplea óptica matemática pura en local sin redes neuronales ni conexión a internet.
+* **Nitidez real sin alterar rasgos:** Limpia bloques de compresión JPEG y realza micro-detalles en ojos, cabello y escudos sin halos blancos, protegiendo la textura natural de la piel y los colores intensos de las equipaciones.
+
+### ¿Cómo funciona el Modo Capas en el Paso 1 (ratón, flechas, Zoom y engrosamiento de Cuello)?
+* **Movimiento con ratón y flechas del teclado:** Con el Paso 1 seleccionado (`Activo · N/S/E/O, Ratón o ←↑↓→`), arrastra la cabeza con el ratón sobre el lienzo `260 × 310 px` o muévela píxel a píxel con las teclas direccionales `←` `↑` `↓` `→` (mantén `Shift` para saltos rápidos de `5 px`).
 * **Zoom y Cuello con cuadro numérico y flechas arriba/abajo:** Tanto en `Zoom` (`15%–220%`) como en `Cuello` (`0%–150%`) dispones de barra deslizante, cuadro de texto numérico exacto y dos flechas situadas inmediatamente a su derecha (`+1%` / `-1%`). El control `Cuello` **engrosa progresivamente el ancho del cuello** para llenar el cuello de cualquier camiseta sin saltos bruscos.
 * **Deshacer, Rehacer y Suprimir:** Usa los botones superiores o los atajos `Ctrl+Z`, `Ctrl+Y` y `Supr` para limpiar o recuperar cualquier edición al instante.
 

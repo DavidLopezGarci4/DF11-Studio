@@ -1,8 +1,8 @@
 {
   "appName": "DF11 Face Studio",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "category": "Estudio Fotográfico Modular & Sincronizador DF11 para Football Manager",
-  "description": "Arquitectura de escritorio 100% local en proceso único: interfaz React 19 sobre WebView2 conectada sin puertos de red a un motor Python 3.12 con inferencia GPU DirectML, plantillas textiles reales 2× SSAA y persistencia atómica NTFS/SQLite.",
+  "description": "Arquitectura de escritorio 100% local en proceso único: interfaz React 19 sobre WebView2 conectada sin puertos de red a un motor Python 3.12 con óptica pura WGIF/OKLab sin IA, inferencia GPU DirectML opcional por capas y persistencia atómica NTFS/SQLite.",
   "nodes": [
     {
       "id": "desktop_shell", "label": "pywebview 6.2 + WebView2", "version": "6.2.1",
@@ -13,31 +13,38 @@
     },
     {
       "id": "ui_runtime", "label": "React 19 + Vite 6", "version": "19.0.0",
-      "role": "Estudio Modular de 4 Pasos, Extractores y Sincronizador", "category": "local_web_apps", "color": "#f59e0b", "icon": "Atom", "healthType": "runtime",
-      "computationalModel": "Árbol declarativo Fiber con encuadre por ratón y flechas direccionales, steppers exactos y carga diferida (React.lazy) del grafo TecnoRed.",
+      "role": "Estudio Modular, Foto Directa N/S/E/O y Sincronizador", "category": "local_web_apps", "color": "#f59e0b", "icon": "Atom", "healthType": "runtime",
+      "computationalModel": "Árbol declarativo Fiber con encuadre por ratón, pad cardinal N/S/E/O, zoom pivotado y carga diferida (React.lazy) del grafo TecnoRed.",
       "whyChosen": "Garantiza arrastre fluido sin parpadeos, historial Undo/Redo coalescido y cero coste de arranque en modales secundarios.",
-      "useCases": ["Paso 1 con flechas ←↑↓→ y steppers exactos de Zoom y Cuello", "Paso 2 Plantilla/Staff, remix de fichas FM y Paso 4 de exportación dual"]
+      "useCases": ["Paso 1 en Modo Capas o Foto Directa + Marco DF11 con pad ↑N ↓S ←O →E", "Paso 2 Plantilla/Staff, remix FM y Paso 4 con Calidad óptica y guardado dual"]
     },
     {
-      "id": "ipc_bridge", "label": "StudioBridge + Modular Session", "version": "1.3.0",
-      "role": "Orquestador IPC de Extractores, Remix FM y Watcher 650 ms", "category": "server_web_apps", "color": "#8b5cf6", "icon": "Workflow", "healthType": "native_bridge",
-      "computationalModel": "Fachada síncrona/asíncrona con caché LRU acotada de caras/camisetas, ThreadPoolExecutor(8) y observador con estabilización de 650 ms.",
-      "whyChosen": "Mantiene el arranque en frío instantáneo y procesa miles de regens en paralelo sin bloquear la ventana ni corromper lotes.",
-      "useCases": ["Remix bidireccional de fichas ya montadas del Pack de Faces FM", "Sincronización NG_Regens aplicando solo plantillas titulares de jugador"]
+      "id": "ipc_bridge", "label": "StudioBridge + Modular Session", "version": "1.4.0",
+      "role": "Orquestador IPC de Foto Directa, Extractores y Watcher 650 ms", "category": "server_web_apps", "color": "#8b5cf6", "icon": "Workflow", "healthType": "native_bridge",
+      "computationalModel": "Fachada síncrona/asíncrona con caché LRU acotada de fotos directas/caras/camisetas, ThreadPoolExecutor(8) y observador de 650 ms.",
+      "whyChosen": "Mantiene el arranque en frío instantáneo y separa estrictamente la vía 0% IA de Foto Directa frente a los extractores modulares.",
+      "useCases": ["Carga instantánea de Foto Directa sin invocar sesiones ONNX", "Remix bidireccional de fichas FM y sincronización masiva NG_Regens"]
     },
     {
       "id": "onnx_dml", "label": "ONNX Runtime DirectML", "version": "1.24.4",
-      "role": "Inferencia GPU Local (BiRefNet-Lite, Selfie-Multiclass, YuNet)", "category": "ai_machine_learning", "color": "#f97316", "icon": "Cpu", "healthType": "hardware",
-      "computationalModel": "Ejecución de grafos FP16/FP32 sobre DirectX 12 (AMD/NVIDIA/Intel) con ORT_ENABLE_BASIC y calentamiento en segundo plano.",
-      "whyChosen": "Ofrece recorte de cabello, aislamiento textil 2× SSAA y detección de pose facial 100% gratis y sin claves API.",
+      "role": "Inferencia GPU Local para Modo Capas (BiRefNet, Selfie, YuNet)", "category": "ai_machine_learning", "color": "#f97316", "icon": "Cpu", "healthType": "hardware",
+      "computationalModel": "Ejecución bajo demanda de grafos FP16/FP32 sobre DirectX 12 (AMD/NVIDIA/Intel) exclusivamente en flujos de extracción modular.",
+      "whyChosen": "Ofrece recorte de cabello y aislamiento textil 2× SSAA gratis en local cuando se trabaja por capas.",
       "useCases": ["Extracción limpia de cabeza/cuello y desmontaje de fichas DF11", "Extracción 2× SSAA de camisetas Plantilla y prendas Staff reales"]
     },
     {
-      "id": "compositor_engine", "label": "Pillow 13 + Motor OKLab", "version": "13.0.0",
+      "id": "compositor_engine", "label": "Pillow 13 + Compositor DF11", "version": "13.0.0",
       "role": "Compositor DF11 Exacto (260×310), Puente de Cuello y Marco", "category": "graphics_multimedia", "color": "#ec4899", "icon": "Layers", "healthType": "static",
-      "computationalModel": "Álgebra matricial RGBA en espacio perceptual OKLab, puente columnar de cuello progresivo (0–150%) y marco DF11 con anillo Alpha = 0.",
-      "whyChosen": "Engarza cualquier cabeza sobre camisetas reales o trajes Staff sin cortes bruscos y clava el bisel y sombra oficial DF11.",
-      "useCases": ["Engrosamiento y estrechamiento continuo del cuello (0% a 150%)", "Exportación PNG 32-bit oficial o JPG 4:4:4 con iluminación OKLab"]
+      "computationalModel": "Álgebra RGBA premultiplicada, encuadre directo cover/contain con tope de bordes y marco maestro DF11 con anillo exterior Alpha = 0.",
+      "whyChosen": "Clava el bisel y sombra oficial DF11 tanto sobre fotos directas como en montajes multicapa cabeza-cuello-camiseta.",
+      "useCases": ["Enmarcado directo DF11 y puente progresivo de cuello (0% a 150%)", "Exportación PNG 32-bit oficial o JPG 4:4:4 sin halos oscuros"]
+    },
+    {
+      "id": "dsp_pure_optics", "label": "Óptica Pura WGIF + OKLab", "version": "1.4.0",
+      "role": "Motor DSP 100% Offline (0% IA): Luz Lineal, Deblocking y WGIF", "category": "graphics_multimedia", "color": "#10b981", "icon": "Layers", "healthType": "static",
+      "computationalModel": "Filtro guiado ponderado WGIF O(1) en espacio perceptual OKLab, remuestreo Lanczos/Bicubic en luz lineal y deblocking JPEG 8×8.",
+      "whyChosen": "Maximiza la nitidez real de ojos, pelo y escudos en ~4 ms sin alucinaciones de IA ni dependencias pesadas.",
+      "useCases": ["Mejora de Calidad óptica final (0–100%) con protección de piel y equipaciones", "Armonización luminosa OKLab y remuestreo subpíxel libre de aliasing"]
     },
     {
       "id": "local_storage", "label": "SQLite WAL + NTFS XML", "version": "ACID WAL",
@@ -49,24 +56,38 @@
   ],
   "links": [
     { "source": "desktop_shell", "target": "ui_runtime", "relation": "hospeda_vista", "type": "jerarquia", "protocol": "Edge WebView2 Host", "description": "Monta la aplicación compilada y gestiona el ciclo de vida nativo en Windows." },
-    { "source": "ui_runtime", "target": "ipc_bridge", "relation": "invoca_acciones", "type": "jerarquia", "protocol": "pywebview js_api IPC", "description": "Envía parámetros de las 4 capas, remix de facepacks y órdenes de sincronización sin sockets." },
+    { "source": "ui_runtime", "target": "ipc_bridge", "relation": "invoca_acciones", "type": "jerarquia", "protocol": "pywebview js_api IPC", "description": "Envía encuadres N/S/E/O, parámetros de capas, calidad óptica y órdenes de exportación." },
     { "source": "desktop_shell", "target": "ipc_bridge", "relation": "autoriza_rutas", "type": "transversal", "protocol": "Capability Path Set", "description": "Autoriza carpetas de creaciones y facepacks bloqueando cualquier escritura sobre NG_Regens." },
-    { "source": "ipc_bridge", "target": "onnx_dml", "relation": "ejecuta_inferencia", "type": "jerarquia", "protocol": "DirectML Tensor Session", "description": "Solicita recorte BiRefNet, pose YuNet o segmentación textil 2× SSAA bajo demanda." },
-    { "source": "ipc_bridge", "target": "compositor_engine", "relation": "compone_ficha", "type": "jerarquia", "protocol": "In-Memory RGBA Buffers", "description": "Orquesta el engarce cabeza-cuello-camiseta, el fondo DF11 y el marco maestro 260×310." },
+    { "source": "ipc_bridge", "target": "onnx_dml", "relation": "ejecuta_inferencia", "type": "jerarquia", "protocol": "DirectML Tensor Session", "description": "Solicita recorte BiRefNet, pose YuNet o segmentación textil 2× SSAA solo en Modo Capas." },
+    { "source": "ipc_bridge", "target": "compositor_engine", "relation": "compone_ficha", "type": "jerarquia", "protocol": "In-Memory RGBA Buffers", "description": "Orquesta Foto Directa o montaje por capas con fondo DF11 y marco maestro 260×310." },
     { "source": "onnx_dml", "target": "compositor_engine", "relation": "entrega_mascaras", "type": "transversal", "protocol": "Alpha & Class Logits", "description": "Transfiere máscaras de piel, pelo y prenda para engarce limpio sin cuellos antiguos." },
+    { "source": "compositor_engine", "target": "dsp_pure_optics", "relation": "refina_optica", "type": "jerarquia", "protocol": "Linear-Light & OKLab DSP", "description": "Aplica remuestreo subpíxel lineal, deblocking 8×8 y filtro guiado WGIF sin IA." },
     { "source": "ipc_bridge", "target": "local_storage", "relation": "persiste_lote", "type": "jerarquia", "protocol": "SQLite WAL + safe_ntfs_replace", "description": "Persiste plantillas Plantilla/Staff y fusiona UID.png + config.xml de forma atómica." }
   ],
   "flows": [
     {
       "id": "studio_4step_modular", "title": "🖼️ Montaje Modular en 4 Pasos (Cara → Equipación → Fondo → Export)", "category": "graphics_multimedia",
-      "summary": "Construye fichas DF11 oficiales de 260×310 px combinando retratos, plantillas reales Plantilla/Staff y exportación dual.",
-      "explanation": "Une encuadre preciso por ratón/teclado, engrosamiento real del cuello en OKLab y guardado en creaciones o Pack de Faces FM.",
+      "summary": "Construye fichas DF11 oficiales de 260×310 px combinando retratos, plantillas reales Plantilla/Staff y calidad óptica.",
+      "explanation": "Une encuadre preciso por ratón/teclado, engrosamiento real del cuello en OKLab, realce WGIF y guardado dual.",
       "steps": [
-        { "nodeId": "ui_runtime", "role": "1. Ajusta posición (ratón o ←↑↓→) y steppers exactos de Zoom y Cuello" },
+        { "nodeId": "ui_runtime", "role": "1. Ajusta posición (ratón, N/S/E/O o ←↑↓→) y steppers de Zoom, Cuello y Calidad óptica" },
         { "nodeId": "ipc_bridge", "role": "2. Valida capacidades de ruta, UID de FM y coordina la sesión modular" },
         { "nodeId": "onnx_dml", "role": "3. Extrae cabeza/cuello y plantillas reales 2× SSAA en GPU DirectML" },
         { "nodeId": "compositor_engine", "role": "4. Engarza cuello progresivo (0–150%), fondo DF11 y marco con Alpha = 0" },
-        { "nodeId": "local_storage", "role": "5. Guarda en Nuestras creaciones o renombra <UID>.png en el Pack de Faces FM" }
+        { "nodeId": "dsp_pure_optics", "role": "5. Refina micro-contraste y limpieza cromática WGIF en OKLab (0% IA)" },
+        { "nodeId": "local_storage", "role": "6. Guarda en Nuestras creaciones o renombra <UID>.png en el Pack de Faces FM" }
+      ]
+    },
+    {
+      "id": "direct_photo_pure_optics", "title": "📷 Foto Directa + Marco DF11 y Calidad Óptica (0% IA)", "category": "graphics_multimedia",
+      "summary": "Enmarca directamente cualquier foto con el bisel oficial DF11, movimiento cardinal N/S/E/O, zoom y mejora óptica offline.",
+      "explanation": "Vía directa 100% determinista que prescinde por completo de redes neuronales manteniendo nitidez subpíxel en luz lineal.",
+      "steps": [
+        { "nodeId": "ui_runtime", "role": "1. Carga la foto en Paso 1, mueve en N/S/E/O y ajusta Zoom con pivote central" },
+        { "nodeId": "ipc_bridge", "role": "2. Cachea el fotograma original y despacha el encuadre sin cargar ONNX" },
+        { "nodeId": "dsp_pure_optics", "role": "3. Ejecuta deblocking JPEG 8×8, remuestreo en luz lineal y realce WGIF OKLab" },
+        { "nodeId": "compositor_engine", "role": "4. Superpone el marco biselado DF11 y garantiza el anillo exterior Alpha = 0" },
+        { "nodeId": "local_storage", "role": "5. Exporta PNG 32-bit o JPG y sincroniza config.xml de forma atómica" }
       ]
     },
     {

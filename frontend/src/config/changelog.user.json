@@ -1,11 +1,22 @@
 {
-  "currentVersion": "1.3.0",
-  "buildNumber": 10300,
+  "currentVersion": "1.4.0",
+  "buildNumber": 10400,
   "lastUpdated": "2026-11-03",
   "appName": "DF11 Face Studio",
-  "appDescription": "Estudio modular por capas con extractores de caras y camisetas, edición de fichas de Facepacks y sincronizador DF11 para Football Manager.",
+  "appDescription": "Estudio modular y de foto directa con marco DF11, extractores de caras y camisetas, mejora de calidad óptica sin IA y sincronizador para Football Manager.",
   "privacyPolicy": "Tus fotos y partidas nunca salen de tu PC: procesamiento 100% local, privado y sin suscripciones ni claves API.",
   "versions": [
+    {
+      "version": "1.4.0",
+      "build": 10400,
+      "date": "2026-11-03",
+      "title": "Modo Foto Directa + Marco DF11, Movimiento en los 4 Puntos Cardinales y Mejora de Calidad Óptica Sin IA",
+      "highlights": [
+        "📷 **Foto Directa + Marco DF11 al instante:** Sube cualquier retrato en el Paso 1 para aplicarle directamente el marco biselado oficial DF11 en el formato más rápido y sencillo, sin necesidad de recortar capas.",
+        "🧭 **Movimiento en los 4 puntos cardinales y Zoom exacto:** Desplaza tu imagen al Norte, Sur, Este u Oeste con la cruceta direccional, el ratón o el teclado y ajusta el Zoom con precisión evitando huecos vacíos en los bordes.",
+        "✨ **Mejora de Calidad óptica 100% local y sin IA:** Realza la definición de ojos, cabello, escudos y texturas en el Paso 4 sin conexión a internet y respetando siempre los rasgos reales del futbolista."
+      ]
+    },
     {
       "version": "1.3.0",
       "build": 10300,

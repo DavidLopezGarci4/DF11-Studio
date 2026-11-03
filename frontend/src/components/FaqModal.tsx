@@ -7,13 +7,34 @@ export interface FAQSection { id: string; title: string; description: string; it
 const SECTIONS: FAQSection[] = [
   {
     id: 'studio',
-    title: 'Montaje Paso a Paso y Packs de Faces FM',
-    description: 'Flechas direccionales, controles exactos de Zoom y Cuello, remix de Facepacks y doble destino.',
+    title: 'Montaje Paso a Paso, Foto Directa y Packs de Faces FM',
+    description: 'Foto Directa + Marco DF11, pad N/S/E/O, Zoom y Cuello exactos, Calidad óptica sin IA y exportación dual.',
     items: [
       {
+        id: 'direct-photo-df11',
+        question: '¿Cómo creo una ficha rápida con Foto Directa + Marco DF11 (4 puntos cardinales y Zoom)?',
+        badge: 'Novedad v1.4',
+        tags: ['foto directa', 'marco df11', 'puntos cardinales', 'norte', 'sur', 'este', 'oeste', 'zoom', 'ajustar a bordes', 'sin ia'],
+        bullets: [
+          'Formato directo sin recortes ni IA: En el Paso 1 pulsa «Foto Directa + Marco DF11» y sube, arrastra o pega una foto para aplicarle al instante el marco biselado oficial de 260 × 310 px.',
+          'Movimiento en los 4 puntos cardinales y Zoom con pivote central: Desplaza la imagen en los 4 puntos cardinales con los botones ↑ N, ↓ S, ← O, → E (o 0,0 para centrar), con el ratón o con las flechas del teclado, y aumenta o disminuye por Zoom (35%–300%) con rueda, barra, número exacto o flechas arriba/abajo.',
+          'Ajustar a bordes y alternancia libre: Activa «Ajustar a bordes» para impedir huecos vacíos en los márgenes al encuadrar fotos opacas y cambia cuando quieras a «Modo Capas (Cara + Camiseta)» sin perder ningún ajuste.',
+        ],
+      },
+      {
+        id: 'optical-quality',
+        question: '¿Cómo funciona «Calidad óptica» en el Paso 4 para mejorar la imagen final sin IA?',
+        badge: 'Novedad v1.4',
+        tags: ['calidad óptica', 'calidad', 'nitidez', 'sin ia', 'offline', 'paso 4'],
+        bullets: [
+          'Procesamiento 100% offline y 0% IA: En el Paso 4 regula «Calidad óptica» (0% a 100%) mediante barra deslizante, cuadro numérico o flechas arriba/abajo, ejecutándose íntegramente en tu PC sin usar inteligencia artificial.',
+          'Nitidez real sin alterar rasgos: Suaviza artefactos de compresión JPEG y realza micro-detalles en ojos, cabello y escudos evitando halos artificiales y respetando la textura natural de la piel y las equipaciones.',
+        ],
+      },
+      {
         id: 'layers',
-        question: '¿Cómo funciona el Paso 1 (ratón, flechas, Zoom y engrosamiento de Cuello) y los atajos del lienzo?',
-        badge: 'Novedad v1.3',
+        question: '¿Cómo funciona el Modo Capas en el Paso 1 (ratón, flechas, Zoom y engrosamiento de Cuello)?',
+        badge: 'Paso 1',
         tags: ['capas', 'ctrl+z', 'ctrl+y', 'suprimir', 'flechas', 'teclado', 'zoom', 'cuello', 'lienzo'],
         bullets: [
           'Movimiento con ratón y flechas del teclado: Con el Paso 1 seleccionado, arrastra la cabeza con el ratón o muévela píxel a píxel con ← ↑ ↓ → (mantén Shift para saltos de 5 px).',

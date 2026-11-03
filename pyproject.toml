@@ -1,6 +1,6 @@
 [project]
 name = "df11-face-studio"
-version = "1.3.0"
+version = "1.4.0"
 description = "Lightweight offline DF11 Face Studio & FM27 NG_Regens Live Sync (DirectML)"
 requires-python = ">=3.12"
 dependencies = [

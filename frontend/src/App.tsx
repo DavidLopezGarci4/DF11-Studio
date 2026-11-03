@@ -59,7 +59,7 @@ export default function App() {
         <div className="flex items-center gap-2.5">
           <img src="./icon-128.png" alt="Logo DF11 Face Studio" className="w-7 h-7 rounded-md" />
           <span className="font-semibold tracking-tight text-sm text-slate-900 dark:text-white">DF11 Face Studio</span>
-          <span className="text-xs px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 tabular-nums">v{boot?.version ?? '1.3.0'}</span>
+          <span className="text-xs px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 tabular-nums">v{boot?.version ?? '1.4.0'}</span>
         </div>
         <nav className="flex items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800">
           <button type="button" onClick={() => setTab('studio')} className={navBtn(tab === 'studio')}>Estudio</button>
