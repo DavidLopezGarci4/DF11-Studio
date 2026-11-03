@@ -27,11 +27,13 @@ import ShirtExtractorTool from './ShirtExtractorTool';
 import {
   ClubSeed,
   CropViewportDTO,
+  DirectPhotoResponse,
   ExtractedFaceResponse,
   FacepackRemixResponse,
   SavedFaceInfo,
   ShirtTemplateInfo,
   StagedFaceResponse,
+  Step1Mode,
   StorageHealth,
   TemplateCategory,
   callBridge,
@@ -86,8 +88,17 @@ type BgMode = 'transparent' | 'white_df11' | 'pearl_studio' | 'stadium_bokeh' | 
 type ExportTarget = 'creations' | 'facepack';
 
 interface LayerSnapshot {
+  step1Mode: Step1Mode;
   headAssetId: string;
   faceLabel: string;
+  directPhotoId: string;
+  directPhotoLabel: string;
+  directPhotoIsPreCutout: boolean;
+  directScale: number;
+  directOffsetX: number;
+  directOffsetY: number;
+  clampPan: boolean;
+  enhanceQuality: number;
   wearMode: WearMode;
   templateId: string;
   clubId: string;
@@ -101,8 +112,17 @@ interface LayerSnapshot {
 }
 
 const INITIAL_SNAP: LayerSnapshot = {
+  step1Mode: 'modular',
   headAssetId: '',
   faceLabel: '',
+  directPhotoId: '',
+  directPhotoLabel: '',
+  directPhotoIsPreCutout: false,
+  directScale: 1.0,
+  directOffsetX: 0,
+  directOffsetY: 0,
+  clampPan: true,
+  enhanceQuality: 0,
   wearMode: 'template',
   templateId: '',
   clubId: '1736',
@@ -357,12 +377,25 @@ export default function StudioView({
   }, [facepackDir]);
 
   const effectiveFacepackDir = facepackDir || localFacepackDir;
+  const isDirectMode = snap.step1Mode === 'direct_photo';
+  const activeScale = isDirectMode ? snap.directScale : snap.scale;
+  const activeOffsetX = isDirectMode ? snap.directOffsetX : snap.offsetX;
+  const activeOffsetY = isDirectMode ? snap.directOffsetY : snap.offsetY;
+  const fmtCoord = (v: number) => Number(v.toFixed(1));
 
-  const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number; baseSnap?: LayerSnapshot } | null>(null);
+  const dragRef = useRef<{
+    sx: number;
+    sy: number;
+    ox: number;
+    oy: number;
+    mode?: 'crop' | 'modular' | 'direct';
+    baseSnap?: LayerSnapshot;
+  } | null>(null);
   const bokehDragRef = useRef(false);
   const arrowBurstTsRef = useRef(0);
   const reqSeqRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const directFileInputRef = useRef<HTMLInputElement>(null);
   const bgInputRef = useRef<HTMLInputElement>(null);
   const facepackInputRef = useRef<HTMLInputElement>(null);
   const pendingRemixModeRef = useRef<'swap_shirt' | 'swap_face'>('swap_shirt');
@@ -388,14 +421,19 @@ export default function StudioView({
   }, []);
 
   const commitSessionSnap = useCallback(
-    (sessionKey: string | undefined, updater: (prev: LayerSnapshot) => LayerSnapshot) => {
+    (
+      sessionKey: string | undefined,
+      updater: (prev: LayerSnapshot, sessionBase: LayerSnapshot) => LayerSnapshot,
+    ) => {
       if (!sessionKey) {
-        commitSnap(updater);
+        commitSnap((prev) => updater(prev, prev));
         return;
       }
       allowInitialAutoSelectRef.current = false;
       setHistory((h) => {
-        const next = updater(h.present);
+        const sessionBase =
+          h.sessionKey === sessionKey && h.past.length > 0 ? h.past[h.past.length - 1] : h.present;
+        const next = updater(h.present, sessionBase);
         if (JSON.stringify(next) === JSON.stringify(h.present)) return h;
         if (h.sessionKey === sessionKey) {
           if (h.past.length > 0 && JSON.stringify(next) === JSON.stringify(h.past[h.past.length - 1])) {
@@ -438,8 +476,24 @@ export default function StudioView({
       setCropStage(null);
       return;
     }
+    if (isDirectMode) {
+      if (!snap.directPhotoId) return;
+      reqSeqRef.current += 1;
+      setPreviewUrl('');
+      commitSnap((s) => ({
+        ...s,
+        directPhotoId: '',
+        directPhotoLabel: '',
+        directPhotoIsPreCutout: false,
+        directScale: 1.0,
+        directOffsetX: 0,
+        directOffsetY: 0,
+      }));
+      return;
+    }
     if (!snap.headAssetId) return;
     if (!snap.templateId) {
+      reqSeqRef.current += 1;
       setPreviewUrl('');
     }
     setCanExtractBg(false);
@@ -451,7 +505,7 @@ export default function StudioView({
       offsetX: 0,
       offsetY: 0,
     }));
-  }, [cropStage, snap.headAssetId, snap.templateId, commitSnap]);
+  }, [cropStage, isDirectMode, snap.directPhotoId, snap.headAssetId, snap.templateId, commitSnap]);
 
   const handleTemplatesUpdated = useCallback((nextTemplates: ShirtTemplateInfo[]) => {
     const prevTemplates = templatesRef.current;
@@ -553,6 +607,7 @@ export default function StudioView({
     setStep2Category(matchedTpl?.category === 'staff' ? 'staff' : 'player');
     commitSnap((s) => ({
       ...s,
+      step1Mode: 'modular',
       headAssetId: initialJump.headAssetId ?? 'legacy-jump',
       faceLabel: initialJump.uid,
       wearMode: 'template',
@@ -568,34 +623,56 @@ export default function StudioView({
     onConsumeJump?.();
   }, [initialJump, clubs, templates, commitSnap, onConsumeJump]);
 
-  const hasComposition = Boolean(snap.headAssetId || snap.templateId);
+  const hasComposition = isDirectMode ? Boolean(snap.directPhotoId) : Boolean(snap.headAssetId || snap.templateId);
 
   const composePayload = useMemo(
     () => ({
       modular: true,
+      step1Mode: snap.step1Mode,
+      directPhotoId: snap.directPhotoId,
+      clampPan: snap.clampPan,
+      enhanceQuality: snap.enhanceQuality,
       headAssetId: snap.headAssetId === 'legacy-jump' ? '' : snap.headAssetId,
       wearMode: 'template' as const,
       templateId: snap.templateId,
       clubId: snap.clubId || '1736',
-      scale: snap.scale,
-      offsetX: snap.offsetX,
-      offsetY: snap.offsetY,
+      scale: activeScale,
+      offsetX: Number(activeOffsetX.toFixed(2)),
+      offsetY: Number(activeOffsetY.toFixed(2)),
       neckFill: snap.neckFill,
       harmonize: snap.harmonize,
       bgMode: snap.bgMode,
       bgBlur: snap.bgBlur,
     }),
-    [snap],
+    [snap, activeScale, activeOffsetX, activeOffsetY],
   );
 
-  // Live modular preview when layers/fit/background change
+  // Live modular preview when layers/fit/background/quality change
   useEffect(() => {
     if (cropStage) return undefined;
-    if (!snap.headAssetId && !snap.templateId) {
+    if (isDirectMode) {
+      if (!snap.directPhotoId) {
+        reqSeqRef.current += 1;
+        setPreviewUrl('');
+        return undefined;
+      }
+    } else if (!snap.headAssetId && !snap.templateId) {
+      reqSeqRef.current += 1;
       setPreviewUrl('');
       return undefined;
+    } else if (snap.headAssetId === 'legacy-jump') {
+      if (!window.pywebview?.api?.render_studio_preview) return undefined;
+      const seq = ++reqSeqRef.current;
+      const t = window.setTimeout(async () => {
+        try {
+          const res = await callBridge<{ previewDataUrl: string }>('render_studio_preview', composePayload);
+          if (seq === reqSeqRef.current && res?.previewDataUrl) setPreviewUrl(res.previewDataUrl);
+        } catch {
+          /* transient drag */
+        }
+      }, 65);
+      return () => window.clearTimeout(t);
     }
-    if (snap.headAssetId === 'legacy-jump') return undefined;
     const seq = ++reqSeqRef.current;
     const t = window.setTimeout(async () => {
       try {
@@ -606,7 +683,131 @@ export default function StudioView({
       }
     }, 65);
     return () => window.clearTimeout(t);
-  }, [cropStage, snap.headAssetId, snap.templateId, composePayload]);
+  }, [cropStage, isDirectMode, snap.directPhotoId, snap.headAssetId, snap.templateId, composePayload]);
+
+  const applyDirectPhotoResult = useCallback(
+    (res: DirectPhotoResponse) => {
+      reqSeqRef.current += 1;
+      setActiveStep(1);
+      setCropStage(null);
+      setErrorMsg('');
+      setSavedMsg('');
+      if (res.detectedUid) {
+        setUid(res.detectedUid);
+      }
+      if (res.previewDataUrl) {
+        setPreviewUrl(res.previewDataUrl);
+      }
+      commitSnap((s) => ({
+        ...s,
+        step1Mode: 'direct_photo',
+        directPhotoId: res.directPhotoId,
+        directPhotoLabel: res.label || 'Foto directa',
+        directPhotoIsPreCutout: Boolean(res.isPreCutout),
+        clampPan: res.clampPan ?? true,
+        directScale: res.autoFit?.scale ?? 1.0,
+        directOffsetX: res.autoFit?.offsetX ?? 0,
+        directOffsetY: res.autoFit?.offsetY ?? 0,
+      }));
+    },
+    [commitSnap],
+  );
+
+  const handleDirectFileBlob = useCallback(
+    async (file: File) => {
+      if (busy) return;
+      if (file.size > 20 * 1024 * 1024) {
+        setErrorMsg('El archivo supera el límite máximo permitido de 20 MB.');
+        return;
+      }
+      setErrorMsg('');
+      setSavedMsg('');
+      setBusy(true);
+      try {
+        const dataUrl = await new Promise<string>((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(String(r.result));
+          r.onerror = () => rej(new Error('No se pudo leer la imagen.'));
+          r.readAsDataURL(file);
+        });
+        const out = await callBridge<DirectPhotoResponse>('load_direct_photo_source', dataUrl, file.name, {
+          ...composePayload,
+          step1Mode: 'direct_photo',
+        });
+        if (out?.directPhotoId) applyDirectPhotoResult(out);
+      } catch (e) {
+        setErrorMsg(e instanceof Error ? e.message : 'Formato o tamaño inválido (máx. 20 MB / 25 MP).');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, composePayload, applyDirectPhotoResult],
+  );
+
+  const handlePickDirectPhoto = useCallback(async () => {
+    setActiveStep(1);
+    if (window.pywebview?.api?.pick_direct_photo_source) {
+      setErrorMsg('');
+      setSavedMsg('');
+      setBusy(true);
+      try {
+        const out = await callBridge<DirectPhotoResponse | null>('pick_direct_photo_source', {
+          ...composePayload,
+          step1Mode: 'direct_photo',
+        });
+        if (out?.directPhotoId) applyDirectPhotoResult(out);
+      } catch (e) {
+        setErrorMsg(e instanceof Error ? e.message : 'No se pudo abrir la foto directa.');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    directFileInputRef.current?.click();
+  }, [composePayload, applyDirectPhotoResult]);
+
+  const canNudgeSubject = Boolean(cropStage || (isDirectMode ? snap.directPhotoId : snap.headAssetId));
+
+  const handleCardinalNudge = useCallback(
+    (dx: number, dy: number) => {
+      setActiveStep(1);
+      if (cropStage) {
+        setCropVp((v) => ({ ...v, panX: v.panX + dx, panY: v.panY + dy }));
+        return;
+      }
+      if (isDirectMode) {
+        if (!snap.directPhotoId) return;
+        commitSnap((s) => ({
+          ...s,
+          directOffsetX: Number((s.directOffsetX + dx).toFixed(4)),
+          directOffsetY: Number((s.directOffsetY + dy).toFixed(4)),
+        }));
+        return;
+      }
+      if (!snap.headAssetId) return;
+      commitSnap((s) => ({
+        ...s,
+        offsetX: s.offsetX + dx,
+        offsetY: s.offsetY + dy,
+      }));
+    },
+    [cropStage, isDirectMode, snap.directPhotoId, snap.headAssetId, commitSnap],
+  );
+
+  const handleResetPosition = useCallback(() => {
+    setActiveStep(1);
+    if (cropStage) {
+      setCropVp((v) => ({ ...v, panX: 0, panY: 0 }));
+      return;
+    }
+    if (isDirectMode) {
+      if (!snap.directPhotoId) return;
+      commitSnap((s) => ({ ...s, directOffsetX: 0, directOffsetY: 0 }));
+      return;
+    }
+    if (!snap.headAssetId) return;
+    commitSnap((s) => ({ ...s, offsetX: 0, offsetY: 0 }));
+  }, [cropStage, isDirectMode, snap.directPhotoId, snap.headAssetId, commitSnap]);
 
   const openStagedCrop = useCallback((staged: StagedFaceResponse) => {
     setActiveStep(1);
@@ -676,7 +877,7 @@ export default function StudioView({
         if (out?.previewDataUrl) {
           setPreviewUrl(out.previewDataUrl);
           setCanExtractBg(!out.isPreCutout);
-          commitSnap((s) => ({ ...s, headAssetId: 'legacy-jump', faceLabel: 'Retrato' }));
+          commitSnap((s) => ({ ...s, step1Mode: 'modular', headAssetId: 'legacy-jump', faceLabel: 'Retrato' }));
         }
       } catch (e) {
         setErrorMsg(e instanceof Error ? e.message : 'Formato inválido.');
@@ -703,6 +904,7 @@ export default function StudioView({
         bgMode: snap.bgMode,
         bgBlur: snap.bgBlur,
         harmonize: snap.harmonize,
+        enhanceQuality: snap.enhanceQuality,
       });
       reqSeqRef.current += 1;
       setActiveStep(1);
@@ -710,6 +912,7 @@ export default function StudioView({
       if (res.previewDataUrl) setPreviewUrl(res.previewDataUrl);
       commitSnap((s) => ({
         ...s,
+        step1Mode: 'modular',
         headAssetId: res.headAssetId,
         faceLabel: res.suggestedName || 'Cara extraída',
         scale: res.autoFit?.scale ?? 1.0,
@@ -722,7 +925,7 @@ export default function StudioView({
     } finally {
       setBusy(false);
     }
-  }, [cropStage, cropVp, removeBgCrop, snap.templateId, snap.bgMode, snap.bgBlur, snap.harmonize, commitSnap]);
+  }, [cropStage, cropVp, removeBgCrop, snap.templateId, snap.bgMode, snap.bgBlur, snap.harmonize, snap.enhanceQuality, commitSnap]);
 
   const handlePickSavedFace = useCallback(
     async (faceId: string) => {
@@ -738,12 +941,13 @@ export default function StudioView({
           isPreCutout?: boolean;
           autoFit: { scale: number; offsetX: number; offsetY: number; neckFill: number };
           previewDataUrl: string;
-        }>('load_saved_face', faceId, snap.templateId, composePayload);
+        }>('load_saved_face', faceId, snap.templateId, { ...composePayload, step1Mode: 'modular' });
         reqSeqRef.current += 1;
         setCanExtractBg(!res.isPreCutout);
         if (res.previewDataUrl) setPreviewUrl(res.previewDataUrl);
         commitSnap((s) => ({
           ...s,
+          step1Mode: 'modular',
           headAssetId: res.headAssetId,
           faceLabel: res.name,
           scale: res.autoFit?.scale ?? 1.0,
@@ -793,6 +997,7 @@ export default function StudioView({
         if (res.previewDataUrl) setPreviewUrl(res.previewDataUrl);
         commitSnap((s) => ({
           ...s,
+          step1Mode: 'modular',
           wearMode: 'template',
           templateId: res.adhocShirtId!,
           scale: res.autoFit?.scale ?? s.scale,
@@ -818,6 +1023,7 @@ export default function StudioView({
       }
       commitSnap((s) => ({
         ...s,
+        step1Mode: 'modular',
         wearMode: 'template',
         headAssetId: res.headAssetId || s.headAssetId,
         faceLabel: `Ficha FM ${res.cardLabel}`,
@@ -987,6 +1193,7 @@ export default function StudioView({
           );
           commitSnap((s) => ({
             ...s,
+            step1Mode: 'modular',
             wearMode: 'template',
             templateId,
             scale: fit?.scale ?? s.scale,
@@ -999,7 +1206,7 @@ export default function StudioView({
           /* fall through */
         }
       }
-      commitSnap((s) => ({ ...s, wearMode: 'template', templateId }));
+      commitSnap((s) => ({ ...s, step1Mode: 'modular', wearMode: 'template', templateId }));
     },
     [snap.headAssetId, commitSnap],
   );
@@ -1103,7 +1310,25 @@ export default function StudioView({
           setCropVp((v) => ({ ...v, panX: v.panX + dx, panY: v.panY + dy }));
           return;
         }
-        if (snap.headAssetId) {
+        if (isDirectMode) {
+          if (snap.directPhotoId) {
+            ev.preventDefault();
+            const now = Date.now();
+            const shouldPush = now - arrowBurstTsRef.current > 450;
+            arrowBurstTsRef.current = now;
+            setHistory((h) => {
+              const next: LayerSnapshot = {
+                ...h.present,
+                directOffsetX: Number((h.present.directOffsetX + dx).toFixed(4)),
+                directOffsetY: Number((h.present.directOffsetY + dy).toFixed(4)),
+              };
+              return shouldPush
+                ? { past: [...h.past.slice(-34), h.present], present: next, future: [], sessionKey: null }
+                : { ...h, present: next, sessionKey: null };
+            });
+            return;
+          }
+        } else if (snap.headAssetId) {
           ev.preventDefault();
           const now = Date.now();
           const shouldPush = now - arrowBurstTsRef.current > 450;
@@ -1144,6 +1369,8 @@ export default function StudioView({
     toolTab,
     activeStep,
     cropStage,
+    isDirectMode,
+    snap.directPhotoId,
     snap.headAssetId,
     busy,
     handleUndo,
@@ -1159,11 +1386,13 @@ export default function StudioView({
       const f = Array.from(ev.clipboardData?.items ?? [])
         .find((i) => i.type.startsWith('image/'))
         ?.getAsFile();
-      if (f) void handleFileBlob(f);
+      if (!f) return;
+      if (isDirectMode) void handleDirectFileBlob(f);
+      else void handleFileBlob(f);
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
-  }, [toolTab, busy, handleFileBlob]);
+  }, [toolTab, busy, isDirectMode, handleDirectFileBlob, handleFileBlob]);
 
   const handlePickCustomBg = useCallback(async () => {
     if (!window.pywebview?.api?.pick_and_upload_custom_background) {
@@ -1266,7 +1495,7 @@ export default function StudioView({
     setErrorMsg('');
     try {
       const effectiveFmt = exportTarget === 'facepack' ? 'png' : fmt;
-      const method = snap.headAssetId === 'legacy-jump' ? 'export_studio_card' : 'export_modular_card';
+      const method = !isDirectMode && snap.headAssetId === 'legacy-jump' ? 'export_studio_card' : 'export_modular_card';
       const res = await callBridge<{ savedPath: string }>(method, {
         uid: cleanUid,
         fmt: effectiveFmt,
@@ -1364,6 +1593,7 @@ export default function StudioView({
             if (payload.previewDataUrl) setPreviewUrl(payload.previewDataUrl);
             commitSnap((s) => ({
               ...s,
+              step1Mode: 'modular',
               headAssetId: payload.headAssetId,
               faceLabel: payload.name,
               scale: payload.autoFit.scale,
@@ -1416,8 +1646,8 @@ export default function StudioView({
                 <button
                   type="button"
                   aria-label="Limpiar imagen editada"
-                  title="Limpiar cara (Supr)"
-                  disabled={!cropStage && !snap.headAssetId}
+                  title="Limpiar imagen (Supr)"
+                  disabled={!cropStage && !(isDirectMode ? snap.directPhotoId : snap.headAssetId)}
                   onClick={handleClearCanvas}
                   className="p-1.5 rounded-md bg-slate-100 dark:bg-slate-800 text-rose-600 dark:text-rose-400 disabled:opacity-35 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition"
                 >
@@ -1431,7 +1661,9 @@ export default function StudioView({
               onDrop={(e) => {
                 e.preventDefault();
                 const f = e.dataTransfer.files?.[0];
-                if (f) void handleFileBlob(f);
+                if (!f) return;
+                if (isDirectMode) void handleDirectFileBlob(f);
+                else void handleFileBlob(f);
               }}
               className={`w-full rounded-lg p-6 flex flex-col items-center justify-center transition ${stageBgClass} border border-slate-200/60 dark:border-slate-800`}
             >
@@ -1445,6 +1677,22 @@ export default function StudioView({
                     setCropVp((v) => ({ ...v, zoom: Number(Math.min(3.2, Math.max(0.35, v.zoom + delta)).toFixed(3)) }));
                     return;
                   }
+                  if (isDirectMode) {
+                    if (!snap.directPhotoId) return;
+                    e.preventDefault();
+                    const delta = e.deltaY < 0 ? 0.05 : -0.05;
+                    commitSnap((s) => {
+                      const nextScale = Number(Math.min(3.0, Math.max(0.35, s.directScale + delta)).toFixed(3));
+                      const ratio = nextScale / Math.max(s.directScale, 0.05);
+                      return {
+                        ...s,
+                        directScale: nextScale,
+                        directOffsetX: Number((s.directOffsetX * ratio).toFixed(4)),
+                        directOffsetY: Number((s.directOffsetY * ratio).toFixed(4)),
+                      };
+                    });
+                    return;
+                  }
                   if (snap.headAssetId) {
                     e.preventDefault();
                     const delta = e.deltaY < 0 ? 0.04 : -0.04;
@@ -1455,20 +1703,46 @@ export default function StudioView({
                   setActiveStep(1);
                   if ((e.target as HTMLElement | null)?.closest('button')) return;
                   if (cropStage) {
-                    dragRef.current = { sx: e.clientX, sy: e.clientY, ox: cropVp.panX, oy: cropVp.panY };
+                    dragRef.current = { sx: e.clientX, sy: e.clientY, ox: cropVp.panX, oy: cropVp.panY, mode: 'crop' };
+                    e.currentTarget.setPointerCapture?.(e.pointerId);
+                    return;
+                  }
+                  if (isDirectMode) {
+                    if (!snap.directPhotoId) return;
+                    dragRef.current = {
+                      sx: e.clientX,
+                      sy: e.clientY,
+                      ox: snap.directOffsetX,
+                      oy: snap.directOffsetY,
+                      mode: 'direct',
+                      baseSnap: snap,
+                    };
                     e.currentTarget.setPointerCapture?.(e.pointerId);
                     return;
                   }
                   if (!snap.headAssetId) return;
-                  dragRef.current = { sx: e.clientX, sy: e.clientY, ox: snap.offsetX, oy: snap.offsetY, baseSnap: snap };
+                  dragRef.current = {
+                    sx: e.clientX,
+                    sy: e.clientY,
+                    ox: snap.offsetX,
+                    oy: snap.offsetY,
+                    mode: 'modular',
+                    baseSnap: snap,
+                  };
                   e.currentTarget.setPointerCapture?.(e.pointerId);
                 }}
                 onPointerMove={(e) => {
                   if (!dragRef.current) return;
                   const dx = Math.round(e.clientX - dragRef.current.sx);
                   const dy = Math.round(e.clientY - dragRef.current.sy);
-                  if (cropStage) {
+                  if (dragRef.current.mode === 'crop') {
                     setCropVp((v) => ({ ...v, panX: dragRef.current!.ox + dx, panY: dragRef.current!.oy + dy }));
+                  } else if (dragRef.current.mode === 'direct') {
+                    replaceLiveSnap((s) => ({
+                      ...s,
+                      directOffsetX: Number((dragRef.current!.ox + dx).toFixed(4)),
+                      directOffsetY: Number((dragRef.current!.oy + dy).toFixed(4)),
+                    }));
                   } else {
                     replaceLiveSnap((s) => ({ ...s, offsetX: dragRef.current!.ox + dx, offsetY: dragRef.current!.oy + dy }));
                   }
@@ -1477,7 +1751,10 @@ export default function StudioView({
                   if (dragRef.current?.baseSnap) {
                     const prevBase = dragRef.current.baseSnap;
                     setHistory((h) =>
-                      prevBase.offsetX === h.present.offsetX && prevBase.offsetY === h.present.offsetY
+                      prevBase.offsetX === h.present.offsetX &&
+                      prevBase.offsetY === h.present.offsetY &&
+                      prevBase.directOffsetX === h.present.directOffsetX &&
+                      prevBase.directOffsetY === h.present.directOffsetY
                         ? h
                         : { past: [...h.past.slice(-34), prevBase], present: h.present, future: [], sessionKey: null },
                     );
@@ -1488,7 +1765,9 @@ export default function StudioView({
                   dragRef.current = null;
                 }}
                 className={`relative w-[260px] h-[310px] overflow-hidden select-none ${
-                  cropStage || snap.headAssetId ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+                  cropStage || (isDirectMode ? snap.directPhotoId : snap.headAssetId)
+                    ? 'cursor-grab active:cursor-grabbing'
+                    : 'cursor-pointer'
                 } flex items-center justify-center`}
               >
                 {cropStage ? (
@@ -1498,11 +1777,11 @@ export default function StudioView({
                     style={{ width: `${cropDispW}px`, height: `${cropDispH}px`, left: `${cropLeft}px`, top: `${cropTop}px` }}
                     className="absolute max-w-none pointer-events-none"
                   />
-                ) : snap.headAssetId && previewUrl ? (
+                ) : (isDirectMode ? snap.directPhotoId : snap.headAssetId) && previewUrl ? (
                   <img src={previewUrl} alt="Previsualización DF11 260x310" className="w-[260px] h-[310px] pointer-events-none" />
                 ) : (
                   <>
-                    {previewUrl && (
+                    {!isDirectMode && previewUrl && (
                       <img
                         src={previewUrl}
                         alt="Plantilla base DF11"
@@ -1511,13 +1790,19 @@ export default function StudioView({
                     )}
                     <button
                       type="button"
-                      onClick={() => void handlePickPortrait()}
+                      onClick={() => void (isDirectMode ? handlePickDirectPhoto() : handlePickPortrait())}
                       className="relative z-10 w-[222px] h-[276px] rounded-xl border-2 border-dashed border-slate-400/70 dark:border-slate-600 flex flex-col items-center justify-center gap-2 px-4 text-center text-xs text-slate-700 dark:text-slate-200 bg-white/75 dark:bg-slate-900/75 cursor-pointer hover:border-emerald-500/80 transition"
                     >
                       <Upload className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
-                      <span className="font-medium">Arrastra foto, haz clic o pulsa Ctrl+V</span>
+                      <span className="font-medium">
+                        {isDirectMode
+                          ? 'Arrastra foto directa, haz clic o pulsa Ctrl+V'
+                          : 'Arrastra foto, haz clic o pulsa Ctrl+V'}
+                      </span>
                       <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                        Abre tu última carpeta · Rueda = Zona de corte
+                        {isDirectMode
+                          ? 'Marco DF11 directo · Sin IA · Mover N/S/E/O + Zoom'
+                          : 'Abre tu última carpeta · Rueda = Zona de corte'}
                       </span>
                     </button>
                   </>
@@ -1610,7 +1895,7 @@ export default function StudioView({
                   <Crosshair className="w-3.5 h-3.5" />
                 </button>
                 <span className="tabular-nums text-slate-500 dark:text-slate-400">
-                  X:{snap.offsetX} · Y:{snap.offsetY}
+                  X:{fmtCoord(activeOffsetX)} · Y:{fmtCoord(activeOffsetY)}
                 </span>
               </div>
             </div>
@@ -1618,7 +1903,7 @@ export default function StudioView({
 
           {/* Right Panel: Chronological 4-Step Layer Builder */}
           <section className="lg:col-span-7 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-200/80 dark:divide-slate-800">
-            {/* PASO 1: CARA Y CUELLO */}
+            {/* PASO 1: CARA Y CUELLO / FOTO DIRECTA + MARCO DF11 */}
             <div
               onClick={() => setActiveStep(1)}
               className={`p-4 space-y-3 rounded-t-xl transition ${
@@ -1638,11 +1923,17 @@ export default function StudioView({
                           : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700'
                       }`}
                     >
-                      {activeStep === 1 ? 'Activo · Ratón o ←↑↓→' : 'Clic para mover con ←↑↓→'}
+                      {activeStep === 1 ? 'Activo · N/S/E/O, Ratón o ←↑↓→' : 'Clic para mover con ←↑↓→'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
-                    {snap.faceLabel ? `Activa: ${snap.faceLabel}` : 'Elige una cara extraída o sube una imagen para recortar su zona.'}
+                    {isDirectMode
+                      ? snap.directPhotoLabel
+                        ? `Activa: ${snap.directPhotoLabel} · Marco DF11 directo (Sin IA)`
+                        : 'Sube una foto directamente y enmárcala en 260 × 310 px sin extraer capas.'
+                      : snap.faceLabel
+                      ? `Activa: ${snap.faceLabel}`
+                      : 'Elige una cara extraída o sube una imagen para recortar su zona.'}
                   </p>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -1658,6 +1949,17 @@ export default function StudioView({
                     }}
                   />
                   <input
+                    ref={directFileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      e.target.value = '';
+                      if (f) void handleDirectFileBlob(f);
+                    }}
+                  />
+                  <input
                     ref={facepackInputRef}
                     type="file"
                     accept="image/*"
@@ -1668,92 +1970,187 @@ export default function StudioView({
                       if (f) void handleFacepackFileBlob(f, pendingRemixModeRef.current);
                     }}
                   />
-                  <button
-                    type="button"
-                    onClick={() => void handlePickPortrait()}
-                    className="px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 hover:bg-emerald-500 text-white inline-flex items-center gap-1.5"
-                  >
-                    <ImagePlus className="w-3.5 h-3.5" /> Subir retrato
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!snap.headAssetId || !snap.templateId}
-                    onClick={() => snap.templateId && void handleSelectTemplate(snap.templateId)}
-                    className="px-2.5 py-1.5 text-xs rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-40 inline-flex items-center gap-1"
-                    title="Auto-encajar cabeza y cuello a la camiseta activa"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" /> Auto-encajar
-                  </button>
+                  {isDirectMode ? (
+                    <button
+                      type="button"
+                      onClick={() => void handlePickDirectPhoto()}
+                      className="px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 hover:bg-emerald-500 text-white inline-flex items-center gap-1.5"
+                    >
+                      <ImagePlus className="w-3.5 h-3.5" /> Subir foto directa
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void handlePickPortrait()}
+                        className="px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 hover:bg-emerald-500 text-white inline-flex items-center gap-1.5"
+                      >
+                        <ImagePlus className="w-3.5 h-3.5" /> Subir retrato
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!snap.headAssetId || !snap.templateId}
+                        onClick={() => snap.templateId && void handleSelectTemplate(snap.templateId)}
+                        className="px-2.5 py-1.5 text-xs rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-40 inline-flex items-center gap-1"
+                        title="Auto-encajar cabeza y cuello a la camiseta activa"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" /> Auto-encajar
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
-              {/* Facepack Card Remix Bar */}
-              <div className="rounded-lg border border-slate-200/80 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/60 p-2.5 space-y-2 text-xs">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-medium text-slate-700 dark:text-slate-300 inline-flex items-center gap-1.5">
-                    <RefreshCw className="w-3.5 h-3.5 text-emerald-500" /> Ficha ya montada del Pack de Faces FM:
+              {/* Paso 1 Mode Switch + 4-Cardinal Movement Pad (N / S / E / O) */}
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 px-2.5 py-2 text-xs">
+                <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Modo de entrada en Paso 1">
+                  <button
+                    type="button"
+                    onClick={() => commitSnap((s) => ({ ...s, step1Mode: 'modular' }))}
+                    className={segBtn(!isDirectMode)}
+                  >
+                    Modo Capas (Cara + Camiseta)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCropStage(null);
+                      commitSnap((s) => ({ ...s, step1Mode: 'direct_photo' }));
+                    }}
+                    className={segBtn(isDirectMode)}
+                  >
+                    Foto Directa + Marco DF11
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-1" role="group" aria-label="Pad cardinal N/S/E/O">
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400 mr-1 hidden sm:inline">
+                    Mover:
                   </span>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void handlePickFacepackCard('swap_shirt')}
-                      className="px-2.5 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 font-medium transition"
-                    >
-                      Cambiar camiseta a ficha FM
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void handlePickFacepackCard('swap_face')}
-                      className="px-2.5 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-300 font-medium transition"
-                    >
-                      Cambiar cara (conservar su camiseta)
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    aria-label="Mover al Norte (Arriba)"
+                    title="Mover al Norte (Arriba · Shift ×4)"
+                    disabled={!canNudgeSubject}
+                    onClick={(e) => handleCardinalNudge(0, -(e.shiftKey ? 8 : 2))}
+                    className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-200 disabled:opacity-35 font-mono text-[11px] transition"
+                  >
+                    ↑ N
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Mover al Sur (Abajo)"
+                    title="Mover al Sur (Abajo · Shift ×4)"
+                    disabled={!canNudgeSubject}
+                    onClick={(e) => handleCardinalNudge(0, e.shiftKey ? 8 : 2)}
+                    className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-200 disabled:opacity-35 font-mono text-[11px] transition"
+                  >
+                    ↓ S
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Mover al Oeste (Izquierda)"
+                    title="Mover al Oeste (Izquierda · Shift ×4)"
+                    disabled={!canNudgeSubject}
+                    onClick={(e) => handleCardinalNudge(-(e.shiftKey ? 8 : 2), 0)}
+                    className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-200 disabled:opacity-35 font-mono text-[11px] transition"
+                  >
+                    ← O
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Mover al Este (Derecha)"
+                    title="Mover al Este (Derecha · Shift ×4)"
+                    disabled={!canNudgeSubject}
+                    onClick={(e) => handleCardinalNudge(e.shiftKey ? 8 : 2, 0)}
+                    className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-200 disabled:opacity-35 font-mono text-[11px] transition"
+                  >
+                    → E
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Centrar posición (0,0)"
+                    title="Centrar posición (0,0)"
+                    disabled={!canNudgeSubject}
+                    onClick={handleResetPosition}
+                    className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 hover:border-emerald-500 text-slate-700 dark:text-slate-300 disabled:opacity-35 font-mono text-[11px] transition"
+                  >
+                    0,0
+                  </button>
                 </div>
-                {loadedFacepackCard && (
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-200/70 dark:border-slate-800 text-[11px]">
-                    <span className="text-slate-600 dark:text-slate-400 font-mono truncate">
-                      Ficha cargada: {loadedFacepackCard.label}
-                    </span>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void handleSwitchFacepackMode('swap_shirt')}
-                        className={segBtn(isUsingCardFace)}
-                      >
-                        Usar su cara
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void handleSwitchFacepackMode('swap_face')}
-                        className={segBtn(isUsingCardShirt)}
-                      >
-                        Usar su camiseta
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
 
-              {faces.length > 0 && (
-                <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                  {faces.map((f) => (
-                    <button
-                      key={f.faceId}
-                      type="button"
-                      onClick={() => void handlePickSavedFace(f.faceId)}
-                      title={`Cargar ${f.name}`}
-                      className="shrink-0 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-800 hover:border-emerald-500 bg-slate-50 dark:bg-slate-950/60 inline-flex items-center gap-1.5 text-[11px] text-slate-700 dark:text-slate-300 transition"
-                    >
-                      <img src={f.thumbDataUrl} alt={f.name} className="w-6 h-6 object-contain rounded bg-slate-900" />
-                      <span className="max-w-[92px] truncate">{f.name}</span>
-                    </button>
-                  ))}
-                </div>
+              {!isDirectMode && (
+                <>
+                  {/* Facepack Card Remix Bar */}
+                  <div className="rounded-lg border border-slate-200/80 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/60 p-2.5 space-y-2 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium text-slate-700 dark:text-slate-300 inline-flex items-center gap-1.5">
+                        <RefreshCw className="w-3.5 h-3.5 text-emerald-500" /> Ficha ya montada del Pack de Faces FM:
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handlePickFacepackCard('swap_shirt')}
+                          className="px-2.5 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 font-medium transition"
+                        >
+                          Cambiar camiseta a ficha FM
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handlePickFacepackCard('swap_face')}
+                          className="px-2.5 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-300 font-medium transition"
+                        >
+                          Cambiar cara (conservar su camiseta)
+                        </button>
+                      </div>
+                    </div>
+                    {loadedFacepackCard && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-200/70 dark:border-slate-800 text-[11px]">
+                        <span className="text-slate-600 dark:text-slate-400 font-mono truncate">
+                          Ficha cargada: {loadedFacepackCard.label}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void handleSwitchFacepackMode('swap_shirt')}
+                            className={segBtn(isUsingCardFace)}
+                          >
+                            Usar su cara
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void handleSwitchFacepackMode('swap_face')}
+                            className={segBtn(isUsingCardShirt)}
+                          >
+                            Usar su camiseta
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {faces.length > 0 && (
+                    <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                      {faces.map((f) => (
+                        <button
+                          key={f.faceId}
+                          type="button"
+                          onClick={() => void handlePickSavedFace(f.faceId)}
+                          title={`Cargar ${f.name}`}
+                          className="shrink-0 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-800 hover:border-emerald-500 bg-slate-50 dark:bg-slate-950/60 inline-flex items-center gap-1.5 text-[11px] text-slate-700 dark:text-slate-300 transition"
+                        >
+                          <img src={f.thumbDataUrl} alt={f.name} className="w-6 h-6 object-contain rounded bg-slate-900" />
+                          <span className="max-w-[92px] truncate">{f.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
 
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center text-xs">
@@ -1766,39 +2163,84 @@ export default function StudioView({
                   />
                   Luz DF11
                 </label>
-                <div className="sm:col-span-5">
-                  <PercentStepperControl
-                    sessionPrefix="zoom"
-                    label="Zoom"
-                    sliderAriaLabel="Barra de Zoom de cabeza"
-                    inputAriaLabel="Valor exacto de Zoom (%)"
-                    upAriaLabel="Subir Zoom"
-                    downAriaLabel="Bajar Zoom"
-                    value={snap.scale}
-                    minPct={15}
-                    maxPct={220}
-                    onChangeValue={(nextScale, skey) => commitSessionSnap(skey, (s) => ({ ...s, scale: nextScale }))}
-                    onEndSession={endEditSession}
-                  />
-                </div>
-                <div className="sm:col-span-5">
-                  <PercentStepperControl
-                    sessionPrefix="neck"
-                    label="Cuello"
-                    sliderAriaLabel="Barra de engrosamiento de cuello"
-                    inputAriaLabel="Valor exacto de Cuello (%)"
-                    upAriaLabel="Subir Cuello"
-                    downAriaLabel="Bajar Cuello"
-                    titleHint={
-                      !snap.templateId ? 'Se aplica al engarzar la cabeza con la camiseta o traje del Paso 2' : undefined
-                    }
-                    value={snap.neckFill}
-                    minPct={0}
-                    maxPct={150}
-                    onChangeValue={(nextNeck, skey) => commitSessionSnap(skey, (s) => ({ ...s, neckFill: nextNeck }))}
-                    onEndSession={endEditSession}
-                  />
-                </div>
+                {isDirectMode ? (
+                  <>
+                    <label
+                      title="Impide dejar huecos vacíos en los bordes cuando la foto cubre todo el marco"
+                      className="sm:col-span-3 inline-flex items-center gap-2 text-slate-700 dark:text-slate-300"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={snap.clampPan}
+                        onChange={(e) => commitSnap((s) => ({ ...s, clampPan: e.target.checked }))}
+                        className="accent-emerald-600"
+                      />
+                      Ajustar a bordes
+                    </label>
+                    <div className="sm:col-span-7">
+                      <PercentStepperControl
+                        sessionPrefix="zoom"
+                        label="Zoom"
+                        sliderAriaLabel="Barra de Zoom de foto directa"
+                        inputAriaLabel="Valor exacto de Zoom (%)"
+                        upAriaLabel="Subir Zoom"
+                        downAriaLabel="Bajar Zoom"
+                        titleHint="Zoom anclado al centro óptico DF11 (130, 155)"
+                        value={snap.directScale}
+                        minPct={35}
+                        maxPct={300}
+                        onChangeValue={(nextScale, skey) =>
+                          commitSessionSnap(skey, (s, base) => {
+                            const ratio = nextScale / Math.max(base.directScale, 0.05);
+                            return {
+                              ...s,
+                              directScale: nextScale,
+                              directOffsetX: Number((base.directOffsetX * ratio).toFixed(4)),
+                              directOffsetY: Number((base.directOffsetY * ratio).toFixed(4)),
+                            };
+                          })
+                        }
+                        onEndSession={endEditSession}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="sm:col-span-5">
+                      <PercentStepperControl
+                        sessionPrefix="zoom"
+                        label="Zoom"
+                        sliderAriaLabel="Barra de Zoom de cabeza"
+                        inputAriaLabel="Valor exacto de Zoom (%)"
+                        upAriaLabel="Subir Zoom"
+                        downAriaLabel="Bajar Zoom"
+                        value={snap.scale}
+                        minPct={15}
+                        maxPct={220}
+                        onChangeValue={(nextScale, skey) => commitSessionSnap(skey, (s) => ({ ...s, scale: nextScale }))}
+                        onEndSession={endEditSession}
+                      />
+                    </div>
+                    <div className="sm:col-span-5">
+                      <PercentStepperControl
+                        sessionPrefix="neck"
+                        label="Cuello"
+                        sliderAriaLabel="Barra de engrosamiento de cuello"
+                        inputAriaLabel="Valor exacto de Cuello (%)"
+                        upAriaLabel="Subir Cuello"
+                        downAriaLabel="Bajar Cuello"
+                        titleHint={
+                          !snap.templateId ? 'Se aplica al engarzar la cabeza con la camiseta o traje del Paso 2' : undefined
+                        }
+                        value={snap.neckFill}
+                        minPct={0}
+                        maxPct={150}
+                        onChangeValue={(nextNeck, skey) => commitSessionSnap(skey, (s) => ({ ...s, neckFill: nextNeck }))}
+                        onEndSession={endEditSession}
+                      />
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
@@ -1826,6 +2268,25 @@ export default function StudioView({
                 </div>
               </div>
 
+              {isDirectMode ? (
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-50/60 dark:bg-emerald-950/25 p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="space-y-0.5">
+                    <div className="font-semibold text-emerald-900 dark:text-emerald-200">
+                      Modo Foto Directa activo
+                    </div>
+                    <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                      La foto ocupa directamente el marco oficial DF11 (260 × 310 px) sin superponer equipación.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => commitSnap((s) => ({ ...s, step1Mode: 'modular' }))}
+                    className="px-2.5 py-1.5 rounded-md bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:border-emerald-500 text-slate-700 dark:text-slate-200 font-medium transition"
+                  >
+                    Cambiar a Modo Capas
+                  </button>
+                </div>
+              ) : (
               <div className="space-y-2.5">
                 {adhocShirt && (
                   <div
@@ -2057,6 +2518,7 @@ export default function StudioView({
                   </div>
                 )}
               </div>
+              )}
             </div>
 
             {/* PASO 3: FONDO (Sin alterar comportamiento confirmado por el usuario) */}
@@ -2086,9 +2548,15 @@ export default function StudioView({
                   </button>
                   <button
                     type="button"
-                    disabled={!snap.headAssetId || !canExtractBg || busy}
+                    disabled={isDirectMode || !snap.headAssetId || !canExtractBg || busy}
                     onClick={() => void handleExtractBg()}
-                    title={!canExtractBg ? 'Disponible cuando subes una foto con fondo original' : 'Extraer fondo limpio de la foto'}
+                    title={
+                      isDirectMode
+                        ? 'En modo Foto Directa el fondo original ya forma parte de la foto'
+                        : !canExtractBg
+                        ? 'Disponible cuando subes una foto con fondo original'
+                        : 'Extraer fondo limpio de la foto'
+                    }
                     className="px-2.5 py-1 text-xs rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-45 inline-flex items-center gap-1"
                   >
                     <Sparkles className="w-3 h-3" /> Extraer de foto
@@ -2155,6 +2623,33 @@ export default function StudioView({
                   Paso 4 · Marco Maestro DF11 y Exportación
                 </span>
                 <span className="text-[11px] text-slate-500 dark:text-slate-400">Anillo exterior Alpha = 0 garantizado</span>
+              </div>
+
+              {/* 100% Offline Pure-Optics Final Quality Enhancer (WGIF OKLab + Linear-Light Subpixel + 8x8 Deblock) */}
+              <div className="rounded-lg border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
+                  <div className="sm:col-span-8">
+                    <PercentStepperControl
+                      sessionPrefix="quality"
+                      label="Calidad óptica"
+                      sliderAriaLabel="Barra de mejora de calidad óptica"
+                      inputAriaLabel="Valor exacto de Calidad óptica (%)"
+                      upAriaLabel="Subir Calidad óptica"
+                      downAriaLabel="Bajar Calidad óptica"
+                      titleHint="Filtro guiado ponderado WGIF en OKLab + subpíxel en luz lineal + deblocking JPEG 8×8 (100% offline, 0% IA)"
+                      value={snap.enhanceQuality}
+                      minPct={0}
+                      maxPct={100}
+                      onChangeValue={(nextQ, skey) =>
+                        commitSessionSnap(skey, (s) => ({ ...s, enhanceQuality: nextQ }))
+                      }
+                      onEndSession={endEditSession}
+                    />
+                  </div>
+                  <div className="sm:col-span-4 text-[11px] text-slate-500 dark:text-slate-400 sm:text-right">
+                    Óptica pura WGIF · Sin IA
+                  </div>
+                </div>
               </div>
 
               {/* Dual Destination Selector */}

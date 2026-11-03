@@ -1,4 +1,5 @@
 export type TemplateCategory = 'player' | 'staff';
+export type Step1Mode = 'modular' | 'direct_photo';
 export interface ClubSeed { name: string; pattern: string; primary: string; secondary: string; collar: string; }
 export interface StorageHealth { target_path: string; in_onedrive: boolean; free_gb: number; warning: boolean; steam_launch_arg: string; gamepass_guide: string; }
 export interface BootstrapState { version: string; clubs: Record<string, ClubSeed>; vaultDir: string; exportDir: string; facepackDir?: string; storageHealth: StorageHealth; hasModels: boolean; liveWatching?: boolean; theme?: 'dark' | 'light'; }
@@ -53,6 +54,19 @@ export interface ExtractedFaceResponse {
   headAssetId: string;
   suggestedName: string;
   headPreviewDataUrl: string;
+  autoFit: { scale: number; offsetX: number; offsetY: number; neckFill: number };
+  previewDataUrl: string;
+}
+
+export interface DirectPhotoResponse {
+  directPhotoId: string;
+  fileName?: string;
+  label: string;
+  detectedUid?: string;
+  width: number;
+  height: number;
+  isPreCutout: boolean;
+  clampPan: boolean;
   autoFit: { scale: number; offsetX: number; offsetY: number; neckFill: number };
   previewDataUrl: string;
 }
@@ -137,6 +151,8 @@ export async function callBridge<T>(method: string, ...args: unknown[]): Promise
   if (
     !window.pywebview?.api &&
     (method.startsWith('load_raw_') ||
+      method.startsWith('load_direct_') ||
+      method.startsWith('pick_direct_') ||
       method.startsWith('load_facepack_') ||
       method.startsWith('pick_facepack_') ||
       method.startsWith('preview_shirt_') ||

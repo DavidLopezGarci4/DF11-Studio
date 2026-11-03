@@ -993,4 +993,144 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       delete window.pywebview;
     }
   });
+
+  it('supports Paso 1 Foto Directa + Marco DF11 with 4-cardinal pad, center-pivot zoom, Undo/Redo, and Paso 4 Calidad óptica', async () => {
+    const calls: Array<{ fn: string; args: unknown[] }> = [];
+    window.pywebview = {
+      api: {
+        list_shirt_templates: async () => [
+          {
+            templateId: 'Madrid_Player',
+            filename: 'Madrid_Player.png',
+            displayName: 'Titular Madrid',
+            clubId: '1736',
+            category: 'player',
+            isActiveForClub: true,
+            collarWidth: 79,
+            apexY: 228,
+            thumbDataUrl: ONE_PX_PNG,
+          },
+        ],
+        list_saved_faces: async () => [],
+        pick_direct_photo_source: async (...args: unknown[]) => {
+          calls.push({ fn: 'pick_direct_photo_source', args });
+          return {
+            directPhotoId: 'direct-1',
+            fileName: '29184012.jpg',
+            label: '29184012',
+            detectedUid: '29184012',
+            width: 420,
+            height: 280,
+            isPreCutout: false,
+            clampPan: true,
+            autoFit: { scale: 1.0, offsetX: 0, offsetY: 0, neckFill: 1.0 },
+            previewDataUrl: ONE_PX_PNG,
+          };
+        },
+        pick_raw_face_source: async () => {
+          throw new Error('pick_raw_face_source must not be called in Foto Directa mode');
+        },
+        render_modular_preview: async (payload: unknown) => {
+          calls.push({ fn: 'render_modular_preview', args: [payload] });
+          return { previewDataUrl: ONE_PX_PNG };
+        },
+        export_modular_card: async (payload: unknown) => {
+          calls.push({ fn: 'export_modular_card', args: [payload] });
+          return { savedPath: 'D:\\DF11Studio\\Exports\\29184012.png' };
+        },
+      },
+    };
+
+    try {
+      render(<StudioView clubs={CLUBS} exportDir="D:\\DF11Studio\\Exports" onExportDirChange={() => {}} initialJump={null} />);
+      await waitFor(() => expect(screen.getByRole('tab', { name: /Extraer Camiseta \(1\)/i })).toBeInTheDocument());
+
+      // Switch Paso 1 to 'Foto Directa + Marco DF11' and load a photo directly (no head/neck crop staging!)
+      fireEvent.click(screen.getByRole('button', { name: /Foto Directa \+ Marco DF11/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Subir foto directa/i }));
+
+      expect(await screen.findByText(/Activa: 29184012/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/ID Football Manager/i)).toHaveValue('29184012');
+      expect(screen.queryByAltText(/Zona de corte previa/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/Modo Foto Directa activo/i)).toBeInTheDocument();
+
+      // Move in all 4 cardinal points (N, S, O, E) + keyboard arrow
+      fireEvent.click(screen.getByRole('button', { name: /Mover al Norte/i }));
+      expect(screen.getByText(/X:0 · Y:-2/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Mover al Sur/i }));
+      expect(screen.getByText(/X:0 · Y:0/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Mover al Oeste/i }));
+      expect(screen.getByText(/X:-2 · Y:0/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Mover al Este/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Mover al Este/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Mover al Norte/i }), { shiftKey: true });
+      fireEvent.keyDown(window, { key: 'ArrowRight' });
+      expect(screen.getByText(/X:3 · Y:-8/i)).toBeInTheDocument();
+
+      // Center-pivot zoom: doubling zoom 100% -> 200% scales pan offset (3, -8) -> (6, -16) around DF11 optical center
+      const zoomInput = screen.getByLabelText(/Valor exacto de Zoom/i);
+      fireEvent.focus(zoomInput);
+      fireEvent.change(zoomInput, { target: { value: '200' } });
+      fireEvent.blur(zoomInput);
+      expect(screen.getByText(/X:6 · Y:-16/i)).toBeInTheDocument();
+
+      // Center reset (0,0) + Undo/Redo
+      fireEvent.click(screen.getByRole('button', { name: /Centrar posición/i }));
+      expect(screen.getByText(/X:0 · Y:0/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Deshacer' }));
+      expect(screen.getByText(/X:6 · Y:-16/i)).toBeInTheDocument();
+
+      // Toggle 'Ajustar a bordes' (clampPan)
+      const clampCheckbox = screen.getByRole('checkbox', { name: /Ajustar a bordes/i });
+      expect(clampCheckbox).toBeChecked();
+      fireEvent.click(clampCheckbox);
+      expect(clampCheckbox).not.toBeChecked();
+
+      // Adjust Paso 4 'Calidad óptica' (100% offline WGIF) with coalesced typing + stepper arrow, then export
+      const qualInput = screen.getByLabelText(/Valor exacto de Calidad óptica/i);
+      fireEvent.focus(qualInput);
+      fireEvent.change(qualInput, { target: { value: '6' } });
+      fireEvent.change(qualInput, { target: { value: '65' } });
+      fireEvent.blur(qualInput);
+      expect(qualInput).toHaveValue('65');
+      fireEvent.click(screen.getByRole('button', { name: /Deshacer/i }));
+      expect(qualInput).toHaveValue('0');
+      fireEvent.click(screen.getByRole('button', { name: /Rehacer/i }));
+      expect(qualInput).toHaveValue('65');
+      fireEvent.click(screen.getByRole('button', { name: /Subir Calidad óptica/i }));
+      expect(qualInput).toHaveValue('66');
+
+      // Paso 3 'Extraer de foto' must remain disabled in zero-AI Direct Photo mode
+      expect(screen.getByRole('button', { name: /Extraer de foto/i })).toBeDisabled();
+
+      // Switching to Modo Capas via Paso 2 notice and back preserves independent transforms
+      fireEvent.click(screen.getByRole('button', { name: /Cambiar a Modo Capas/i }));
+      expect(screen.getByText(/X:0 · Y:0/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/Valor exacto de Zoom/i)).toHaveValue('100');
+      fireEvent.click(screen.getByRole('button', { name: /Foto Directa \+ Marco DF11/i }));
+      expect(screen.getByText(/X:6 · Y:-16/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/Valor exacto de Zoom/i)).toHaveValue('200');
+
+      // Reversible Delete clear in Direct Photo mode
+      fireEvent.keyDown(window, { key: 'Delete' });
+      expect(screen.getByRole('button', { name: /Arrastra foto directa/i })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Deshacer' }));
+      expect(screen.getByText(/Activa: 29184012/i)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /Exportar DF11/i }));
+      await waitFor(() => expect(calls.some((c) => c.fn === 'export_modular_card')).toBe(true));
+      expect(calls.find((c) => c.fn === 'export_modular_card')?.args[0]).toMatchObject({
+        uid: '29184012',
+        step1Mode: 'direct_photo',
+        directPhotoId: 'direct-1',
+        scale: 2.0,
+        offsetX: 6,
+        offsetY: -16,
+        clampPan: false,
+        enhanceQuality: 0.66,
+      });
+    } finally {
+      delete window.pywebview;
+    }
+  });
 });
