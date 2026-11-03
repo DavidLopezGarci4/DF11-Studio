@@ -9,6 +9,12 @@ from typing import Literal
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
+from backend.core.dsp import (
+    FitMode,
+    compute_effective_scale,
+    enhance_df11_pure_optics,
+    resample_linear_subpixel_rgba,
+)
 from backend.core.paths import ASSETS_DIR
 
 DF11_WIDTH = 260
@@ -99,21 +105,22 @@ def _prepare_layer1(bg_mode: BgMode, bg_custom_rgba: Image.Image | None, bg_blur
     return arr.copy()
 
 
-def _place_portrait(portrait: Image.Image, offset: tuple[float, float], scale: float) -> np.ndarray:
-    canvas = np.zeros((DF11_HEIGHT, DF11_WIDTH, 4), dtype=np.uint8)
-    scale = max(0.15, min(float(scale), 4.0))
-    pw = max(1, round(portrait.width * scale))
-    ph = max(1, round(portrait.height * scale))
-    resized = portrait.convert("RGBA") if (pw, ph) == portrait.size else portrait.convert("RGBA").resize((pw, ph), Image.Resampling.LANCZOS)
-    src = np.asarray(resized, dtype=np.uint8)
-
-    x0 = round((DF11_WIDTH - pw) / 2.0 + float(offset[0]))
-    y0 = round((DF11_HEIGHT - ph) / 2.0 + float(offset[1]))
-    cx0, cy0 = max(0, x0), max(0, y0)
-    cx1, cy1 = min(DF11_WIDTH, x0 + pw), min(DF11_HEIGHT, y0 + ph)
-    if cx1 > cx0 and cy1 > cy0:
-        canvas[cy0:cy1, cx0:cx1] = src[cy0 - y0 : cy1 - y0, cx0 - x0 : cx1 - x0]
-    return canvas
+def _place_portrait(
+    portrait: Image.Image,
+    offset: tuple[float, float],
+    scale: float,
+    fit_mode: FitMode = "raw",
+    clamp_to_inner: bool = False,
+) -> np.ndarray:
+    return resample_linear_subpixel_rgba(
+        portrait,
+        zoom=float(scale),
+        pan_x=float(offset[0]),
+        pan_y=float(offset[1]),
+        fit_mode=fit_mode,
+        clamp_to_inner=clamp_to_inner,
+        dst_size=(DF11_WIDTH, DF11_HEIGHT),
+    )
 
 
 def render_df11_card(
@@ -123,11 +130,32 @@ def render_df11_card(
     bg_mode: BgMode = "white_df11",
     bg_custom_rgba: Image.Image | None = None,
     bg_blur: float = 0.0,
+    enhance_quality: float = 0.0,
+    fit_mode: FitMode = "raw",
+    clamp_to_inner: bool = False,
+    upscale_hint: float | None = None,
 ) -> Image.Image:
-    """Composite Layer 1 + Layer 2, apply destination-in inner clip, and top with Layer 3 DF11 frame."""
+    """Composite Layer 1 + Layer 2, apply optional pure-optics WGIF, clip inner mask, and top with DF11 frame."""
     inner_mask_img, overlay_img = load_df11_assets()
     layer1 = _prepare_layer1(bg_mode, bg_custom_rgba, bg_blur)
-    combined = layer1 if portrait_rgba is None else premul_over(layer1, _place_portrait(portrait_rgba, portrait_offset, portrait_scale))
+    if portrait_rgba is None:
+        combined = layer1
+    else:
+        placed = _place_portrait(
+            portrait_rgba,
+            portrait_offset,
+            portrait_scale,
+            fit_mode=fit_mode,
+            clamp_to_inner=clamp_to_inner,
+        )
+        combined = premul_over(layer1, placed)
+        if float(enhance_quality) > 1e-3:
+            eff_s = (
+                float(upscale_hint)
+                if upscale_hint is not None
+                else compute_effective_scale(portrait_rgba.width, portrait_rgba.height, portrait_scale, fit_mode)
+            )
+            combined = enhance_df11_pure_optics(combined, amount=float(enhance_quality), upscale_hint=max(1.0, eff_s))
 
     # Destination-in clip BEFORE frame overlay so the punched ring stays strictly Alpha == 0
     mask_f = np.asarray(inner_mask_img, dtype=np.float32)[:, :, None] / 255.0

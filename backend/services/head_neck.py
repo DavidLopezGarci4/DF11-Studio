@@ -16,10 +16,11 @@ from PIL import Image, ImageDraw, ImageFilter
 
 import backend.services.vision as vision_mod
 from backend.core.compositor import BgMode, DF11_HEIGHT, DF11_WIDTH, premul_over, render_df11_card
+from backend.core.dsp import oklab_to_srgb, resample_linear_subpixel_rgba, srgb_to_oklab
 from backend.core.fm_config import safe_ntfs_replace
 from backend.core.paths import get_caras_prueba_dir, get_extracted_faces_dir
 from backend.services.templates import CollarProfile, IMAGE_EXTS, _has_df11_outer_ring
-from backend.services.vision import FacePose, oklab_to_srgb, srgb_to_oklab
+from backend.services.vision import FacePose
 
 CROWN_SAFE_Y = 21.0
 MAX_HEAD_ASSET_SIDE = 640
@@ -353,15 +354,23 @@ def _harmonize_melanin_safe(arr_rgba: np.ndarray) -> np.ndarray:
         delta = float(np.median(lab[fg, ch])) - neutral
         if abs(delta) > 0.032:
             lab[fg, ch] -= delta * 0.28
-    out[:, :, :3] = np.clip(np.round(oklab_to_srgb(lab) * 255.0), 0.0, 255.0).astype(np.uint8)
+    out[:, :, :3] = np.clip(np.round(oklab_to_srgb(lab, preserve_hue_gamut=True) * 255.0), 0.0, 255.0).astype(np.uint8)
     return out
 
 
 def _place_layer(im: Image.Image, scale: float, offset_x: float, offset_y: float, mode: Literal["RGBA", "L"]) -> np.ndarray:
     scale = float(np.clip(scale, 0.08, 4.0))
+    if mode == "RGBA":
+        return resample_linear_subpixel_rgba(
+            im,
+            zoom=scale,
+            pan_x=float(offset_x),
+            pan_y=float(offset_y),
+            fit_mode="raw",
+            dst_size=(DF11_WIDTH, DF11_HEIGHT),
+        )
     pw, ph = max(1, round(im.width * scale)), max(1, round(im.height * scale))
-    resample = Image.Resampling.LANCZOS if mode == "RGBA" else Image.Resampling.BILINEAR
-    resized = im.convert(mode) if (pw, ph) == im.size else im.convert(mode).resize((pw, ph), resample)
+    resized = im.convert("L") if (pw, ph) == im.size else im.convert("L").resize((pw, ph), Image.Resampling.BILINEAR)
     src = np.asarray(resized, dtype=np.uint8)
 
     x0 = round((DF11_WIDTH - pw) * 0.5 + float(offset_x))
@@ -369,8 +378,7 @@ def _place_layer(im: Image.Image, scale: float, offset_x: float, offset_y: float
     cx0, cy0 = max(0, x0), max(0, y0)
     cx1, cy1 = min(DF11_WIDTH, x0 + pw), min(DF11_HEIGHT, y0 + ph)
 
-    shape = (DF11_HEIGHT, DF11_WIDTH, 4) if mode == "RGBA" else (DF11_HEIGHT, DF11_WIDTH)
-    canvas = np.zeros(shape, dtype=np.uint8)
+    canvas = np.zeros((DF11_HEIGHT, DF11_WIDTH), dtype=np.uint8)
     if cx1 > cx0 and cy1 > cy0:
         canvas[cy0:cy1, cx0:cx1] = src[cy0 - y0 : cy1 - y0, cx0 - x0 : cx1 - x0]
     return canvas
@@ -617,6 +625,7 @@ def compose_modular_df11(
     bg_mode: BgMode = "white_df11",
     bg_custom_rgba: Image.Image | None = None,
     bg_blur: float = 0.0,
+    enhance_quality: float = 0.0,
 ) -> Image.Image:
     """Fuse Z0(Bg) + Z1(BackCollar) + Z2(NeckBridge) + Z3(Head) + Z4(Shirt) + Z5(HairOccluders) + Z6(DF11Frame)."""
     if head_asset is None and shirt_rgba is None:
@@ -701,6 +710,8 @@ def compose_modular_df11(
         bg_mode=bg_mode,
         bg_custom_rgba=bg_custom_rgba,
         bg_blur=bg_blur,
+        enhance_quality=enhance_quality,
+        upscale_hint=max(1.0, float(f.scale)),
     )
 
 

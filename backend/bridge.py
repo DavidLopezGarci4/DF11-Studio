@@ -372,6 +372,7 @@ class StudioBridge:
             bg_mode=p.get("bgMode", "white_df11"),
             bg_custom_rgba=self._custom_bg_img,
             bg_blur=float(p.get("bgBlur", 0.0)),
+            enhance_quality=float(p.get("enhanceQuality", 0.0)),
         )
 
     def upload_studio_image(
@@ -398,6 +399,10 @@ class StudioBridge:
         return {"isPreCutout": g.is_pre_cutout, "originalSize": list(g.original_size), "previewDataUrl": _to_data_url(self._compose(merged)), "cleanBgDataUrl": bg_url}
 
     def extract_studio_background(self, params: dict[str, Any] | None = None) -> dict[str, str]:
+        if str((params or {}).get("step1Mode", "modular")).strip().lower() == "direct_photo":
+            raise ValueError(
+                "En modo Foto Directa el fondo original ya forma parte de la foto; cambia a Modo Capas si deseas aislar el retrato."
+            )
         from backend.services.vision import extract_clean_background, remove_background_birefnet
 
         merged = {**(params or {}), "removeBg": True, "bgMode": "custom"}
@@ -601,6 +606,28 @@ class StudioBridge:
         self._sync_legacy_raw(self._mod()._crop_raw_img, self._mod()._crop_is_precut)
         return out
 
+    def pick_direct_photo_source(self, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        chosen = self._pick_image_file("last_image_dir")
+        if chosen is None:
+            return None
+        out = self._mod().load_direct_photo(
+            _read_guarded_file(chosen),
+            file_name=chosen.name,
+            extra_params=params,
+            custom_bg=self._custom_bg_img,
+        )
+        return {**out, "directory": str(chosen.parent)}
+
+    def load_direct_photo_source(
+        self, data_url: str, file_name: str = "", params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return self._mod().load_direct_photo(
+            _decode_b64(data_url),
+            file_name=file_name,
+            extra_params=params,
+            custom_bg=self._custom_bg_img,
+        )
+
     def extract_face_from_crop(self, opts: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._mod().extract_staged_face(opts or {}, custom_bg=self._custom_bg_img)
 
@@ -768,17 +795,23 @@ class StudioBridge:
         from backend.core.fm_config import safe_ntfs_replace, upsert_fm_config_xml, validate_fm_uid
         from backend.services.kits import save_kit_override
 
-        head_id = str(params.get("headAssetId", "")).strip()
-        tpl_id = str(params.get("templateId", "")).strip()
+        step1_mode = str(params.get("step1Mode", "modular")).strip().lower()
         wear_mode = str(params.get("wearMode", "template"))
-        if wear_mode == "template" and tpl_id and not self._mod().has_shirt_reference(tpl_id):
-            raise ValueError("La camiseta seleccionada ya no está disponible; vuelve a elegir una plantilla antes de exportar.")
-        if head_id:
-            if self._mod().get_head_asset(head_id) is None:
-                raise ValueError("La cara activa ya no está en memoria; vuelve a cargarla antes de exportar.")
+        if step1_mode == "direct_photo":
+            direct_id = str(params.get("directPhotoId", "")).strip()
+            if not direct_id or not self._mod().has_direct_photo(direct_id):
+                raise ValueError("La foto directa activa ya no está en memoria; vuelve a cargarla antes de exportar.")
         else:
-            if wear_mode != "template" or not tpl_id:
-                raise ValueError("Añade una cara o selecciona una plantilla válida antes de exportar la ficha DF11.")
+            head_id = str(params.get("headAssetId", "")).strip()
+            tpl_id = str(params.get("templateId", "")).strip()
+            if wear_mode == "template" and tpl_id and not self._mod().has_shirt_reference(tpl_id):
+                raise ValueError("La camiseta seleccionada ya no está disponible; vuelve a elegir una plantilla antes de exportar.")
+            if head_id:
+                if self._mod().get_head_asset(head_id) is None:
+                    raise ValueError("La cara activa ya no está en memoria; vuelve a cargarla antes de exportar.")
+            else:
+                if wear_mode != "template" or not tpl_id:
+                    raise ValueError("Añade una cara o selecciona una plantilla válida antes de exportar la ficha DF11.")
         uid = validate_fm_uid(str(params.get("uid", "")))
         export_target = str(params.get("exportTarget", "creations")).strip().lower()
         fmt = "jpg" if str(params.get("fmt", "png")).lower() in ("jpg", "jpeg") else "png"
@@ -791,7 +824,7 @@ class StudioBridge:
             tdir = self._require_approved(cand_dir)
         else:
             tdir = self._require_approved(Path(params["outDir"]) if params.get("outDir") else self._export_dir)
-        if params.get("customKitDirty") and wear_mode in ("club", "staff_polo", "staff_suit"):
+        if step1_mode != "direct_photo" and params.get("customKitDirty") and wear_mode in ("club", "staff_polo", "staff_suit"):
             kit = self._resolve_studio_kit(str(params.get("clubId", "1736")), params)
             save_kit_override(kit.club_id, kit.primary, kit.secondary, pattern=kit.pattern, db_path=self._db_path)
 

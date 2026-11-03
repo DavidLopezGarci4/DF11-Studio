@@ -18,6 +18,13 @@ from PIL import Image, ImageFilter
 
 import backend.services.vision as vision_mod
 from backend.core.compositor import DF11_HEIGHT, DF11_WIDTH, load_df11_assets
+from backend.core.dsp import (
+    fast_tent_f32,
+    linear_to_srgb_u8,
+    oklab_to_srgb,
+    srgb_to_oklab,
+    srgb_u8_to_linear,
+)
 from backend.core.fm_config import safe_ntfs_replace
 from backend.core.image_guard import load_guarded_image
 from backend.core.paths import get_raw_tshirt_archive_dir, get_state_db_path, get_tshirt_templates_dir
@@ -140,19 +147,20 @@ def _frame_to_df11_stage(
 
 
 def _apply_oklab_textile_crispness(rgb_2x: np.ndarray, fg_mask: np.ndarray, amount: float) -> np.ndarray:
-    """Enhance micro-contrast of crests, sponsors, and stitching strictly in OKLab Lightness (zero color halos)."""
+    """Enhance micro-contrast of crests, sponsors, and stitching strictly in float32 OKLab Lightness."""
     amt = float(np.clip(amount, 0.0, 1.0)) if math.isfinite(float(amount)) else 0.35
     if amt <= 0.01:
         return rgb_2x
     srgb01 = np.clip(rgb_2x / 255.0, 0.0, 1.0).astype(np.float32)
-    lab = vision_mod.srgb_to_oklab(srgb01)
+    lab = srgb_to_oklab(srgb01)
     l_chan = lab[:, :, 0]
-    l_u8 = np.clip(np.round(l_chan * 255.0), 0.0, 255.0).astype(np.uint8)
-    l_blur = np.asarray(Image.fromarray(l_u8, mode="L").filter(ImageFilter.GaussianBlur(1.15)), dtype=np.float32) / 255.0
+    l_blur = fast_tent_f32(l_chan, r=1)
     interior = np.clip((fg_mask - 0.82) / 0.16, 0.0, 1.0)
-    detail = np.clip(l_chan - l_blur, -0.055, 0.055)
-    lab[:, :, 0] = np.clip(l_chan + detail * (0.90 * amt) * interior, 0.0, 1.0)
-    return np.clip(vision_mod.oklab_to_srgb(lab) * 255.0, 0.0, 255.0).astype(np.float32)
+    raw_detail = l_chan - l_blur
+    cored = np.sign(raw_detail) * np.maximum(np.abs(raw_detail) - 0.0018, 0.0)
+    detail = np.clip(cored, -0.055, 0.055)
+    lab[:, :, 0] = np.clip(l_chan + detail * (0.95 * amt) * interior, 0.0, 1.0)
+    return np.clip(oklab_to_srgb(lab, preserve_hue_gamut=True) * 255.0, 0.0, 255.0).astype(np.float32)
 
 
 def sanitize_shirt_template_rgba(
@@ -352,18 +360,29 @@ def sanitize_shirt_template_rgba(
     smooth_alpha_2x = np.asarray(raw_alpha_img.filter(ImageFilter.GaussianBlur(0.85)), dtype=np.float32) / 255.0
     crisp_alpha_2x = np.where(fg_shirt > 0.88, np.maximum(smooth_alpha_2x, 0.996), smooth_alpha_2x)
 
-    # Premultiplied-alpha 2x -> 1x Lanczos SSAA downsampling (zero dark halo on edges, razor-sharp crests)
-    pm_2x = np.concatenate(
-        [clean_rgb_2x * crisp_alpha_2x[:, :, None], crisp_alpha_2x[:, :, None] * 255.0],
-        axis=-1,
-    ).clip(0.0, 255.0).round().astype(np.uint8)
-    pm_1x = np.asarray(
-        Image.fromarray(pm_2x, mode="RGBA").resize((DF11_WIDTH, DF11_HEIGHT), Image.Resampling.LANCZOS),
+    # Linear-light single-premultiplied 2x -> 1x Lanczos SSAA downsampling (avoids Pillow RGBA double-premultiply)
+    clean_u8_2x = np.clip(np.round(clean_rgb_2x), 0.0, 255.0).astype(np.uint8)
+    lin_2x = srgb_u8_to_linear(clean_u8_2x)
+    alpha_f_2x = crisp_alpha_2x.astype(np.float32)
+    premul_lin_2x = lin_2x * alpha_f_2x[:, :, None]
+
+    a_1x = np.asarray(
+        Image.fromarray(alpha_f_2x, mode="F").resize((DF11_WIDTH, DF11_HEIGHT), Image.Resampling.LANCZOS),
         dtype=np.float32,
     )
-    a_1x = np.clip(pm_1x[:, :, 3] / 255.0, 0.0, 1.0)
+    a_1x = np.clip(a_1x, 0.0, 1.0)
     a_1x = np.where(a_1x > 0.985, 1.0, a_1x)
-    rgb_1x = np.where(a_1x[:, :, None] > 1e-3, pm_1x[:, :, :3] / np.maximum(a_1x[:, :, None], 1e-3), 0.0)
+
+    lin_1x = np.empty((DF11_HEIGHT, DF11_WIDTH, 3), dtype=np.float32)
+    for c in range(3):
+        ch_1x = np.asarray(
+            Image.fromarray(premul_lin_2x[:, :, c], mode="F").resize((DF11_WIDTH, DF11_HEIGHT), Image.Resampling.LANCZOS),
+            dtype=np.float32,
+        )
+        lin_1x[:, :, c] = ch_1x
+    safe_a_1x = np.maximum(a_1x[:, :, None], 1e-4)
+    unpremul_lin_1x = np.where(a_1x[:, :, None] > 1e-4, np.clip(lin_1x / safe_a_1x, 0.0, 1.0), 0.0)
+    rgb_1x = linear_to_srgb_u8(unpremul_lin_1x)
 
     final_a = np.clip(np.round(a_1x * inner_mask_f * 255.0), 0.0, 255.0).astype(np.uint8)
     final_a[:162, :] = 0
@@ -371,7 +390,7 @@ def sanitize_shirt_template_rgba(
     final_a[:, 242:] = 0
     final_a[293:, :] = 0
 
-    clean_rgb = np.where(final_a[:, :, None] > 0, np.clip(np.round(rgb_1x), 0.0, 255.0).astype(np.uint8), 0)
+    clean_rgb = np.where(final_a[:, :, None] > 0, rgb_1x, 0)
     out = np.concatenate([clean_rgb, final_a[:, :, None]], axis=-1)
     return Image.fromarray(out, mode="RGBA")
 

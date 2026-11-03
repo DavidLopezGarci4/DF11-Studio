@@ -14,6 +14,7 @@ import numpy as np
 from PIL import Image
 
 from backend.core.compositor import render_df11_card
+from backend.core.dsp import FitMode, harmonize_oklab_pure_optics
 from backend.core.fm_config import VALID_FM_UID_RE
 from backend.core.image_guard import load_guarded_image
 from backend.services.head_neck import (
@@ -129,6 +130,76 @@ class ModularWorkflowSession:
         self._adhoc_seq = 0
         self._adhoc_shirts: OrderedDict[str, tuple[Image.Image, CollarProfile, bytes | None, str, str]] = OrderedDict()
         self._last_facepack_card: tuple[bytes, str] | None = None
+
+        # Direct Photo + DF11 Frame sources (100% offline, 0% AI, LRU-bounded)
+        self._direct_seq = 0
+        self._direct_photos: OrderedDict[str, tuple[Image.Image, bool, str]] = OrderedDict()
+
+    def _put_direct_photo(self, rgba: Image.Image, is_precut: bool, label: str) -> str:
+        with self._lock:
+            self._direct_seq += 1
+            did = f"direct-{self._direct_seq}"
+            self._direct_photos[did] = (rgba, is_precut, label)
+            while len(self._direct_photos) > MAX_CACHED_HEADS:
+                self._direct_photos.popitem(last=False)
+            return did
+
+    def has_direct_photo(self, direct_photo_id: str) -> bool:
+        did = str(direct_photo_id or "").strip()
+        if not did:
+            return False
+        with self._lock:
+            return did in self._direct_photos
+
+    def get_direct_photo(self, direct_photo_id: str) -> tuple[Image.Image, bool, str] | None:
+        did = str(direct_photo_id or "").strip()
+        if not did:
+            return None
+        with self._lock:
+            entry = self._direct_photos.get(did)
+            if entry is not None:
+                self._direct_photos.move_to_end(did)
+            return entry
+
+    def load_direct_photo(
+        self,
+        raw_bytes: bytes,
+        file_name: str = "",
+        extra_params: dict[str, Any] | None = None,
+        custom_bg: Image.Image | None = None,
+    ) -> dict[str, Any]:
+        """Load any image directly into a 260x310 DF11 frame with 100% offline, 0% AI optical framing."""
+        g = load_guarded_image(raw_bytes)
+        prep_im, prep_precut = prepare_facepack_card_for_head_extraction(g.image, g.is_pre_cutout)
+        stem = Path(file_name).stem.strip() if file_name else ""
+        detected_uid = stem if VALID_FM_UID_RE.fullmatch(stem) else ""
+        label = stem or "Foto_Directa"
+        did = self._put_direct_photo(prep_im, prep_precut, label)
+
+        base_p = dict(extra_params or {})
+        clamp_pan = bool(base_p.get("clampPan", not prep_precut))
+        comp_params = {
+            **base_p,
+            "step1Mode": "direct_photo",
+            "directPhotoId": did,
+            "scale": 1.0,
+            "offsetX": 0.0,
+            "offsetY": 0.0,
+            "clampPan": clamp_pan,
+        }
+        w, h = prep_im.size
+        return {
+            "directPhotoId": did,
+            "fileName": file_name,
+            "label": label,
+            "detectedUid": detected_uid,
+            "width": w,
+            "height": h,
+            "isPreCutout": prep_precut,
+            "clampPan": clamp_pan,
+            "autoFit": {"scale": 1.0, "offsetX": 0.0, "offsetY": 0.0, "neckFill": 1.0},
+            "previewDataUrl": _png_data_url(self.compose_step_card(comp_params, custom_bg=custom_bg)),
+        }
 
     def _put_head_asset(self, asset: HeadNeckAsset) -> str:
         with self._lock:
@@ -731,16 +802,40 @@ class ModularWorkflowSession:
         return {"scale": fit.scale, "offsetX": fit.offset_x, "offsetY": fit.offset_y, "neckFill": fit.neck_fill}
 
     def compose_step_card(self, p: dict[str, Any], custom_bg: Image.Image | None = None) -> Image.Image:
+        step1_mode = str(p.get("step1Mode", "modular")).strip().lower()
+        bg_mode = p.get("bgMode", "white_df11")
+        bg_blur = _finite_float(p.get("bgBlur", 0.0), 0.0, 0.0, 24.0)
+        scale = _finite_float(p.get("scale", 1.0), 1.0, 0.10, 4.0)
+        ox = _finite_float(p.get("offsetX", 0.0), 0.0, -2000.0, 2000.0)
+        oy = _finite_float(p.get("offsetY", 0.0), 0.0, -2000.0, 2000.0)
+        neck_fill = _finite_float(p.get("neckFill", 1.0), 1.0, 0.0, 1.5)
+        harmonize = bool(p.get("harmonize", True))
+        enhance_q = _finite_float(p.get("enhanceQuality", 0.0), 0.0, 0.0, 1.0)
+
+        if step1_mode == "direct_photo":
+            direct_id = str(p.get("directPhotoId", "")).strip()
+            entry = self.get_direct_photo(direct_id) if direct_id else None
+            if entry is None:
+                return render_df11_card(None, bg_mode=bg_mode, bg_custom_rgba=custom_bg, bg_blur=bg_blur)
+            raw_im, is_precut, _lbl = entry
+            src_im = harmonize_oklab_pure_optics(raw_im) if harmonize else raw_im
+            fit_mode: FitMode = "contain" if is_precut else "cover"
+            clamp_pan = bool(p.get("clampPan", not is_precut))
+            return render_df11_card(
+                portrait_rgba=src_im,
+                portrait_offset=(ox, oy),
+                portrait_scale=scale,
+                bg_mode=bg_mode,
+                bg_custom_rgba=custom_bg,
+                bg_blur=bg_blur,
+                enhance_quality=enhance_q,
+                fit_mode=fit_mode,
+                clamp_to_inner=clamp_pan,
+            )
+
         head_id = str(p.get("headAssetId", "")).strip()
         asset = self.get_head_asset(head_id) if head_id else None
         wear_mode = str(p.get("wearMode", "template"))
-        bg_mode = p.get("bgMode", "white_df11")
-        bg_blur = float(p.get("bgBlur", 0.0))
-        scale = float(p.get("scale", 1.0))
-        ox = float(p.get("offsetX", 0.0))
-        oy = float(p.get("offsetY", 0.0))
-        neck_fill = float(p.get("neckFill", 1.0))
-        harmonize = bool(p.get("harmonize", True))
 
         if wear_mode in ("club", "staff_polo", "staff_suit"):
             if asset is None:
@@ -770,6 +865,7 @@ class ModularWorkflowSession:
                 bg_mode=bg_mode,
                 bg_custom_rgba=custom_bg,
                 bg_blur=bg_blur,
+                enhance_quality=enhance_q,
             )
 
         shirt_im, collar = self._resolve_shirt_layer(str(p.get("templateId", "")).strip()) if wear_mode == "template" else (None, None)
@@ -782,4 +878,5 @@ class ModularWorkflowSession:
             bg_mode=bg_mode,
             bg_custom_rgba=custom_bg,
             bg_blur=bg_blur,
+            enhance_quality=enhance_q,
         )

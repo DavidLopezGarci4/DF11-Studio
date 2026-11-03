@@ -14,6 +14,11 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageFilter
 
+from backend.core.dsp import (
+    harmonize_oklab_pure_optics as harmonize_df11_studio_grade,
+    oklab_to_srgb,
+    srgb_to_oklab,
+)
 from backend.core.fm_config import safe_ntfs_replace
 from backend.core.paths import get_models_dir
 
@@ -266,56 +271,6 @@ def remove_background_birefnet(img_rgba: Image.Image) -> Image.Image:
     out = Image.fromarray(clean_rgb, mode="RGB").convert("RGBA")
     out.putalpha(alpha_img)
     return out
-
-
-def srgb_to_oklab(rgb_01: np.ndarray) -> np.ndarray:
-    """Vectorized sRGB [0..1] -> Björn Ottosson OKLab (L, a, b)."""
-    lin = np.where(rgb_01 <= 0.04045, rgb_01 / 12.92, ((rgb_01 + 0.055) / 1.055) ** 2.4)
-    r, g, b = lin[..., 0], lin[..., 1], lin[..., 2]
-    l_ = np.cbrt(np.maximum(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b, 0.0))
-    m_ = np.cbrt(np.maximum(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b, 0.0))
-    s_ = np.cbrt(np.maximum(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b, 0.0))
-    return np.stack(
-        [
-            0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
-            1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
-            0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
-        ],
-        axis=-1,
-    ).astype(np.float32)
-
-
-def oklab_to_srgb(lab: np.ndarray) -> np.ndarray:
-    """Vectorized Björn Ottosson OKLab -> clamped sRGB [0..1]."""
-    L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
-    l_ = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3
-    m_ = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3
-    s_ = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3
-    r = +4.0767416621 * l_ - 3.3077115913 * m_ + 0.2309699292 * s_
-    g = -1.2684380046 * l_ + 2.6097574011 * m_ - 0.3413193965 * s_
-    bl = -0.0041960863 * l_ - 0.7034186147 * m_ + 1.7076147010 * s_
-    lin = np.clip(np.stack([r, g, bl], axis=-1), 0.0, 1.0)
-    return np.where(lin <= 0.0031308, 12.92 * lin, 1.055 * (lin ** (1.0 / 2.4)) - 0.055).astype(np.float32)
-
-
-def harmonize_df11_studio_grade(img_rgba: Image.Image) -> Image.Image:
-    """Normalize exposure and indoor color casts in OKLab space while keeping alpha untouched."""
-    arr = np.asarray(img_rgba.convert("RGBA"), dtype=np.uint8).copy()
-    fg = arr[:, :, 3] > 24
-    if not np.any(fg):
-        return Image.fromarray(arr, mode="RGBA")
-    lab = srgb_to_oklab(arr[:, :, :3].astype(np.float32) / 255.0)
-    med_l = float(np.median(lab[fg, 0]))
-    if med_l < 0.62:
-        lift = min(0.62 - med_l, 0.14) * 0.75
-        lab[fg, 0] = np.clip(lab[fg, 0] + lift * (1.0 - lab[fg, 0]), 0.0, 0.99)
-    # Gently damp heavy warm/green indoor white-balance casts without desaturating skin
-    for ch, neutral in ((1, 0.025), (2, 0.045)):
-        delta = float(np.median(lab[fg, ch])) - neutral
-        if abs(delta) > 0.025:
-            lab[fg, ch] -= delta * 0.35
-    arr[:, :, :3] = np.clip(np.round(oklab_to_srgb(lab) * 255.0), 0, 255).astype(np.uint8)
-    return Image.fromarray(arr, mode="RGBA")
 
 
 def extract_clean_background(scene_rgba: Image.Image, fg_mask: np.ndarray | Image.Image) -> Image.Image:
