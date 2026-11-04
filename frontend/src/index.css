@@ -29,3 +29,30 @@ textarea:focus-visible {
   outline: 2px solid var(--accent-pitch);
   outline-offset: 2px;
 }
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.4) transparent;
+}
+
+.dark * {
+  scrollbar-color: rgba(71, 85, 105, 0.65) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(100, 116, 139, 0.38);
+  border-radius: 9999px;
+}
+
+.dark *::-webkit-scrollbar-thumb {
+  background-color: rgba(71, 85, 105, 0.65);
+}

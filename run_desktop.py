@@ -51,9 +51,9 @@ def main() -> None:
         title=WINDOW_TITLE,
         url=url,
         js_api=bridge,
-        width=1140,
-        height=760,
-        min_size=(940, 640),
+        width=1360,
+        height=840,
+        min_size=(980, 680),
         background_color="#090d16",
     )
     bridge._attach_window(win)
