@@ -1,5 +1,24 @@
 # Changelog Técnico — DF11 Face Studio
 
+## [1.5.0] - 2026-11-05
+### Added
+- **Captura Nativa de Pantalla `PerMonitorV2` Cero-Portapapeles y Enrutamiento Independiente en Caliente (`backend/core/screen_clip_worker.py`, `backend/core/screen_capture.py`, `bridge.py`, `App.tsx`)**:
+  - Trabajador aislado sobre el binario firmado `python.exe` con `SetProcessDpiAwarenessContext(-4)` (`DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`), `PIL.ImageGrab.grab(all_screens=True)` y lienzos `tkinter` por monitor para recortar a píxel físico `1:1` sin mutar el portapapeles de Windows (preservando `<UID>` copiados de Football Manager) ni dejar temporales en disco.
+  - Bloqueo opcional de proporción oficial `260:310` manteniendo `Shift` al arrastrar, detección heurística de fotogramas negros por DRM de navegador (`drmWarning`) y aviso de baja resolución (`lowResWarning` cuando `< 180 × 215 px`).
+  - Selector global `[ ✂ Capturar | ▾ ]` y botones contextuales independientes hacia: **1) `Foto Directa + Marco DF11` (`0% IA`)**, **2) `Recortar Cara` (`Extraer Cara`)**, **3) `Extraer Camiseta`** (con auto-encuadre `auto_torso_frame` en `panY > 0` bajo `Y = 162` cuando el recorte no incluye cabeza) y **4) `Guardar PNG como…`** (diálogo nativo `SAVE_DIALOG` con bloqueo de solapamiento sobre `NG_Regens`).
+  - Atajo global opcional no intrusivo **`Ctrl+Shift+X`** (`RegisterHotKey` con `MOD_NOREPEAT` y degradación limpia si otra app lo ocupa), pegado **`Ctrl+V`** protegido con `isTextEntryTarget` en las 3 herramientas y soporte de arrastre `data:image/` desde navegador.
+- **Cimientos Multi-Partida SQLite `v4` (`backend/services/kits.py`, `backend/services/sync.py`, `bridge.py`)**:
+  - Migración automática no destructiva `PRAGMA user_version = 4` añadiendo `save_profiles` (sembrada con `"default"` activa) y `save_squad_roster (save_id, uid, club_id, player_name, category)` manteniendo intacta `squad_map (uid, club_id)`.
+  - Métodos `list_save_profiles`, `upsert_save_profile` y `set_active_save_profile` expuestos en `StudioBridge`.
+
+### Changed
+- **Rediseño de Cabina de Estudio `100vh` Cero-Scroll Exterior (`App.tsx`, `StudioView.tsx`, `FaceExtractorTool.tsx`, `ShirtExtractorTool.tsx`, `RegensSyncView.tsx`, `index.css`, `run_desktop.py`)**:
+  - Unificación de las dos barras superiores en una única cabecera compacta `h-12` (`max-w-[1600px]`), persistencia de estado e historial `Undo/Redo` al alternar entre las 3 herramientas del estudio y ventana inicial `1360 × 840` (`min_size=(980, 680)`).
+  - Anclaje directo del **Paso 4 (`Calidad óptica + Exportar DF11`)** bajo el lienzo `260 × 310 px` en la columna izquierda, eliminación de tarjetas anidadas (*card-in-card*) en Paso 1, rejilla elástica con scroll interno fino (`6 px` claro/oscuro) en Paso 2 y ancho tabular fijo `w-9` en `Bokeh` del Paso 3.
+
+### Fixed
+- **Endurecimiento del importador de vistas de plantilla FM (`import_squad_club_mappings` en `backend/services/sync.py`)**: priorización de nombres completos de club (`custom_clubs`, `shirt_templates` y catálogo semilla) y exclusión de números cortos (`< 3` dígitos como edad o dorsal) cuando no existen como `club_id` conocido ni en cabecera explícita de club.
+
 ## [1.4.0] - 2026-11-03
 ### Added
 - **Modo `Foto Directa + Marco DF11` en Paso 1 (`step1Mode: 'direct_photo'` en `StudioView.tsx`, `studio_workflow.py`, `compositor.py`, `bridge.py`)**:

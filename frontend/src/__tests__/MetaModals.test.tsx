@@ -20,12 +20,14 @@ describe('FAQ and About human metadata modals', () => {
     expect(screen.getAllByText(/puntos cardinales/i).length).toBeGreaterThanOrEqual(1);
     fireEvent.change(search, { target: { value: 'Calidad óptica' } });
     expect(screen.getAllByText(/100% offline/i).length).toBeGreaterThanOrEqual(1);
+    fireEvent.change(search, { target: { value: 'Capturar' } });
+    expect(screen.getAllByText(/portapapeles/i).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders human-readable v1.4.0 release highlights and collapsible previous history without developer jargon', () => {
+  it('renders human-readable v1.5.0 release highlights and collapsible previous history without developer jargon', () => {
     render(<AboutModal onClose={() => {}} onOpenGraph={() => {}} />);
-    expect(screen.getAllByText(/v1\.4\.0/i).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/Build 10400/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/v1\.5\.0/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Build 10500/i)).toBeInTheDocument();
     expect(screen.getAllByText(/100% Local/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/Historial de versiones anteriores/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Inspeccionar Salud de la Arquitectura/i })).toBeInTheDocument();

@@ -1,6 +1,6 @@
-# DF11 Face Studio (`v1.4.0`)
+# DF11 Face Studio (`v1.5.0`)
 
-Estudio modular de **3 herramientas** y montaje paso a paso en **4 capas** (`260 × 310 px`), modo instantáneo **Foto Directa + Marco DF11**, mejora de **Calidad óptica 100% offline y 0% IA**, edición de fichas de **Packs de Faces FM** y sincronizador no destructivo `NG_Regens` para **Football Manager (FM24 / FM27)** en Windows PC.
+Estudio fotográfico en **una sola vista sin scroll exterior (`100vh`)** con **captura nativa de pantalla en caliente (`✂ Capturar` cero-portapapeles)**, montaje paso a paso en **4 capas** (`260 × 310 px`), modo instantáneo **Foto Directa + Marco DF11**, mejora de **Calidad óptica 100% offline y 0% IA**, edición de fichas de **Packs de Faces FM** y sincronizador no destructivo `NG_Regens` para **Football Manager (FM24 / FM27)** en Windows PC.
 
 ---
 

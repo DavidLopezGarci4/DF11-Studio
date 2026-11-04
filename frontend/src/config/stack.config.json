@@ -1,8 +1,8 @@
 {
   "appName": "DF11 Face Studio",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "category": "Estudio Fotográfico Modular & Sincronizador DF11 para Football Manager",
-  "description": "Arquitectura de escritorio 100% local en proceso único: interfaz React 19 sobre WebView2 conectada sin puertos de red a un motor Python 3.12 con óptica pura WGIF/OKLab sin IA, inferencia GPU DirectML opcional por capas y persistencia atómica NTFS/SQLite.",
+  "description": "Arquitectura de escritorio 100% local en cabina única sin scroll exterior: interfaz React 19 sobre WebView2 conectada sin puertos de red a un motor Python 3.12 con captura nativa PerMonitorV2 cero-portapapeles, óptica pura WGIF/OKLab sin IA, inferencia GPU DirectML opcional por capas y persistencia atómica NTFS/SQLite v4.",
   "nodes": [
     {
       "id": "desktop_shell", "label": "pywebview 6.2 + WebView2", "version": "6.2.1",
@@ -19,11 +19,11 @@
       "useCases": ["Paso 1 en Modo Capas o Foto Directa + Marco DF11 con pad ↑N ↓S ←O →E", "Paso 2 Plantilla/Staff, remix FM y Paso 4 con Calidad óptica y guardado dual"]
     },
     {
-      "id": "ipc_bridge", "label": "StudioBridge + Modular Session", "version": "1.4.0",
-      "role": "Orquestador IPC de Foto Directa, Extractores y Watcher 650 ms", "category": "server_web_apps", "color": "#8b5cf6", "icon": "Workflow", "healthType": "native_bridge",
-      "computationalModel": "Fachada síncrona/asíncrona con caché LRU acotada de fotos directas/caras/camisetas, ThreadPoolExecutor(8) y observador de 650 ms.",
-      "whyChosen": "Mantiene el arranque en frío instantáneo y separa estrictamente la vía 0% IA de Foto Directa frente a los extractores modulares.",
-      "useCases": ["Carga instantánea de Foto Directa sin invocar sesiones ONNX", "Remix bidireccional de fichas FM y sincronización masiva NG_Regens"]
+      "id": "ipc_bridge", "label": "StudioBridge + ScreenClip Worker", "version": "1.5.0",
+      "role": "Orquestador IPC, Captura PerMonitorV2 Cero-Portapapeles y Watcher 650 ms", "category": "server_web_apps", "color": "#8b5cf6", "icon": "Workflow", "healthType": "native_bridge",
+      "computationalModel": "Fachada síncrona/asíncrona con recorte físico 1:1 por stdout sin tocar el portapapeles, caché LRU acotada, ThreadPoolExecutor(8) y observador de 650 ms.",
+      "whyChosen": "Permite recortar cualquier región multimonitor sin sobrescribir el #UID copiado en Football Manager y separa la vía 0% IA de los extractores modulares.",
+      "useCases": ["Captura en caliente hacia Foto Directa, Cara, Camiseta o PNG independiente", "Remix bidireccional de fichas FM y sincronización masiva NG_Regens"]
     },
     {
       "id": "onnx_dml", "label": "ONNX Runtime DirectML", "version": "1.24.4",
@@ -40,17 +40,17 @@
       "useCases": ["Enmarcado directo DF11 y puente progresivo de cuello (0% a 150%)", "Exportación PNG 32-bit oficial o JPG 4:4:4 sin halos oscuros"]
     },
     {
-      "id": "dsp_pure_optics", "label": "Óptica Pura WGIF + OKLab", "version": "1.4.0",
+      "id": "dsp_pure_optics", "label": "Óptica Pura WGIF + OKLab", "version": "1.5.0",
       "role": "Motor DSP 100% Offline (0% IA): Luz Lineal, Deblocking y WGIF", "category": "graphics_multimedia", "color": "#10b981", "icon": "Layers", "healthType": "static",
       "computationalModel": "Filtro guiado ponderado WGIF O(1) en espacio perceptual OKLab, remuestreo Lanczos/Bicubic en luz lineal y deblocking JPEG 8×8.",
       "whyChosen": "Maximiza la nitidez real de ojos, pelo y escudos en ~4 ms sin alucinaciones de IA ni dependencias pesadas.",
       "useCases": ["Mejora de Calidad óptica final (0–100%) con protección de piel y equipaciones", "Armonización luminosa OKLab y remuestreo subpíxel libre de aliasing"]
     },
     {
-      "id": "local_storage", "label": "SQLite WAL + NTFS XML", "version": "ACID WAL",
-      "role": "Catálogo Plantilla/Staff y Fusión Sin Pérdidas de config.xml", "category": "local_persistence", "color": "#06b6d4", "icon": "Database", "healthType": "storage",
-      "computationalModel": "Base SQLite v3 en modo WAL junto a reemplazo atómico NTFS con preservación de mapeos portrait/icon y defusedxml.",
-      "whyChosen": "Actualiza tanto carpetas de creaciones propias como Megapacks existentes de FM sin borrar iconos ni corromper config.xml.",
+      "id": "local_storage", "label": "SQLite v4 WAL + NTFS XML", "version": "ACID WAL",
+      "role": "Catálogo Plantilla/Staff, Perfiles de Partida y Fusión de config.xml", "category": "local_persistence", "color": "#06b6d4", "icon": "Database", "healthType": "storage",
+      "computationalModel": "Base SQLite v4 en modo WAL (save_profiles + save_squad_roster) junto a reemplazo atómico NTFS con preservación de mapeos portrait/icon y defusedxml.",
+      "whyChosen": "Aísla plantillas y asignaciones de club por partida de FM y actualiza carpetas de creaciones o Megapacks sin corromper config.xml.",
       "useCases": ["Catálogo multi-temporada por #ID de club con categorías Plantilla y Staff", "Exportación directa a Nuestras creaciones o al Pack de Faces de FM"]
     }
   ],
@@ -110,6 +110,16 @@
         { "nodeId": "ipc_bridge", "role": "2. Espera 650 ms de calma, verifica Shrink Guard (50%) y reparte en 8 hilos" },
         { "nodeId": "compositor_engine", "role": "3. Viste la plantilla titular de jugador de cada #ID de club y marco DF11" },
         { "nodeId": "local_storage", "role": "4. Conmuta PNGs y config.xml de golpe mediante reemplazo atómico NTFS" }
+      ]
+    },
+    {
+      "id": "hot_screen_capture", "title": "✂️ Captura de Pantalla en Caliente Cero-Portapapeles", "category": "desktop_apps",
+      "summary": "Recorta cualquier región multimonitor 1:1 hacia Foto Directa, Cara, Camiseta o PNG sin sobrescribir el #UID copiado.",
+      "explanation": "Oculta temporalmente la ventana, captura en PerMonitorV2 por memoria sin temporales y auto-encuadra torsos sin cabeza.",
+      "steps": [
+        { "nodeId": "desktop_shell", "role": "1. Oculta el host WebView2 140 ms y restaura el foco tras el recorte" },
+        { "nodeId": "ipc_bridge", "role": "2. Lanza ScreenClip Worker PerMonitorV2 por stdout sin tocar el portapapeles" },
+        { "nodeId": "ui_runtime", "role": "3. Enruta de forma independiente a Foto Directa, Cara, Camiseta o Guardar PNG" }
       ]
     }
   ]

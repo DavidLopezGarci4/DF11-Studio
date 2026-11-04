@@ -7,9 +7,20 @@ export interface FAQSection { id: string; title: string; description: string; it
 const SECTIONS: FAQSection[] = [
   {
     id: 'studio',
-    title: 'Montaje Paso a Paso, Foto Directa y Packs de Faces FM',
-    description: 'Foto Directa + Marco DF11, pad N/S/E/O, Zoom y Cuello exactos, Calidad óptica sin IA y exportación dual.',
+    title: 'Captura en Caliente, Montaje Paso a Paso, Foto Directa y Packs de Faces FM',
+    description: 'Recorte de pantalla sin tocar el portapapeles, Foto Directa + Marco DF11, Calidad óptica y exportación bajo el lienzo.',
     items: [
+      {
+        id: 'screen-capture-hot',
+        question: '¿Cómo funciona «Capturar» para recortar la pantalla del PC en caliente sin borrar el #ID copiado?',
+        badge: 'Novedad v1.5',
+        tags: ['capturar', 'recorte', 'pantalla', 'portapapeles', 'ctrl+shift+x', 'ctrl+v', 'drm', 'negro', 'png'],
+        bullets: [
+          'Cuatro destinos independientes sin tocar tu portapapeles: Pulsa «Capturar» en la barra superior (o abre su menú ▾) para enviar cualquier zona de tu pantalla directamente a «Foto Directa + Marco DF11», «Recortar Cara», «Extraer Camiseta» o «Guardar PNG como…», conservando intacto el #ID de Football Manager que tengas copiado.',
+          'Proporción DF11 con Shift, atajo Ctrl+Shift+X y Ctrl+V seguro: Mantén Shift mientras arrastras para bloquear la proporción oficial 260 × 310 px, activa opcionalmente el atajo global Ctrl+Shift+X en el menú ▾ y usa Ctrl+V en cualquiera de las tres herramientas sin interferir cuando escribes en cuadros de texto.',
+          'Vídeos en negro por protección del navegador: Si al recortar un vídeo pausado obtienes un recuadro negro, desactiva «Usar aceleración por hardware» en los ajustes de tu navegador.',
+        ],
+      },
       {
         id: 'direct-photo-df11',
         question: '¿Cómo creo una ficha rápida con Foto Directa + Marco DF11 (4 puntos cardinales y Zoom)?',

@@ -118,7 +118,7 @@ export default function App() {
               DF11 Face Studio
             </span>
             <span className="text-[11px] px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 tabular-nums">
-              v{boot?.version ?? '1.4.0'}
+              v{boot?.version ?? '1.5.0'}
             </span>
           </div>
 

@@ -1,19 +1,24 @@
 # Preguntas Frecuentes y Guía de Herramientas (FAQ) — DF11 Face Studio
 
 > Guía de referencia rápida y operativa sobre todas las funciones activas en la versión oficial.
-> **Versión:** `v1.4.0` • **Actualizado:** 2026-11-03 • **Módulos Auditados:** 4/4
+> **Versión:** `v1.5.0` • **Actualizado:** 2026-11-05 • **Módulos Auditados:** 4/4
 
 ---
 
 ## Índice Rápido
-1. [Montaje Paso a Paso, Foto Directa y Packs de Faces FM](#1-montaje-paso-a-paso-foto-directa-y-packs-de-faces-fm)
+1. [Captura en Caliente, Montaje Paso a Paso, Foto Directa y Packs de Faces FM](#1-captura-en-caliente-montaje-paso-a-paso-foto-directa-y-packs-de-faces-fm)
 2. [Extractor de Caras y Zona de Corte](#2-extractor-de-caras-y-zona-de-corte)
 3. [Extractor de Camisetas, Plantilla / Staff y #ID de Clubes](#3-extractor-de-camisetas-plantilla--staff-y-id-de-clubes)
 4. [Sincronizador NG_Regens, FM27 y OneDrive](#4-sincronizador-ng_regens-fm27-y-onedrive)
 
 ---
 
-## 1. Montaje Paso a Paso, Foto Directa y Packs de Faces FM
+## 1. Captura en Caliente, Montaje Paso a Paso, Foto Directa y Packs de Faces FM
+
+### ¿Cómo funciona «Capturar» para recortar la pantalla del PC en caliente sin borrar el #ID copiado?
+* **Cuatro destinos independientes sin tocar tu portapapeles:** Usa el botón superior **`Capturar`** (o su menú desplegable `▾`) para enviar el recorte directamente a **`Foto Directa + Marco DF11`**, **`Recortar Cara`**, **`Extraer Camiseta`** o **`Guardar PNG como…`**, conservando intacto cualquier `#ID` de Football Manager que ya tengas copiado con `Ctrl+C`.
+* **Proporción DF11 con `Shift`, atajo `Ctrl+Shift+X` y `Ctrl+V` seguro:** Mantén pulsado **`Shift`** al arrastrar para fijar la proporción oficial `260 × 310 px`, activa si lo deseas el atajo global **`Ctrl+Shift+X`** desde el menú `▾` y pega imágenes con **`Ctrl+V`** en cualquiera de las tres herramientas sin interferir cuando estés escribiendo en cuadros de texto o números.
+* **Vídeos en negro por protección del navegador:** Si al capturar un vídeo en pausa aparece un recuadro negro, desactiva *«Usar aceleración por hardware cuando esté disponible»* en los ajustes de tu navegador.
 
 ### ¿Cómo creo una ficha rápida con Foto Directa + Marco DF11 (4 puntos cardinales y Zoom)?
 * **Formato directo sin recortes ni IA:** En el Paso 1 pulsa **`Foto Directa + Marco DF11`** y sube, arrastra o pega cualquier foto para aplicarle directamente el marco biselado oficial DF11 (`260 × 310 px`) sin separar cabeza ni camiseta.

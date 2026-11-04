@@ -1,11 +1,23 @@
 {
-  "currentVersion": "1.4.0",
-  "buildNumber": 10400,
-  "lastUpdated": "2026-11-03",
+  "currentVersion": "1.5.0",
+  "buildNumber": 10500,
+  "lastUpdated": "2026-11-05",
   "appName": "DF11 Face Studio",
-  "appDescription": "Estudio modular y de foto directa con marco DF11, extractores de caras y camisetas, mejora de calidad óptica sin IA y sincronizador para Football Manager.",
+  "appDescription": "Estudio en una sola vista con captura de pantalla en caliente, foto directa con marco DF11, extractores de caras y camisetas, calidad óptica sin IA y sincronizador para Football Manager.",
   "privacyPolicy": "Tus fotos y partidas nunca salen de tu PC: procesamiento 100% local, privado y sin suscripciones ni claves API.",
   "versions": [
+    {
+      "version": "1.5.0",
+      "build": 10500,
+      "date": "2026-11-05",
+      "title": "Captura de Pantalla en Caliente Sin Tocar el Portapapeles, Vista Completa Sin Desplazamiento y Plantillas por Partida FM",
+      "highlights": [
+        "✂️ **Captura cualquier zona de tu pantalla en caliente:** Pulsa «Capturar» para recortar al instante un retrato, una cara, una camiseta o guardarlo como PNG manteniendo intacto el #ID del futbolista que ya tengas copiado en el portapapeles.",
+        "🖥️ **Todo el estudio en una sola vista sin bajar la rueda:** La barra superior unificada y el Paso 4 de Calidad óptica y Exportación justo debajo del lienzo te permiten trabajar y exportar sin desplazarte fuera de la pantalla.",
+        "👕 **Encuadre inteligente en camisetas y pegado seguro:** Si recortas solo el pecho de una equipación sin cabeza, el lienzo la sitúa automáticamente en su zona inferior, y Ctrl+V pega fotos sin interferir cuando escribes textos o números.",
+        "🏟️ **Lectura más precisa de plantillas y partidas de Football Manager:** El importador de vistas de plantilla distingue con exactitud el club real frente a edades o dorsales y prepara tu biblioteca para gestionar varias partidas independientes."
+      ]
+    },
     {
       "version": "1.4.0",
       "build": 10400,
