@@ -517,7 +517,18 @@ class ModularWorkflowSession:
             return None, None
         return self._load_template_image(tpl), tpl.collar
 
-    def stage_raw_shirt(self, raw_bytes: bytes, file_name: str = "") -> dict[str, Any]:
+    @staticmethod
+    def _suggest_headless_shirt_viewport(w: int, h: int) -> dict[str, float]:
+        fit_base = min(260.0 / max(w, 1), 310.0 / max(h, 1))
+        base_w, base_h = w * fit_base, h * fit_base
+        zoom = float(np.clip(min(226.0 / max(base_w, 1.0), 124.0 / max(base_h, 1.0)), 0.35, 2.2))
+        nh = max(1, round(h * fit_base * zoom))
+        pan_y = round(max(28.0, (294.0 - nh) - (310.0 - nh) * 0.5), 1)
+        return {"zoom": round(zoom, 3), "panX": 0.0, "panY": pan_y}
+
+    def stage_raw_shirt(
+        self, raw_bytes: bytes, file_name: str = "", auto_torso_frame: bool = False
+    ) -> dict[str, Any]:
         g = load_guarded_image(raw_bytes)
         raw_ext = _infer_raw_ext(raw_bytes, file_name)
         with self._lock:
@@ -534,13 +545,19 @@ class ModularWorkflowSession:
             self._shirt_preview_params = None
         w, h = g.image.size
         stem = Path(file_name).stem if file_name else "Camiseta_Club"
+        sug_vp = {"zoom": 1.0, "panX": 0.0, "panY": 0.0}
+        if auto_torso_frame and (w, h) != (260, 310):
+            from backend.services.vision import detect_face_pose
+
+            if detect_face_pose(g.image) is None:
+                sug_vp = self._suggest_headless_shirt_viewport(w, h)
         return {
             "shirtSourceId": sid,
             "rawDataUrl": _png_data_url(g.image),
             "width": w,
             "height": h,
             "suggestedName": stem,
-            "suggestedViewport": {"zoom": 1.0, "panX": 0.0, "panY": 0.0},
+            "suggestedViewport": sug_vp,
         }
 
     def _resolve_shirt_source(self, source_id: str) -> tuple[str, Image.Image | None, bytes | None, str]:

@@ -110,6 +110,7 @@ class StudioBridge:
         self._custom_bg_img: Any = None
         self._cancel_sync = threading.Event()
         self._watcher: Any = None
+        self._hotkey_mgr: Any = None
         self._live_opts: dict[str, Any] = {"applyClubKits": True, "harmonize": True, "bgMode": "white_df11"}
 
     def _mod(self) -> Any:
@@ -209,6 +210,7 @@ class StudioBridge:
             "storageHealth": asdict(check_fm_storage_health(self._export_dir)),
             "hasModels": ok,
             "liveWatching": self._watcher is not None,
+            "captureHotkey": bool(self._hotkey_mgr and self._hotkey_mgr.is_running),
             "theme": theme,
         }
 
@@ -592,6 +594,111 @@ class StudioBridge:
         self._fg_cut_cache = None
         self._cutout_key = None
         self._dressed_key = None
+
+    def _resolve_hwnd(self) -> int | None:
+        import ctypes
+        import sys
+
+        if sys.platform != "win32" or self._window is None:
+            return None
+        try:
+            hwnd = int(ctypes.windll.user32.FindWindowW(None, "DF11 Face Studio — FM27 & NG_Regens"))
+            return hwnd if hwnd > 0 else None
+        except Exception:
+            return None
+
+    def capture_screen_region(
+        self, target: str = "direct_photo", params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        import backend.core.screen_capture as sc_mod
+
+        tgt = str(target or "direct_photo").strip().lower()
+        if tgt not in ("direct_photo", "raw_face", "raw_shirt", "save_png"):
+            raise ValueError(f"Destino de captura no soportado: {target}")
+        res = sc_mod.capture_screen_png(hwnd=self._resolve_hwnd())
+        if res is None:
+            return {"cancelled": True}
+
+        meta: dict[str, Any] = {
+            "cancelled": False,
+            "target": tgt,
+            "captureWidth": res.width,
+            "captureHeight": res.height,
+            "drmWarning": res.drm_black_warning,
+            "lowResWarning": res.low_res_warning,
+        }
+        stamp = int(time.time() * 1000) % 1_000_000
+        if tgt == "direct_photo":
+            out = self._mod().load_direct_photo(
+                res.png_bytes,
+                file_name=f"Captura_{stamp}.png",
+                extra_params=params,
+                custom_bg=self._custom_bg_img,
+            )
+            return {**out, **meta}
+        if tgt == "raw_face":
+            out = self._mod().stage_raw_face(res.png_bytes, file_name=f"Captura_Cara_{stamp}.png")
+            self._sync_legacy_raw(self._mod()._crop_raw_img, self._mod()._crop_is_precut)
+            return {**out, **meta}
+        if tgt == "raw_shirt":
+            out = self._mod().stage_raw_shirt(
+                res.png_bytes,
+                file_name=f"Captura_Camiseta_{stamp}.png",
+                auto_torso_frame=True,
+            )
+            return {**out, **meta}
+
+        import webview
+        from backend.core.fm_config import safe_ntfs_replace
+
+        if not self._window:
+            return {"cancelled": True}
+        init_dir = self._resolve_dialog_dir("last_clip_save_dir", self._export_dir)
+        dlg = self._window.create_file_dialog(
+            webview.SAVE_DIALOG,
+            directory=init_dir,
+            save_filename=f"Recorte_DF11_{stamp}.png",
+            file_types=("Imagen PNG (*.png)",),
+        )
+        if not dlg:
+            return {"cancelled": True}
+        raw_dst = dlg[0] if isinstance(dlg, (list, tuple)) else str(dlg)
+        dst = Path(raw_dst).resolve()
+        if dst.suffix.lower() != ".png":
+            dst = dst.with_suffix(".png")
+        if _paths_overlap(dst, self._vault_dir):
+            raise CapabilityError("No se permite guardar recortes dentro de la bóveda NG_Regens de solo lectura.")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        fd, tname = tempfile.mkstemp(prefix=".clip_", suffix=".tmp", dir=str(dst.parent))
+        tp = Path(tname)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(res.png_bytes)
+            safe_ntfs_replace(tp, dst)
+        finally:
+            tp.unlink(missing_ok=True)
+        self._set_pref("last_clip_save_dir", str(dst.parent))
+        return {**meta, "savedPath": str(dst), "fileName": dst.name}
+
+    def toggle_capture_hotkey(self, enabled: bool) -> dict[str, bool]:
+        import backend.core.screen_capture as sc_mod
+
+        if not enabled:
+            if self._hotkey_mgr is not None:
+                self._hotkey_mgr.stop()
+                self._hotkey_mgr = None
+            return {"hotkeyEnabled": False}
+        if self._hotkey_mgr is None:
+            def _fire() -> None:
+                if self._window is not None:
+                    try:
+                        self._window.evaluate_js("window.dispatchEvent(new CustomEvent('df11:hotkey-capture'))")
+                    except Exception:
+                        pass
+
+            self._hotkey_mgr = sc_mod.GlobalCaptureHotkey(_fire)
+        ok = self._hotkey_mgr.start()
+        return {"hotkeyEnabled": bool(ok)}
 
     def pick_raw_face_source(self) -> dict[str, Any] | None:
         chosen = self._pick_image_file("last_image_dir")
