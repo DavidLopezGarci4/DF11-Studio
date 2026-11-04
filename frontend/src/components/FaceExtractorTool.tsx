@@ -1,10 +1,31 @@
-import { useCallback, useRef, useState } from 'react';
-import { ArrowRight, Check, Crop, ImagePlus, Loader2, RotateCcw, Save, Upload } from 'lucide-react';
-import { CropViewportDTO, ExtractedFaceResponse, SavedFaceInfo, StagedFaceResponse, callBridge } from '../lib/ipc';
+import { MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowRight, Check, Crop, ImagePlus, Loader2, RotateCcw, Save, Scissors, Upload } from 'lucide-react';
+import {
+  CaptureTarget,
+  CropViewportDTO,
+  ExtractedFaceResponse,
+  SavedFaceInfo,
+  StagedFaceResponse,
+  callBridge,
+  isTextEntryTarget,
+  resolveDroppedImageTransfer,
+} from '../lib/ipc';
+
+export interface FaceToolPersistedState {
+  staged: StagedFaceResponse | null;
+  viewport: CropViewportDTO;
+  removeBg: boolean;
+  extracted: ExtractedFaceResponse | null;
+  viewMode: 'crop' | 'result';
+  saveName: string;
+}
 
 interface Props {
   faces: SavedFaceInfo[];
   activeTemplateId: string;
+  persistedRef?: MutableRefObject<FaceToolPersistedState | null>;
+  incomingStage?: { seq: number; data: StagedFaceResponse } | null;
+  onCaptureScreen?: (target: CaptureTarget) => void;
   onFacesUpdated: (faces: SavedFaceInfo[]) => void;
   onUseExtractedFace: (payload: {
     headAssetId: string;
@@ -19,25 +40,36 @@ interface Props {
 export default function FaceExtractorTool({
   faces,
   activeTemplateId,
+  persistedRef,
+  incomingStage,
+  onCaptureScreen,
   onFacesUpdated,
   onUseExtractedFace,
   onPickSavedFace,
 }: Props) {
-  const [staged, setStaged] = useState<StagedFaceResponse | null>(null);
-  const [viewport, setViewport] = useState<CropViewportDTO>({ zoom: 1, panX: 0, panY: 0 });
-  const [removeBg, setRemoveBg] = useState(true);
-  const [extracted, setExtracted] = useState<ExtractedFaceResponse | null>(null);
-  const [viewMode, setViewMode] = useState<'crop' | 'result'>('crop');
+  const init = persistedRef?.current;
+  const [staged, setStaged] = useState<StagedFaceResponse | null>(() => init?.staged ?? null);
+  const [viewport, setViewport] = useState<CropViewportDTO>(() => init?.viewport ?? { zoom: 1, panX: 0, panY: 0 });
+  const [removeBg, setRemoveBg] = useState(() => init?.removeBg ?? true);
+  const [extracted, setExtracted] = useState<ExtractedFaceResponse | null>(() => init?.extracted ?? null);
+  const [viewMode, setViewMode] = useState<'crop' | 'result'>(() => init?.viewMode ?? 'crop');
   const [stageSkin, setStageSkin] = useState<'checker' | 'fm_dark' | 'fm_light'>('checker');
-  const [saveName, setSaveName] = useState('');
+  const [saveName, setSaveName] = useState(() => init?.saveName ?? '');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
 
   const fileRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
+  const consumedSeqRef = useRef<number>(incomingStage?.seq ?? 0);
 
-  const applyStaged = (res: StagedFaceResponse) => {
+  useEffect(() => {
+    if (persistedRef) {
+      persistedRef.current = { staged, viewport, removeBg, extracted, viewMode, saveName };
+    }
+  }, [persistedRef, staged, viewport, removeBg, extracted, viewMode, saveName]);
+
+  const applyStaged = useCallback((res: StagedFaceResponse) => {
     setStaged(res);
     setViewport(res.suggestedViewport);
     setExtracted(null);
@@ -45,7 +77,14 @@ export default function FaceExtractorTool({
     setSaveName(res.fileName ? res.fileName.replace(/\.[^.]+$/, '') : 'Cara_Extraida');
     setMsg('');
     setErr('');
-  };
+  }, []);
+
+  useEffect(() => {
+    if (incomingStage && incomingStage.seq > consumedSeqRef.current) {
+      consumedSeqRef.current = incomingStage.seq;
+      applyStaged(incomingStage.data);
+    }
+  }, [incomingStage, applyStaged]);
 
   const handlePickNative = useCallback(async () => {
     if (!window.pywebview?.api?.pick_raw_face_source) {
@@ -79,7 +118,19 @@ export default function FaceExtractorTool({
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [applyStaged]);
+
+  useEffect(() => {
+    const onPaste = (ev: ClipboardEvent) => {
+      if (busy || document.querySelector('[role="dialog"]') || isTextEntryTarget(ev.target)) return;
+      const f = Array.from(ev.clipboardData?.items ?? [])
+        .find((i) => i.type.startsWith('image/'))
+        ?.getAsFile();
+      if (f) void handleFileBlob(f);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [busy, handleFileBlob]);
 
   const handleExtract = async () => {
     if (!staged) return;
@@ -156,8 +207,9 @@ export default function FaceExtractorTool({
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
-            const f = e.dataTransfer.files?.[0];
-            if (f) void handleFileBlob(f);
+            const { file, blockedRemoteUrl } = resolveDroppedImageTransfer(e.dataTransfer);
+            if (file) void handleFileBlob(file);
+            else if (blockedRemoteUrl) setErr('Las webs protegen el arrastre directo: usa el botón «Capturar» o Ctrl+V.');
           }}
           className={`w-full rounded-lg p-6 flex flex-col items-center justify-center transition ${stageBgClass} border border-slate-200/60 dark:border-slate-800`}
         >
@@ -276,6 +328,16 @@ export default function FaceExtractorTool({
                   if (f) void handleFileBlob(f);
                 }}
               />
+              {onCaptureScreen && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onCaptureScreen('raw_face')}
+                  className="px-2.5 py-1.5 text-xs font-medium rounded-md border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 inline-flex items-center gap-1.5 transition"
+                >
+                  <Scissors className="w-3.5 h-3.5" /> Capturar cara
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => void handlePickNative()}

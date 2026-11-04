@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   Check,
@@ -20,18 +20,30 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { ClubSeed, ShirtTemplateInfo, StagedShirtResponse, TemplateCategory, callBridge } from '../lib/ipc';
+import {
+  CaptureTarget,
+  ClubSeed,
+  ShirtTemplateInfo,
+  StagedShirtResponse,
+  TemplateCategory,
+  callBridge,
+  isTextEntryTarget,
+  resolveDroppedImageTransfer,
+} from '../lib/ipc';
 
 interface Props {
   clubs: Record<string, ClubSeed>;
   templates: ShirtTemplateInfo[];
   initialCategory?: TemplateCategory;
+  persistedRef?: MutableRefObject<ShirtHistoryState | null>;
+  incomingStage?: { seq: number; data: StagedShirtResponse } | null;
+  onCaptureScreen?: (target: CaptureTarget) => void;
   onTemplatesUpdated: (templates: ShirtTemplateInfo[]) => void;
   onClubsUpdated?: (clubs: Record<string, ClubSeed>) => void;
   onSelectTemplateForComposer: (templateId: string) => void;
 }
 
-interface ShirtSnapshot {
+export interface ShirtSnapshot {
   staged: StagedShirtResponse | null;
   zoom: number;
   panX: number;
@@ -52,7 +64,7 @@ interface ShirtSnapshot {
   replacePreviousForClub: boolean;
 }
 
-interface ShirtHistoryState {
+export interface ShirtHistoryState {
   past: ShirtSnapshot[];
   present: ShirtSnapshot;
   future: ShirtSnapshot[];
@@ -120,17 +132,47 @@ function resolveNextClubName(
   return prevName;
 }
 
-function isTextEntryTarget(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null;
-  if (!el) return false;
-  if (el.isContentEditable) return true;
-  const tag = el.tagName?.toLowerCase();
-  if (tag === 'textarea' || tag === 'select') return true;
-  if (tag === 'input') {
-    const inpType = ((el as HTMLInputElement).type || 'text').toLowerCase();
-    return !NON_TEXT_INPUT_TYPES.has(inpType);
-  }
-  return false;
+export function pushStagedShirtToHistory(
+  prevHistory: ShirtHistoryState | null,
+  res: StagedShirtResponse,
+  fallbackCategory: TemplateCategory,
+): ShirtHistoryState {
+  const base = prevHistory ?? {
+    past: [],
+    present: { ...EMPTY_SNAPSHOT, category: fallbackCategory },
+    future: [],
+  };
+  const width = Number(res.width) || 260;
+  const height = Number(res.height) || 310;
+  const vp = res.suggestedViewport ?? { zoom: 1, panX: 0, panY: 0 };
+  const normalized: StagedShirtResponse = { ...res, width, height, suggestedViewport: vp };
+  const cur = base.present;
+  const next: ShirtSnapshot = {
+    staged: normalized,
+    zoom: vp.zoom,
+    panX: vp.panX,
+    panY: vp.panY,
+    symmetrize: true,
+    shoulderBoost: 0,
+    detailCrispness: cur.detailCrispness,
+    viewMode: 'frame',
+    cleanUrl: '',
+    collarMetrics: null,
+    extractedKey: '',
+    displayName: res.suggestedName || (cur.category === 'staff' ? 'Prenda_Staff' : 'Camiseta_Club'),
+    category: cur.category,
+    clubId: cur.clubId,
+    clubName: cur.clubName,
+    season: cur.season,
+    isActiveForClub: cur.isActiveForClub,
+    replacePreviousForClub: false,
+  };
+  const shouldPushPast = cur.staged !== null || base.past.length > 0;
+  return {
+    past: shouldPushPast ? [...base.past.slice(-(MAX_SHIRT_HISTORY - 1)), cur] : [],
+    present: next,
+    future: [],
+  };
 }
 
 function isSameSnap(a: ShirtSnapshot, b: ShirtSnapshot): boolean {
@@ -173,20 +215,33 @@ export default function ShirtExtractorTool({
   clubs,
   templates,
   initialCategory = 'player',
+  persistedRef,
+  incomingStage,
+  onCaptureScreen,
   onTemplatesUpdated,
   onClubsUpdated,
   onSelectTemplateForComposer,
 }: Props) {
-  const [history, setHistory] = useState<ShirtHistoryState>(() => ({
-    past: [],
-    present: { ...EMPTY_SNAPSHOT, category: initialCategory },
-    future: [],
-  }));
+  const [history, setHistory] = useState<ShirtHistoryState>(
+    () =>
+      persistedRef?.current ?? {
+        past: [],
+        present: { ...EMPTY_SNAPSHOT, category: initialCategory },
+        future: [],
+      },
+  );
   const snap = history.present;
+  const consumedSeqRef = useRef<number>(incomingStage?.seq ?? 0);
+
+  useEffect(() => {
+    if (persistedRef) {
+      persistedRef.current = history;
+    }
+  }, [persistedRef, history]);
 
   useEffect(() => {
     setHistory((h) => {
-      if (h.present.category === initialCategory) return h;
+      if (h.present.staged || h.present.category === initialCategory) return h;
       return { ...h, present: { ...h.present, category: initialCategory } };
     });
   }, [initialCategory]);
@@ -489,8 +544,15 @@ export default function ShirtExtractorTool({
   );
 
   useEffect(() => {
+    if (incomingStage && incomingStage.seq > consumedSeqRef.current) {
+      consumedSeqRef.current = incomingStage.seq;
+      applyStage(incomingStage.data);
+    }
+  }, [incomingStage, applyStage]);
+
+  useEffect(() => {
     const onPaste = (ev: ClipboardEvent) => {
-      if (busy || document.querySelector('[role="dialog"]')) return;
+      if (busy || document.querySelector('[role="dialog"]') || isTextEntryTarget(ev.target)) return;
       const f = Array.from(ev.clipboardData?.items ?? [])
         .find((i) => i.type.startsWith('image/'))
         ?.getAsFile();
@@ -841,8 +903,9 @@ export default function ShirtExtractorTool({
           onDrop={(e) => {
             e.preventDefault();
             if (busy) return;
-            const f = e.dataTransfer.files?.[0];
-            if (f) void handleFileBlob(f);
+            const { file, blockedRemoteUrl } = resolveDroppedImageTransfer(e.dataTransfer);
+            if (file) void handleFileBlob(file);
+            else if (blockedRemoteUrl) setErr('Las webs protegen el arrastre directo: usa el botón «Capturar» o Ctrl+V.');
           }}
           className={`w-full rounded-lg p-6 flex flex-col items-center justify-center transition ${stageBgClass} border border-slate-200/60 dark:border-slate-800`}
         >
@@ -980,6 +1043,17 @@ export default function ShirtExtractorTool({
                   if (f) void handleFileBlob(f);
                 }}
               />
+              {onCaptureScreen && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onCaptureScreen('raw_shirt')}
+                  title="Recortar zona de camiseta directamente desde la pantalla"
+                  className="px-2.5 py-1.5 text-xs font-medium rounded-md border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 disabled:opacity-40 text-emerald-800 dark:text-emerald-300 inline-flex items-center gap-1.5 transition"
+                >
+                  <Scissors className="w-3.5 h-3.5" /> Capturar camiseta
+                </button>
+              )}
               <button
                 type="button"
                 disabled={busy}

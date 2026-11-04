@@ -1323,4 +1323,159 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       delete window.pywebview;
     }
   });
+
+  it('routes hot screen capture independently (direct_photo, raw_face, raw_shirt, save_png, Esc cancel) with DRM/low-res notices, guarded Ctrl+V, and persistent tool history', async () => {
+    const calls: Array<{ fn: string; args: unknown[] }> = [];
+    let nextCancelled = false;
+    let nextDrm = false;
+    let nextLowRes = false;
+
+    window.pywebview = {
+      api: {
+        list_shirt_templates: async () => [],
+        list_saved_faces: async () => [],
+        capture_screen_region: async (target: unknown, params?: unknown) => {
+          calls.push({ fn: 'capture_screen_region', args: [target, params] });
+          if (nextCancelled) {
+            return { cancelled: true };
+          }
+          if (target === 'direct_photo') {
+            return {
+              cancelled: false,
+              target: 'direct_photo',
+              captureWidth: 120,
+              captureHeight: 140,
+              drmWarning: nextDrm,
+              lowResWarning: nextLowRes,
+              directPhotoId: 'direct-cap-1',
+              fileName: 'Captura_1.png',
+              label: 'Captura_1',
+              width: 120,
+              height: 140,
+              isPreCutout: false,
+              clampPan: true,
+              autoFit: { scale: 1.0, offsetX: 0, offsetY: 0, neckFill: 1.0 },
+              previewDataUrl: ONE_PX_PNG,
+            };
+          }
+          if (target === 'raw_face') {
+            return {
+              cancelled: false,
+              target: 'raw_face',
+              captureWidth: 240,
+              captureHeight: 290,
+              drmWarning: false,
+              lowResWarning: false,
+              rawDataUrl: ONE_PX_PNG,
+              width: 240,
+              height: 290,
+              isPreCutout: false,
+              crownSrcY: 22,
+              suggestedViewport: { zoom: 1.0, panX: 0, panY: 0 },
+              fileName: 'Captura_Cara_1.png',
+            };
+          }
+          if (target === 'raw_shirt') {
+            return {
+              cancelled: false,
+              target: 'raw_shirt',
+              captureWidth: 300,
+              captureHeight: 190,
+              drmWarning: false,
+              lowResWarning: false,
+              shirtSourceId: 'shirt-cap-1',
+              rawDataUrl: ONE_PX_PNG,
+              width: 300,
+              height: 190,
+              suggestedName: 'Captura_Camiseta_1',
+              suggestedViewport: { zoom: 0.75, panX: 0, panY: 77 },
+            };
+          }
+          return {
+            cancelled: false,
+            target: 'save_png',
+            captureWidth: 260,
+            captureHeight: 310,
+            drmWarning: false,
+            lowResWarning: false,
+            savedPath: 'D:\\Capturas\\Recorte_DF11.png',
+            fileName: 'Recorte_DF11.png',
+          };
+        },
+        load_raw_face_source: async (dataUrl: unknown, fileName: unknown) => {
+          calls.push({ fn: 'load_raw_face_source', args: [dataUrl, fileName] });
+          return {
+            rawDataUrl: ONE_PX_PNG,
+            width: 220,
+            height: 260,
+            isPreCutout: false,
+            crownSrcY: 20,
+            suggestedViewport: { zoom: 1.0, panX: 0, panY: 0 },
+            fileName: String(fileName || 'Pasted.png'),
+          };
+        },
+        render_modular_preview: async () => ({ previewDataUrl: ONE_PX_PNG }),
+      },
+    };
+
+    try {
+      render(<StudioView clubs={CLUBS} exportDir="D:\\DF11Studio\\Exports" onExportDirChange={() => {}} initialJump={null} />);
+
+      // 1. Esc cancellation is a clean no-op with zero error banners
+      nextCancelled = true;
+      fireEvent.click(screen.getByRole('button', { name: /Capturar pantalla/i }));
+      await waitFor(() => expect(calls.filter((c) => c.fn === 'capture_screen_region')).toHaveLength(1));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+      // 2. Direct Photo capture with lowRes + DRM warnings populates Foto Directa + non-blocking advisory
+      nextCancelled = false;
+      nextLowRes = true;
+      nextDrm = true;
+      fireEvent.click(screen.getByRole('button', { name: /Opciones de captura de pantalla/i }));
+      fireEvent.click(screen.getByRole('menuitem', { name: /Foto Directa \+ Marco DF11/i }));
+      expect(await screen.findByText(/Activa: Captura_1/i)).toBeInTheDocument();
+      expect(screen.getByText(/aceleración por hardware/i)).toBeInTheDocument();
+
+      // 3. Guarded Ctrl+V: pasting while focused inside UID <input> MUST NOT hijack image paste onto canvas!
+      const uidInput = screen.getByLabelText(/ID Football Manager/i);
+      uidInput.focus();
+      const fakeImgFile = new File([new Uint8Array([137, 80, 78, 71])], 'clip.png', { type: 'image/png' });
+      fireEvent.paste(uidInput, {
+        clipboardData: {
+          items: [{ type: 'image/png', getAsFile: () => fakeImgFile }],
+        },
+      });
+      await new Promise((r) => setTimeout(r, 40));
+      expect(calls.filter((c) => c.fn === 'load_raw_face_source')).toHaveLength(0);
+
+      // 4. Independent Shirt capture routes to Extraer Camiseta with headless auto-framed panY=77 and persists across tab switches!
+      fireEvent.click(screen.getByRole('button', { name: /Opciones de captura de pantalla/i }));
+      fireEvent.click(screen.getByRole('menuitem', { name: /Extraer Camiseta/i }));
+      expect(await screen.findByAltText(/Encuadre previo de camiseta/i)).toBeInTheDocument();
+      expect(screen.getByText(/X:0 Y:77/i)).toBeInTheDocument();
+
+      // Switch back to Montaje Paso a Paso -> Captura_1 is STILL mounted, then return to Extraer Camiseta -> X:0 Y:77 is STILL preserved!
+      fireEvent.click(screen.getByRole('tab', { name: /Montaje Paso a Paso/i }));
+      expect(screen.getByText(/Activa: Captura_1/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('tab', { name: /Extraer Camiseta/i }));
+      expect(screen.getByText(/X:0 Y:77/i)).toBeInTheDocument();
+
+      // 5. FaceExtractorTool supports Ctrl+V image paste and independent 'Capturar cara'
+      fireEvent.click(screen.getByRole('tab', { name: /Extraer Cara/i }));
+      fireEvent.paste(window, {
+        clipboardData: {
+          items: [{ type: 'image/png', getAsFile: () => fakeImgFile }],
+        },
+      });
+      expect(await screen.findByAltText(/Encuadre previo de cara/i)).toBeInTheDocument();
+      expect(calls.filter((c) => c.fn === 'load_raw_face_source')).toHaveLength(1);
+
+      // 6. Save PNG capture writes clean PNG without mutating active Studio composition
+      fireEvent.click(screen.getByRole('button', { name: /Opciones de captura de pantalla/i }));
+      fireEvent.click(screen.getByRole('menuitem', { name: /Guardar PNG como/i }));
+      expect(await screen.findByText(/Recorte guardado: D:\\Capturas\\Recorte_DF11\.png/i)).toBeInTheDocument();
+    } finally {
+      delete window.pywebview;
+    }
+  });
 });
