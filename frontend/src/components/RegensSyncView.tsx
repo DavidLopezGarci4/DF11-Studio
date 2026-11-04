@@ -123,9 +123,9 @@ export default function RegensSyncView({
   };
 
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-3 lg:h-full lg:min-h-0">
       {storageHealth?.warning && (
-        <section className="rounded-xl border border-amber-300/80 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/30 p-4 space-y-2 text-xs text-amber-950 dark:text-amber-200">
+        <section className="shrink-0 rounded-xl border border-amber-300/80 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/30 p-3 space-y-1.5 text-xs text-amber-950 dark:text-amber-200">
           <div className="flex items-center justify-between gap-2 font-semibold">
             <span className="inline-flex items-center gap-1.5"><AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" /> Centinela OneDrive &amp; Disco C: ({storageHealth.free_gb} GB libres)</span>
             <span className="tabular-nums">Protección activa</span>
@@ -145,8 +145,8 @@ export default function RegensSyncView({
         </section>
       )}
 
-      <section className="rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-200/80 dark:divide-slate-800">
-        <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+      <section className="flex-1 min-h-0 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-200/80 dark:divide-slate-800 flex flex-col overflow-hidden">
+        <div className="shrink-0 p-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
           <div className="space-y-1">
             <span className="font-semibold text-slate-900 dark:text-slate-100">1. Bóveda NG_Regens (Solo lectura · Cero .bak)</span>
             <button
@@ -174,7 +174,7 @@ export default function RegensSyncView({
           </div>
         </div>
 
-        <div className="p-4 flex flex-wrap items-center justify-between gap-4 text-xs">
+        <div className="shrink-0 p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-4 text-slate-700 dark:text-slate-300">
             <label className="inline-flex items-center gap-2"><input type="checkbox" checked={applyKits} onChange={(e) => { const v = e.target.checked; setApplyKits(v); if (liveWatch) void handleToggleLiveWatch(true, v, harmonize); }} className="accent-emerald-600" /> Equipación real de club (P_clothes = 0)</label>
             <label className="inline-flex items-center gap-2"><input type="checkbox" checked={harmonize} onChange={(e) => { const v = e.target.checked; setHarmonize(v); if (liveWatch) void handleToggleLiveWatch(true, applyKits, v); }} className="accent-emerald-600" /> Armonizar luz DF11 (OKLab)</label>
@@ -197,7 +197,7 @@ export default function RegensSyncView({
           </div>
         </div>
 
-        <div className="p-4 space-y-3 text-xs">
+        <div className="shrink-0 p-3 space-y-2 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium text-slate-800 dark:text-slate-200 inline-flex items-center gap-1"><Tag className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Etiquetar Mi Club:</span>
@@ -240,11 +240,11 @@ export default function RegensSyncView({
           {statusMsg && <p className="text-slate-600 dark:text-slate-300">{statusMsg}</p>}
         </div>
 
-        <div className="p-4">
+        <div className="flex-1 min-h-0 p-3 overflow-y-auto">
           {sample.length === 0 ? (
             <p className="text-xs text-slate-500 dark:text-slate-400 py-6 text-center">Bóveda sin regens detectados aún. Genera caras en NG_Regens apuntando a {vaultDir} y pulsa Re-escanear.</p>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
               {sample.map((row) => (
                 <div key={row.uid} className="px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200/70 dark:border-slate-800 flex items-center justify-between gap-2 text-xs">
                   <label className="inline-flex items-center gap-2 min-w-0">

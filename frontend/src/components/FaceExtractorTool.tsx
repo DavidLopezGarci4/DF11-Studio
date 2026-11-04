@@ -194,8 +194,8 @@ export default function FaceExtractorTool({
     }`;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-      <section className="lg:col-span-5 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 flex flex-col items-center gap-4">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 lg:flex-1 lg:min-h-0 items-stretch">
+      <section className="lg:col-span-5 xl:col-span-4 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 flex flex-col items-center gap-2.5 lg:h-full min-h-0 lg:overflow-y-auto">
         <div className="w-full flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
           <span className="font-medium text-slate-900 dark:text-white">
             {viewMode === 'crop' ? 'Zona de Corte · Cabeza y Cuello' : 'Cabeza y Cuello Extraídos'}
@@ -211,7 +211,7 @@ export default function FaceExtractorTool({
             if (file) void handleFileBlob(file);
             else if (blockedRemoteUrl) setErr('Las webs protegen el arrastre directo: usa el botón «Capturar» o Ctrl+V.');
           }}
-          className={`w-full rounded-lg p-6 flex flex-col items-center justify-center transition ${stageBgClass} border border-slate-200/60 dark:border-slate-800`}
+          className={`w-full rounded-lg p-3 flex flex-col items-center justify-center transition ${stageBgClass} border border-slate-200/80 dark:border-slate-800`}
         >
           <div
             onWheel={(e) => {
@@ -305,8 +305,8 @@ export default function FaceExtractorTool({
         </div>
       </section>
 
-      <section className="lg:col-span-7 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-200/80 dark:divide-slate-800">
-        <div className="p-4 space-y-3">
+      <section className="lg:col-span-7 xl:col-span-8 lg:h-full min-h-0 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-200/80 dark:divide-slate-800 flex flex-col overflow-hidden">
+        <div className="shrink-0 p-3 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
@@ -367,8 +367,8 @@ export default function FaceExtractorTool({
               />
               Quitar fondo y ropa (BiRefNet + BiSeNet)
             </label>
-            <label className="sm:col-span-7 flex items-center gap-2 text-slate-700 dark:text-slate-300 tabular-nums">
-              <span>Zona</span>
+            <label className="sm:col-span-7 flex items-center gap-2 min-w-0 text-slate-700 dark:text-slate-300 tabular-nums">
+              <span className="shrink-0">Zona</span>
               <input
                 type="range"
                 min="0.35"
@@ -377,9 +377,9 @@ export default function FaceExtractorTool({
                 disabled={!staged}
                 value={viewport.zoom}
                 onChange={(e) => { setViewMode('crop'); setViewport((v) => ({ ...v, zoom: Number(e.target.value) })); }}
-                className="w-full accent-emerald-600 disabled:opacity-40"
+                className="min-w-0 flex-1 accent-emerald-600 disabled:opacity-40"
               />
-              <span>{Math.round(viewport.zoom * 100)}%</span>
+              <span className="w-11 shrink-0 text-right tabular-nums">{Math.round(viewport.zoom * 100)}%</span>
             </label>
           </div>
 
@@ -405,7 +405,7 @@ export default function FaceExtractorTool({
         </div>
 
         {extracted && (
-          <div className="p-4 space-y-3 bg-emerald-50/40 dark:bg-emerald-950/15">
+          <div className="shrink-0 p-3 space-y-2 bg-emerald-50/40 dark:bg-emerald-950/15">
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center">
               <input
                 aria-label="Nombre para guardar cara"
@@ -441,9 +441,9 @@ export default function FaceExtractorTool({
           </div>
         )}
 
-        <div className="p-4 space-y-2.5">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-semibold text-slate-800 dark:text-slate-200">
+        <div className="flex-1 min-h-0 p-3 flex flex-col gap-2 overflow-hidden">
+          <div className="shrink-0 flex items-center justify-between text-xs">
+            <span className="font-semibold text-slate-800 dark:text-slate-200 tabular-nums">
               Biblioteca de Caras ({faces.length})
             </span>
             <span className="text-slate-500 dark:text-slate-400">caras_extraidas · caras_prueba</span>
@@ -453,7 +453,7 @@ export default function FaceExtractorTool({
               Aún no hay caras guardadas. Extrae una cara arriba o añade recortes en D:\DF11Studio\caras_prueba.
             </p>
           ) : (
-            <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 max-h-56 overflow-y-auto pr-1">
+            <div className="flex-1 min-h-[120px] overflow-y-auto content-start grid grid-cols-3 sm:grid-cols-5 xl:grid-cols-6 gap-2 pr-1">
               {faces.map((f) => (
                 <button
                   key={f.faceId}

@@ -854,8 +854,8 @@ export default function ShirtExtractorTool({
     }`;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-      <section className="lg:col-span-5 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 flex flex-col items-center gap-4">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 lg:flex-1 lg:min-h-0 items-stretch">
+      <section className="lg:col-span-5 xl:col-span-4 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 flex flex-col items-center gap-2.5 lg:h-full min-h-0 lg:overflow-y-auto">
         <div className="w-full flex items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
           <span className="font-medium text-slate-900 dark:text-white">
             {snap.viewMode === 'result' && snap.cleanUrl
@@ -907,7 +907,7 @@ export default function ShirtExtractorTool({
             if (file) void handleFileBlob(file);
             else if (blockedRemoteUrl) setErr('Las webs protegen el arrastre directo: usa el botón «Capturar» o Ctrl+V.');
           }}
-          className={`w-full rounded-lg p-6 flex flex-col items-center justify-center transition ${stageBgClass} border border-slate-200/60 dark:border-slate-800`}
+          className={`w-full rounded-lg p-3 flex flex-col items-center justify-center transition ${stageBgClass} border border-slate-200/80 dark:border-slate-800`}
         >
           <div
             ref={canvasRef}
@@ -1014,9 +1014,9 @@ export default function ShirtExtractorTool({
         </div>
       </section>
 
-      <section className="lg:col-span-7 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-200/80 dark:divide-slate-800">
+      <section className="lg:col-span-7 xl:col-span-8 lg:h-full min-h-0 lg:overflow-y-auto rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-200/80 dark:divide-slate-800">
         {/* 1. Encuadre y Calidad 2x SSAA */}
-        <div className="p-4 space-y-3">
+        <div className="p-3 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <div className="flex items-center gap-2">
@@ -1441,7 +1441,7 @@ export default function ShirtExtractorTool({
         </div>
 
         {/* 3. Catálogo tshirt_templates con Buscador, Temporadas, Edición y Borrado */}
-        <div className="p-4 space-y-3">
+        <div className="p-3 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="font-semibold text-slate-800 dark:text-slate-200 inline-flex items-center gap-1.5">
               <Shirt className="w-3.5 h-3.5 text-emerald-500" /> Plantillas en tshirt_templates ({filteredTemplates.length}/{templates.length})
@@ -1633,7 +1633,7 @@ export default function ShirtExtractorTool({
                 : 'Ninguna plantilla coincide con la búsqueda o filtro actual.'}
             </p>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-72 overflow-y-auto pr-1">
+            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2 max-h-64 overflow-y-auto pr-1">
               {filteredTemplates.map((t) => {
                 const resolvedClubLabel = t.clubId ? t.clubName || clubs[t.clubId]?.name || `Club #${t.clubId}` : '';
                 const isActiveClubKit = Boolean(t.clubId) && t.isActiveForClub !== false;
