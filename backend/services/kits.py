@@ -11,7 +11,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+import time
+from typing import Any, Literal
 
 import numpy as np
 from defusedxml import ElementTree as SafeET
@@ -50,8 +51,9 @@ class KitSpec:
 
 _INITIALIZED_DBS: dict[Path, int] = {}
 _DB_INIT_LOCK = threading.Lock()
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _CLUB_ID_RE = re.compile(r"^\d{1,12}$")
+_SAVE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 _SCHEMA_SQL = (
     "CREATE TABLE IF NOT EXISTS fm_assets (club_id TEXT, kind TEXT, file_path TEXT, PRIMARY KEY (club_id, kind));"
     "CREATE TABLE IF NOT EXISTS kit_overrides (club_id TEXT PRIMARY KEY, primary_hex TEXT, secondary_hex TEXT, collar_hex TEXT, pattern TEXT);"
@@ -59,6 +61,13 @@ _SCHEMA_SQL = (
     "CREATE TABLE IF NOT EXISTS squad_map (uid TEXT PRIMARY KEY, club_id TEXT NOT NULL);"
     "CREATE TABLE IF NOT EXISTS regen_manifest (uid TEXT PRIMARY KEY, mtime_ns INTEGER, size INTEGER, sig TEXT);"
     "CREATE TABLE IF NOT EXISTS app_prefs (pref_key TEXT PRIMARY KEY, pref_val TEXT NOT NULL);"
+    "CREATE TABLE IF NOT EXISTS save_profiles ("
+    "save_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, "
+    "is_active INTEGER NOT NULL DEFAULT 0, created_ms INTEGER NOT NULL DEFAULT 0);"
+    "CREATE TABLE IF NOT EXISTS save_squad_roster ("
+    "save_id TEXT NOT NULL, uid TEXT NOT NULL, club_id TEXT NOT NULL, "
+    "player_name TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT 'player', "
+    "PRIMARY KEY (save_id, uid));"
     "CREATE TABLE IF NOT EXISTS shirt_templates ("
     "template_id TEXT PRIMARY KEY, filename TEXT NOT NULL, display_name TEXT NOT NULL, "
     "club_id TEXT NOT NULL DEFAULT '', sha256 TEXT NOT NULL, mtime_ns INTEGER NOT NULL, "
@@ -93,6 +102,16 @@ def init_state_db(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
                         boot_conn.execute("ALTER TABLE shirt_templates ADD COLUMN category TEXT NOT NULL DEFAULT 'player'")
                     boot_conn.execute("UPDATE shirt_templates SET is_active_for_club=0 WHERE club_id=''")
                     boot_conn.execute("UPDATE shirt_templates SET category='player' WHERE category NOT IN ('player', 'staff')")
+                    boot_conn.execute(
+                        "INSERT OR IGNORE INTO save_profiles (save_id, display_name, is_active, created_ms) "
+                        "VALUES ('default', 'Partida Principal', 0, 0)"
+                    )
+                    if boot_conn.execute("SELECT 1 FROM save_profiles WHERE is_active=1 LIMIT 1").fetchone() is None:
+                        boot_conn.execute("UPDATE save_profiles SET is_active=1 WHERE save_id='default'")
+                    boot_conn.execute(
+                        "INSERT OR IGNORE INTO save_squad_roster (save_id, uid, club_id, player_name, category) "
+                        "SELECT 'default', uid, club_id, '', 'player' FROM squad_map"
+                    )
                     boot_conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION};")
                 boot_conn.commit()
                 _INITIALIZED_DBS[target] = target.stat().st_ctime_ns
@@ -107,6 +126,76 @@ def init_state_db(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
         raise
     finally:
         conn.close()
+
+
+def normalize_save_id(raw_save_id: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(raw_save_id or "").strip()).strip("_")[:64]
+    if not cleaned:
+        return "default"
+    if not _SAVE_ID_RE.match(cleaned):
+        raise ValueError("Identificador de partida no válido.")
+    return cleaned
+
+
+def get_active_save_id(db_path: Path | None = None) -> str:
+    with init_state_db(db_path) as conn:
+        row = conn.execute("SELECT save_id FROM save_profiles WHERE is_active=1 LIMIT 1").fetchone()
+        return str(row[0]) if row and row[0] else "default"
+
+
+def list_save_profiles(db_path: Path | None = None) -> list[dict[str, Any]]:
+    with init_state_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT save_id, display_name, is_active FROM save_profiles ORDER BY is_active DESC, created_ms ASC, save_id ASC"
+        ).fetchall()
+    return [{"saveId": str(r[0]), "displayName": str(r[1]), "isActive": bool(r[2])} for r in rows]
+
+
+def _switch_active_save_conn(conn: sqlite3.Connection, target_sid: str) -> None:
+    cur_row = conn.execute("SELECT save_id FROM save_profiles WHERE is_active=1 LIMIT 1").fetchone()
+    if cur_row and str(cur_row[0]):
+        cur_sid = str(cur_row[0])
+        conn.execute(
+            "INSERT OR IGNORE INTO save_squad_roster (save_id, uid, club_id, player_name, category) "
+            "SELECT ?, uid, club_id, '', 'player' FROM squad_map",
+            (cur_sid,),
+        )
+    conn.execute("UPDATE save_profiles SET is_active = CASE WHEN save_id=? THEN 1 ELSE 0 END", (target_sid,))
+    conn.execute("DELETE FROM squad_map")
+    conn.execute(
+        "INSERT OR REPLACE INTO squad_map (uid, club_id) SELECT uid, club_id FROM save_squad_roster WHERE save_id=?",
+        (target_sid,),
+    )
+
+
+def upsert_save_profile(
+    save_id: str,
+    display_name: str,
+    activate: bool = True,
+    db_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    sid = normalize_save_id(save_id)
+    clean_name = str(display_name or "").strip()[:80] or sid
+    now_ms = int(time.time() * 1000)
+    with init_state_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO save_profiles (save_id, display_name, is_active, created_ms) VALUES (?, ?, 0, ?) "
+            "ON CONFLICT(save_id) DO UPDATE SET display_name=excluded.display_name",
+            (sid, clean_name, now_ms),
+        )
+        if activate:
+            _switch_active_save_conn(conn, sid)
+    return list_save_profiles(db_path)
+
+
+def set_active_save_profile(save_id: str, db_path: Path | None = None) -> list[dict[str, Any]]:
+    sid = normalize_save_id(save_id)
+    with init_state_db(db_path) as conn:
+        exists = conn.execute("SELECT 1 FROM save_profiles WHERE save_id=?", (sid,)).fetchone()
+        if exists is None:
+            raise ValueError(f"La partida '{sid}' no está registrada.")
+        _switch_active_save_conn(conn, sid)
+    return list_save_profiles(db_path)
 
 
 @lru_cache(maxsize=1)

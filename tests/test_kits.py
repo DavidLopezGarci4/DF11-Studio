@@ -82,3 +82,39 @@ def test_init_state_db_closes_sqlite_handles_on_windows(tmp_path: Path) -> None:
     # On Windows NTFS, unlink raises PermissionError if any sqlite3/WAL handle leaked
     db_file.unlink()
     assert not db_file.exists()
+
+
+def test_v4_save_profiles_and_isolated_multi_save_squad_roster(tmp_path: Path) -> None:
+    from backend.services.kits import (
+        get_active_save_id,
+        list_save_profiles,
+        set_active_save_profile,
+        upsert_save_profile,
+    )
+    from backend.services.sync import assign_uids_to_club
+
+    db_file = tmp_path / "multi_save.sqlite3"
+    with init_state_db(db_file) as conn:
+        u_ver = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        assert u_ver == 4
+
+    assert get_active_save_id(db_file) == "default"
+    profiles = list_save_profiles(db_file)
+    assert len(profiles) == 1 and profiles[0]["saveId"] == "default" and profiles[0]["isActive"] is True
+
+    # Save 1 ('rayo_2027'): r-2002049102 belongs to Rayo Vallecano (1744)
+    upsert_save_profile("rayo_2027", "Carrera Rayo 2027", activate=True, db_path=db_file)
+    assign_uids_to_club(["r-2002049102"], "1744", db_path=db_file)
+
+    # Save 2 ('barca_2031'): SAME r-2002049102 regen UID collision belongs to FC Barcelona (1708)!
+    upsert_save_profile("barca_2031", "Carrera Barça 2031", activate=True, db_path=db_file)
+    with init_state_db(db_file) as conn:
+        assert conn.execute("SELECT club_id FROM squad_map WHERE uid='r-2002049102'").fetchone() is None
+    assign_uids_to_club(["r-2002049102"], "1708", db_path=db_file)
+    with init_state_db(db_file) as conn:
+        assert conn.execute("SELECT club_id FROM squad_map WHERE uid='r-2002049102'").fetchone() == ("1708",)
+
+    # Switching back to 'rayo_2027' restores Rayo (1744) without losing Barça's roster
+    set_active_save_profile("rayo_2027", db_path=db_file)
+    with init_state_db(db_file) as conn:
+        assert conn.execute("SELECT club_id FROM squad_map WHERE uid='r-2002049102'").fetchone() == ("1744",)

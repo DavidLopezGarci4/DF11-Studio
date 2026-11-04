@@ -169,7 +169,7 @@ class StudioBridge:
         return r
 
     def get_bootstrap_state(self) -> dict[str, Any]:
-        from backend.services.kits import load_merged_clubs
+        from backend.services.kits import list_save_profiles, load_merged_clubs
         from backend.services.sync import check_fm_storage_health
 
         saved_export = self._get_pref("last_export_dir")
@@ -201,6 +201,12 @@ class StudioBridge:
         ok = all((m / f).is_file() for f in ("face_detection_yunet_2023mar.onnx", "selfie_multiclass_256x256.onnx", "birefnet-general-lite.onnx"))
         raw_theme = self._get_pref("theme", "dark")
         theme = raw_theme if raw_theme in ("dark", "light") else "dark"
+        save_profiles = (
+            list_save_profiles(self._db_path)
+            if self._db_path.is_file()
+            else [{"saveId": "default", "displayName": "Partida Principal", "isActive": True}]
+        )
+        active_save = next((p["saveId"] for p in save_profiles if p["isActive"]), "default")
         return {
             "version": __version__,
             "clubs": load_merged_clubs(self._db_path),
@@ -211,6 +217,8 @@ class StudioBridge:
             "hasModels": ok,
             "liveWatching": self._watcher is not None,
             "captureHotkey": bool(self._hotkey_mgr and self._hotkey_mgr.is_running),
+            "activeSaveId": active_save,
+            "saveProfiles": save_profiles,
             "theme": theme,
         }
 
@@ -492,10 +500,27 @@ class StudioBridge:
 
         return {"updated": assign_uids_to_club(uids, club_id, db_path=self._db_path)}
 
-    def import_squad_text(self, raw_text: str) -> dict[str, int]:
+    def import_squad_text(self, raw_text: str, save_id: str = "") -> dict[str, int]:
         from backend.services.sync import import_squad_club_mappings
 
-        return {"mapped": import_squad_club_mappings(raw_text, db_path=self._db_path)}
+        return {"mapped": import_squad_club_mappings(raw_text, db_path=self._db_path, save_id=save_id or None)}
+
+    def list_save_profiles(self) -> list[dict[str, Any]]:
+        from backend.services.kits import list_save_profiles
+
+        return list_save_profiles(self._db_path)
+
+    def upsert_save_profile(self, save_id: str, display_name: str, activate: bool = True) -> dict[str, Any]:
+        from backend.services.kits import get_active_save_id, upsert_save_profile
+
+        profiles = upsert_save_profile(save_id, display_name, activate=bool(activate), db_path=self._db_path)
+        return {"activeSaveId": get_active_save_id(self._db_path), "saveProfiles": profiles}
+
+    def set_active_save_profile(self, save_id: str) -> dict[str, Any]:
+        from backend.services.kits import get_active_save_id, set_active_save_profile
+
+        profiles = set_active_save_profile(save_id, db_path=self._db_path)
+        return {"activeSaveId": get_active_save_id(self._db_path), "saveProfiles": profiles}
 
     def start_regens_sync(self, o: dict[str, Any]) -> dict[str, Any]:
         from backend.services.sync import sync_ng_regens_batch

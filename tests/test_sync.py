@@ -67,6 +67,37 @@ def test_squad_importer_parses_csv_html_and_tags_my_club(tmp_path: Path) -> None
     assert assign_uids_to_club(["r-2002049104"], "776", db_path=db) == 1
 
 
+def test_squad_importer_ignores_age_and_shirt_numbers_and_matches_custom_clubs(tmp_path: Path) -> None:
+    from backend.services.kits import init_state_db, upsert_custom_club_entry
+
+    db = tmp_path / "squad_hardened.sqlite3"
+    upsert_custom_club_entry("999123", "CD Numancia B", db_path=db)
+
+    # Multi-column FM Ctrl+P export containing Age (19, 29) and Shirt Number (7, 10) BEFORE Club column!
+    fm_export = (
+        "| UID | Nombre | Edad | Dorsal | Club |\n"
+        "| r-2002049102 | Isi Palazón | 29 | 7 | Rayo Vallecano |\n"
+        "| r-2002049105 | Canterano Soria | 19 | 10 | CD Numancia B |\n"
+        "| r-2002049109 | Juvenil Libre | 17 | 14 | Sin Equipo Desconocido |\n"
+    )
+    mapped = import_squad_club_mappings(fm_export, db_path=db)
+    assert mapped == 2
+
+    with init_state_db(db) as conn:
+        rows = dict(conn.execute("SELECT uid, club_id FROM squad_map").fetchall())
+        roster = {
+            r[0]: (r[1], r[2])
+            for r in conn.execute("SELECT uid, club_id, player_name FROM save_squad_roster WHERE save_id='default'").fetchall()
+        }
+    assert rows == {
+        "r-2002049102": "1744",
+        "r-2002049105": "999123",
+    }
+    assert "r-2002049109" not in rows, "Short numeric stats (17, 14) must NEVER be misidentified as club_id"
+    assert roster["r-2002049102"] == ("1744", "Isi Palazón")
+    assert roster["r-2002049105"] == ("999123", "Canterano Soria")
+
+
 def test_incremental_batch_sync_and_50pct_shrink_guard(tmp_path: Path) -> None:
     db, vault, out_dir = tmp_path / "state.sqlite3", tmp_path / "vault", tmp_path / "000_DF11_Regens_Override"
     for i in range(4):

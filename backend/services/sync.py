@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import threading
 import time
+import unicodedata
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -19,7 +20,14 @@ from backend.core.compositor import BgMode, export_df11_bytes, render_df11_card
 from backend.core.fm_config import safe_ntfs_replace, upsert_fm_config_xml, validate_fm_uid
 from backend.core.image_guard import load_guarded_image
 from backend.core.paths import get_default_vault_dir
-from backend.services.kits import dress_or_frame_portrait, init_state_db, load_seed_kits, resolve_club_kit
+from backend.services.kits import (
+    dress_or_frame_portrait,
+    get_active_save_id,
+    init_state_db,
+    load_merged_clubs,
+    normalize_save_id,
+    resolve_club_kit,
+)
 from backend.services.vision import harmonize_df11_studio_grade, remove_background_birefnet
 
 _PORTRAIT_TO_RE = re.compile(r"graphics/pictures/person/((?:r-)?[0-9]{1,12})/portrait", re.IGNORECASE)
@@ -114,32 +122,159 @@ def check_fm_storage_health(target_path: Path) -> StorageHealthReport:
     )
 
 
-def assign_uids_to_club(uids: Iterable[str], club_id: str, db_path: Path | None = None) -> int:
+def _norm_club_key(raw: str) -> str:
+    nfkd = unicodedata.normalize("NFKD", str(raw or ""))
+    stripped = "".join(ch for ch in nfkd if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", stripped.strip().lower())
+
+
+def assign_uids_to_club(
+    uids: Iterable[str],
+    club_id: str,
+    db_path: Path | None = None,
+    save_id: str | None = None,
+) -> int:
     _ensure_sync_tables(db_path)
-    rows = [(validate_fm_uid(u), str(club_id).strip()) for u in uids]
+    active_sid = get_active_save_id(db_path)
+    eff_sid = normalize_save_id(save_id) if save_id else active_sid
+    cid = str(club_id).strip()
+    clean_uids = [validate_fm_uid(u) for u in uids]
+    if not clean_uids:
+        return 0
     with init_state_db(db_path) as conn:
-        conn.executemany("INSERT OR REPLACE INTO squad_map VALUES (?, ?)", rows)
-    return len(rows)
+        for u in clean_uids:
+            conn.execute(
+                "INSERT INTO save_squad_roster (save_id, uid, club_id, player_name, category) VALUES (?, ?, ?, '', 'player') "
+                "ON CONFLICT(save_id, uid) DO UPDATE SET club_id=excluded.club_id",
+                (eff_sid, u, cid),
+            )
+        if eff_sid == active_sid:
+            conn.executemany("INSERT OR REPLACE INTO squad_map VALUES (?, ?)", [(u, cid) for u in clean_uids])
+    return len(clean_uids)
 
 
-def import_squad_club_mappings(raw_text: str, db_path: Path | None = None) -> int:
-    """Lightweight CSV / HTML / Clipboard importer mapping regen UIDs to Club IDs."""
+def import_squad_club_mappings(
+    raw_text: str,
+    db_path: Path | None = None,
+    save_id: str | None = None,
+) -> int:
+    """Hardened CSV / HTML / FM Ctrl+P table importer mapping UIDs to Club IDs without Age/Shirt false positives."""
     _ensure_sync_tables(db_path)
-    by_name = {v["name"].lower(): cid for cid, v in load_seed_kits().items()}
-    mapped: list[tuple[str, str]] = []
+    active_sid = get_active_save_id(db_path)
+    eff_sid = normalize_save_id(save_id) if save_id else active_sid
+
+    merged_clubs = load_merged_clubs(db_path)
+    known_ids: set[str] = set(merged_clubs.keys())
+    by_name: dict[str, str] = {}
+    for cid, spec in merged_clubs.items():
+        nk = _norm_club_key(spec.get("name", ""))
+        if nk:
+            by_name[nk] = cid
+    with init_state_db(db_path) as conn:
+        for cid_raw, cname_raw in conn.execute(
+            "SELECT DISTINCT club_id, club_name FROM shirt_templates WHERE club_id != ''"
+        ).fetchall():
+            cid_s = str(cid_raw).strip()
+            nk = _norm_club_key(str(cname_raw))
+            if cid_s:
+                known_ids.add(cid_s)
+                if nk:
+                    by_name.setdefault(nk, cid_s)
+
+    club_col_idx: int | None = None
+    name_col_idx: int | None = None
+    roster_rows: list[tuple[str, str, str]] = []
+
     for raw_line in raw_text.splitlines():
         tokens = [t.strip() for t in re.split(r"[,;\t|]+", _HTML_TAG_RE.sub(",", raw_line).strip()) if t.strip()]
-        uid = next((t for t in tokens if _UID_TOKEN_RE.fullmatch(t)), None)
-        if not uid:
+        if not tokens:
             continue
-        for tok in tokens:
-            if tok != uid and (tok.isdigit() and len(tok) <= 9 or tok.lower() in by_name):
-                mapped.append((validate_fm_uid(uid), tok if tok.isdigit() else by_name[tok.lower()]))
-                break
-    if mapped:
+        uid_tok = next((t for t in tokens if _UID_TOKEN_RE.fullmatch(t)), None)
+        if not uid_tok:
+            norm_hdrs = [_norm_club_key(t) for t in tokens]
+            if any(h in ("uid", "id", "id unico", "unique id") for h in norm_hdrs):
+                club_col_idx = next(
+                    (i for i, h in enumerate(norm_hdrs) if h in ("club", "equipo", "team", "club actual", "division")),
+                    None,
+                )
+                name_col_idx = next(
+                    (i for i, h in enumerate(norm_hdrs) if h in ("nombre", "name", "jugador", "player", "nombre completo")),
+                    None,
+                )
+            continue
+
+        clean_uid = validate_fm_uid(uid_tok)
+        matched_cid: str | None = None
+
+        if club_col_idx is not None and 0 <= club_col_idx < len(tokens) and tokens[club_col_idx] != uid_tok:
+            ctok = tokens[club_col_idx]
+            cnk = _norm_club_key(ctok)
+            raw_num = ctok[1:] if ctok.startswith("#") else ctok
+            if cnk in by_name:
+                matched_cid = by_name[cnk]
+            elif raw_num.isdigit() and 1 <= len(raw_num) <= 12 and (ctok.startswith("#") or len(raw_num) >= 3 or raw_num in known_ids):
+                matched_cid = raw_num
+
+        if matched_cid is None:
+            for tok in tokens:
+                if tok == uid_tok:
+                    continue
+                nk = _norm_club_key(tok)
+                if nk in by_name:
+                    matched_cid = by_name[nk]
+                    break
+                if tok.startswith("#") and tok[1:].isdigit() and 1 <= len(tok[1:]) <= 12:
+                    matched_cid = tok[1:]
+                    break
+
+        if matched_cid is None:
+            if len(tokens) == 2:
+                other = tokens[1] if tokens[0] == uid_tok else tokens[0]
+                if other.isdigit() and 1 <= len(other) <= 12:
+                    matched_cid = other
+            else:
+                for tok in tokens:
+                    if tok != uid_tok and tok.isdigit() and tok in known_ids and int(tok) >= 100:
+                        matched_cid = tok
+                        break
+
+        if matched_cid is None:
+            continue
+
+        player_name = ""
+        if name_col_idx is not None and 0 <= name_col_idx < len(tokens):
+            cand_name = tokens[name_col_idx]
+            if cand_name != uid_tok and _norm_club_key(cand_name) not in by_name and not cand_name.isdigit():
+                player_name = cand_name[:80]
+        elif len(tokens) >= 3:
+            for tok in tokens:
+                if (
+                    tok != uid_tok
+                    and tok != matched_cid
+                    and _norm_club_key(tok) not in by_name
+                    and not tok.lstrip("#").isdigit()
+                    and any(ch.isalpha() for ch in tok)
+                ):
+                    player_name = tok[:80]
+                    break
+
+        roster_rows.append((clean_uid, matched_cid, player_name))
+
+    if roster_rows:
         with init_state_db(db_path) as conn:
-            conn.executemany("INSERT OR REPLACE INTO squad_map VALUES (?, ?)", mapped)
-    return len(mapped)
+            for u, cid, pname in roster_rows:
+                conn.execute(
+                    "INSERT INTO save_squad_roster (save_id, uid, club_id, player_name, category) VALUES (?, ?, ?, ?, 'player') "
+                    "ON CONFLICT(save_id, uid) DO UPDATE SET club_id=excluded.club_id, "
+                    "player_name=CASE WHEN excluded.player_name != '' THEN excluded.player_name ELSE save_squad_roster.player_name END",
+                    (eff_sid, u, cid, pname),
+                )
+            if eff_sid == active_sid:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO squad_map VALUES (?, ?)",
+                    [(u, cid) for u, cid, _ in roster_rows],
+                )
+    return len(roster_rows)
 
 
 def _process_single_regen(
