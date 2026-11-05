@@ -1820,12 +1820,20 @@ export default function StudioView({
     return '';
   };
 
-  const uidInvalid = uid.trim().length > 0 && !UID_RE.test(uid.trim());
+  const trimmedUid = uid.trim();
+  const hasValidFmUid = UID_RE.test(trimmedUid);
+  const hasUnsafeCreationChars =
+    trimmedUid.length > 0 && (/[<>:"/\\|?*\x00-\x1f]/.test(trimmedUid) || trimmedUid.includes('..'));
+  const uidInvalid = exportTarget === 'facepack' ? trimmedUid.length > 0 && !hasValidFmUid : hasUnsafeCreationChars;
 
   const handleExport = async () => {
     const cleanUid = uid.trim();
-    if (!UID_RE.test(cleanUid)) {
-      setErrorMsg('Introduce el ID asignado al futbolista (dígitos o r-<dígitos>, máx. 12 cifras).');
+    if (exportTarget === 'facepack' && !UID_RE.test(cleanUid)) {
+      setErrorMsg('Introduce el ID asignado al futbolista para el Pack de Faces FM (dígitos o r-<dígitos>, máx. 12 cifras).');
+      return;
+    }
+    if (exportTarget === 'creations' && hasUnsafeCreationChars) {
+      setErrorMsg('El nombre para Nuestras creaciones no puede contener barras ni caracteres reservados.');
       return;
     }
     let activeFpDir = effectiveFacepackDir;
@@ -1840,16 +1848,20 @@ export default function StudioView({
     setErrorMsg('');
     try {
       const effectiveFmt = exportTarget === 'facepack' ? 'png' : fmt;
+      const effectiveUpdateXml =
+        exportTarget === 'facepack' ? updateXml : updateXml && effectiveFmt === 'png' && UID_RE.test(cleanUid);
+      const fallbackLabel = isDirectMode ? snap.directPhotoLabel : snap.faceLabel;
       const method = !isDirectMode && snap.headAssetId === 'legacy-jump' ? 'export_studio_card' : 'export_modular_card';
       const res = await callBridge<{ savedPath: string }>(method, {
         uid: cleanUid,
+        fileLabel: fallbackLabel,
         fmt: effectiveFmt,
         exportTarget,
         outDir: exportTarget === 'facepack' ? activeFpDir : undefined,
-        updateConfigXml: updateXml,
+        updateConfigXml: effectiveUpdateXml,
         ...composePayload,
       });
-      setSavedMsg(`Guardado: ${res.savedPath ?? `${cleanUid}.${effectiveFmt}`}`);
+      setSavedMsg(`Guardado: ${res.savedPath ?? `${cleanUid || fallbackLabel || 'DF11'}.${effectiveFmt}`}`);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'Error al exportar la ficha DF11.');
     } finally {
@@ -3216,8 +3228,17 @@ export default function StudioView({
                   aria-label="ID Football Manager"
                   value={uid}
                   onChange={(e) => setUid(e.target.value)}
-                  placeholder="ID FM (ej: 29184012 o r-2002049102)"
-                  className="min-w-0 flex-1 px-2.5 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 tabular-nums font-mono"
+                  title={
+                    exportTarget === 'facepack'
+                      ? 'En 2. Pack de Faces FM es obligatorio indicar el #ID oficial del futbolista'
+                      : 'En 1. Nuestras creaciones no necesitas #ID oficial: déjalo vacío para nombre automático o escribe cualquier nombre'
+                  }
+                  placeholder={
+                    exportTarget === 'facepack'
+                      ? 'ID FM obligatorio (ej: 29184012 o r-2002049102)'
+                      : 'Nombre opcional (vacío = automático, sin #ID FM)'
+                  }
+                  className="min-w-0 flex-1 px-2.5 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 tabular-nums"
                 />
                 <button
                   type="button"
@@ -3242,11 +3263,18 @@ export default function StudioView({
               </div>
 
               <div className="flex items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-400">
-                <label className="inline-flex items-center gap-1.5 shrink-0">
+                <label
+                  title={
+                    exportTarget === 'creations' && !hasValidFmUid
+                      ? 'En 1. Nuestras creaciones no hace falta #ID ni config.xml (se activa si introduces un #ID numérico de FM)'
+                      : 'Actualiza config.xml de forma segura con el #ID del futbolista'
+                  }
+                  className="inline-flex items-center gap-1.5 shrink-0 has-[:disabled]:opacity-50"
+                >
                   <input
                     type="checkbox"
-                    checked={updateXml}
-                    disabled={exportTarget !== 'facepack' && fmt !== 'png'}
+                    checked={exportTarget === 'facepack' ? updateXml : updateXml && fmt === 'png' && hasValidFmUid}
+                    disabled={exportTarget !== 'facepack' && (fmt !== 'png' || !hasValidFmUid)}
                     onChange={(e) => setUpdateXml(e.target.checked)}
                     className="accent-emerald-600"
                   />
@@ -3284,7 +3312,13 @@ export default function StudioView({
                 )}
               </div>
 
-              {uidInvalid && <p className="text-[11px] text-amber-600 dark:text-amber-400">Usa dígitos o r-&lt;dígitos&gt; (máx. 12 cifras).</p>}
+              {uidInvalid && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                  {exportTarget === 'facepack'
+                    ? 'Usa dígitos o r-<dígitos> (máx. 12 cifras).'
+                    : 'Nombre no válido: evita barras o rutas (puedes dejarlo vacío, escribir un nombre libre o un #ID).'}
+                </p>
+              )}
               {errorMsg && <p className="text-[11px] text-rose-600 dark:text-rose-400">{errorMsg}</p>}
               {savedMsg && (
                 <p className="text-[11px] text-emerald-700 dark:text-emerald-400 inline-flex items-center gap-1 truncate">

@@ -61,7 +61,7 @@ const SECTIONS: FAQSection[] = [
         tags: ['facepack', 'pack', 'faces', 'ficha', 'renombrar', 'creaciones', 'png', 'jpg', 'config.xml'],
         bullets: [
           'Editar ficha ya montada de un Facepack: En el Paso 1 usa «Cambiar camiseta a ficha FM» (conserva la cabeza del futbolista y le viste una prenda tuya) o «Cambiar cara (conservar su camiseta)» (aísla la equipación exacta que trae esa tarjeta para ponerle otra cara, pudiendo conmutar entre ambos modos o guardarla en plantillas).',
-          'Doble destino en el Paso 4: Elige «1. Nuestras creaciones» para guardar en tu carpeta personal o «2. Pack de Faces FM» para indicar la carpeta gráfica de Football Manager y guardar el PNG con el número oficial asignado al futbolista actualizando config.xml sin pérdidas.',
+          'Doble destino en el Paso 4: Elige «1. Nuestras creaciones» para guardar en tu carpeta personal sin necesidad de indicar el #ID oficial del futbolista (puedes dejar el cuadro vacío para nombre automático o escribir un nombre libre), o «2. Pack de Faces FM» para indicar la carpeta oficial de Football Manager y guardar el PNG con su #ID obligatorio actualizando config.xml sin pérdidas.',
         ],
       },
     ],

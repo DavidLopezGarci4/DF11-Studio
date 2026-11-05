@@ -228,6 +228,74 @@ def test_direct_photo_mode_supports_4_cardinal_pan_zoom_and_export_with_zero_ai(
             }
         )
 
+    # Hot screen capture to Direct Photo exported to '1. Nuestras creaciones' does NOT require an official FM UID!
+    cap_loaded = bridge.load_direct_photo_source(data_url, "Captura_881122.png", {})
+    cap_id = cap_loaded["directPhotoId"]
+    assert cap_loaded["detectedUid"] == ""
+    creations_clean_dir = tmp_path / "mis_creaciones_sin_id"
+    bridge._export_dir = creations_clean_dir
+    bridge._approved_dirs.add(creations_clean_dir.resolve())
+
+    exp_auto_1 = bridge.export_modular_card(
+        {
+            "uid": "",
+            "exportTarget": "creations",
+            "step1Mode": "direct_photo",
+            "directPhotoId": cap_id,
+            "fmt": "png",
+            "updateConfigXml": True,
+        }
+    )
+    exp_auto_2 = bridge.export_modular_card(
+        {
+            "uid": "",
+            "exportTarget": "creations",
+            "step1Mode": "direct_photo",
+            "directPhotoId": cap_id,
+            "fmt": "png",
+            "updateConfigXml": True,
+        }
+    )
+    exp_named = bridge.export_modular_card(
+        {
+            "uid": "Isi Palazon",
+            "exportTarget": "creations",
+            "step1Mode": "direct_photo",
+            "directPhotoId": cap_id,
+            "fmt": "png",
+            "updateConfigXml": True,
+        }
+    )
+    assert Path(exp_auto_1["savedPath"]).name == "Captura_881122.png"
+    assert Path(exp_auto_2["savedPath"]).name == "Captura_881122_2.png"
+    assert Path(exp_named["savedPath"]).name == "Isi Palazon.png"
+    assert not (creations_clean_dir / "config.xml").exists(), "Creations without official FM UID must not write config.xml"
+
+    with pytest.raises(ValueError, match="rutas"):
+        bridge.export_modular_card(
+            {
+                "uid": "../evil",
+                "exportTarget": "creations",
+                "step1Mode": "direct_photo",
+                "directPhotoId": cap_id,
+            }
+        )
+
+    # Meanwhile, '2. Pack de Faces FM' MUST still require a valid official FM UID!
+    fp_dir = tmp_path / "official_facepack"
+    fp_dir.mkdir(parents=True)
+    bridge._facepack_dir = fp_dir.resolve()
+    bridge._approved_dirs.add(fp_dir.resolve())
+    with pytest.raises(ValueError, match="ID de Football Manager"):
+        bridge.export_modular_card(
+            {
+                "uid": "",
+                "exportTarget": "facepack",
+                "step1Mode": "direct_photo",
+                "directPhotoId": cap_id,
+            }
+        )
+
 
 def test_studio_bridge_direct_photo_works_with_onnxruntime_blocked_in_subprocess(tmp_path: Path) -> None:
     root_dir = Path(__file__).resolve().parents[1]

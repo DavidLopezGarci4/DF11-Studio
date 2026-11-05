@@ -47,11 +47,22 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
     expect(screen.queryByRole('button', { name: /Traje Staff/i })).not.toBeInTheDocument();
   });
 
-  it('validates Football Manager numeric and r- regen UIDs before export', async () => {
+  it('allows optional/free names in 1. Nuestras creaciones while enforcing FM numeric and r- regen UIDs in 2. Pack de Faces FM', async () => {
     render(<StudioView clubs={CLUBS} exportDir="D:\\DF11Studio\\Exports" onExportDirChange={() => {}} initialJump={null} />);
     await waitFor(() => expect(screen.getByRole('tab', { name: /Extraer Camiseta \(0\)/i })).toBeInTheDocument());
     const input = screen.getByLabelText(/ID Football Manager/i);
+
+    // 1. Nuestras creaciones: empty or free footballer name is valid; path traversal is rejected
+    expect(screen.queryByText(/Nombre no válido/i)).not.toBeInTheDocument();
+    fireEvent.change(input, { target: { value: 'Isi Palazón' } });
+    expect(screen.queryByText(/Nombre no válido/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Usa dígitos o r-/i)).not.toBeInTheDocument();
     fireEvent.change(input, { target: { value: '../bad' } });
+    expect(screen.getByText(/Nombre no válido/i)).toBeInTheDocument();
+
+    // 2. Pack de Faces FM: requires strict numeric or r-<digits> official FM UID
+    fireEvent.click(screen.getByRole('button', { name: /Pack de Faces FM/i }));
+    fireEvent.change(input, { target: { value: 'Isi Palazón' } });
     expect(screen.getByText(/Usa dígitos o r-/i)).toBeInTheDocument();
     fireEvent.change(input, { target: { value: 'r-2002049102' } });
     expect(screen.queryByText(/Usa dígitos o r-/i)).not.toBeInTheDocument();
@@ -1435,6 +1446,11 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
           addonPendingPayload = null;
           return out;
         },
+        export_modular_card: async (payload: unknown) => {
+          calls.push({ fn: 'export_modular_card', args: [payload] });
+          const p = payload as { uid?: string; fileLabel?: string; fmt?: string };
+          return { savedPath: `D:\\DF11Studio\\Exports\\${p.uid || p.fileLabel || 'DF11'}.${p.fmt || 'png'}` };
+        },
         render_modular_preview: async () => ({ previewDataUrl: ONE_PX_PNG }),
       },
     };
@@ -1520,6 +1536,26 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       };
       window.dispatchEvent(new CustomEvent('df11:addon-capture'));
       expect(await screen.findByText(/Activa: Captura_Flotante_99/i)).toBeInTheDocument();
+
+      // 8. Exporting captured Direct Photo to '1. Nuestras creaciones' does NOT require an official FM UID!
+      expect(screen.getByLabelText(/ID Football Manager/i)).toHaveValue('');
+      fireEvent.click(screen.getByRole('button', { name: /Exportar DF11/i }));
+      await waitFor(() => expect(calls.filter((c) => c.fn === 'export_modular_card')).toHaveLength(1));
+      expect(calls.find((c) => c.fn === 'export_modular_card')?.args[0]).toMatchObject({
+        uid: '',
+        fileLabel: 'Captura_Flotante_99',
+        exportTarget: 'creations',
+        step1Mode: 'direct_photo',
+        directPhotoId: 'direct-addon-99',
+        updateConfigXml: false,
+      });
+      expect(await screen.findByText(/Guardado: D:\\DF11Studio\\Exports\\Captura_Flotante_99\.png/i)).toBeInTheDocument();
+
+      // Whereas '2. Pack de Faces FM' still requires the official FM UID when empty!
+      fireEvent.click(screen.getByRole('button', { name: /Pack de Faces FM/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Exportar DF11/i }));
+      expect(await screen.findByText(/Introduce el ID asignado al futbolista para el Pack de Faces FM/i)).toBeInTheDocument();
+      expect(calls.filter((c) => c.fn === 'export_modular_card')).toHaveLength(1);
     } finally {
       delete window.pywebview;
     }

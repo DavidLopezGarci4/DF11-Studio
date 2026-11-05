@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import os
+import re
 import tempfile
 import threading
 import time
@@ -38,6 +39,23 @@ def _to_data_url(img: Any) -> str:
 
 _MAX_IMAGE_BYTES = 20 * 1024 * 1024
 _MAX_B64_CHARS = (_MAX_IMAGE_BYTES * 4) // 3 + 4096
+_WIN_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+)
+_INVALID_WIN_FILENAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+_GENERIC_LABELS = frozenset({"", "foto directa", "foto_directa", "retrato", "cara extraída", "cara_extraida"})
+
+
+def _sanitize_creation_stem(raw_text: str) -> str:
+    cleaned = str(raw_text or "").strip()
+    if cleaned.lower().endswith((".png", ".jpg", ".jpeg")):
+        cleaned = Path(cleaned).stem.strip()
+    cleaned = _INVALID_WIN_FILENAME_RE.sub("_", cleaned).strip(" .")
+    if len(cleaned) > 80:
+        cleaned = cleaned[:80].rstrip(" .")
+    if not cleaned or cleaned in {".", ".."} or cleaned.upper() in _WIN_RESERVED_NAMES:
+        return ""
+    return cleaned
 
 
 def _decode_b64(s: str) -> bytes:
@@ -486,14 +504,48 @@ class StudioBridge:
     def render_studio_preview(self, params: dict[str, Any]) -> dict[str, str]:
         return {"previewDataUrl": _to_data_url(self._compose(params))}
 
+    def _resolve_export_stem_and_uid(
+        self,
+        raw_uid: str,
+        export_target: str,
+        tdir: Path,
+        fmt: str,
+        fallback_label: str = "",
+    ) -> tuple[str, str | None]:
+        from backend.core.fm_config import VALID_FM_UID_RE, validate_fm_uid
+
+        if export_target == "facepack":
+            valid_uid = validate_fm_uid(raw_uid)
+            return valid_uid, valid_uid
+
+        cleaned = str(raw_uid or "").strip()
+        if VALID_FM_UID_RE.fullmatch(cleaned):
+            return cleaned, cleaned
+        if cleaned:
+            if "/" in cleaned or "\\" in cleaned or ".." in cleaned:
+                raise ValueError("El nombre de archivo no puede contener rutas ni barras.")
+            stem = _sanitize_creation_stem(cleaned)
+            if not stem:
+                raise ValueError("Nombre de archivo no válido para Nuestras creaciones.")
+            return stem, None
+
+        lbl = str(fallback_label or "").strip()
+        cand_base = _sanitize_creation_stem(lbl) if lbl.lower() not in _GENERIC_LABELS else ""
+        base = cand_base or f"DF11_{time.strftime('%Y%m%d_%H%M%S')}"
+        stem = base
+        idx = 2
+        while (tdir / f"{stem}.{fmt}").exists():
+            stem = f"{base}_{idx}"
+            idx += 1
+        return stem, None
+
     def export_studio_card(self, params: dict[str, Any]) -> dict[str, str]:
         from backend.core.compositor import export_df11_bytes
-        from backend.core.fm_config import safe_ntfs_replace, upsert_fm_config_xml, validate_fm_uid
+        from backend.core.fm_config import safe_ntfs_replace, upsert_fm_config_xml
         from backend.services.kits import save_kit_override
 
         if self._raw_img is None:
             raise ValueError("Sube o selecciona un retrato antes de exportar la ficha DF11.")
-        uid = validate_fm_uid(str(params.get("uid", "")))
         export_target = str(params.get("exportTarget", "creations")).strip().lower()
         fmt = "jpg" if str(params.get("fmt", "png")).lower() in ("jpg", "jpeg") else "png"
         if export_target == "facepack":
@@ -505,20 +557,27 @@ class StudioBridge:
             tdir = self._require_approved(cand_dir)
         else:
             tdir = self._require_approved(Path(params["outDir"]) if params.get("outDir") else self._export_dir)
+        file_stem, fm_uid = self._resolve_export_stem_and_uid(
+            str(params.get("uid", "")),
+            export_target,
+            tdir,
+            fmt,
+            str(params.get("fileLabel", "")),
+        )
         if params.get("customKitDirty") and params.get("kitMode", "original") != "original":
             kit = self._resolve_studio_kit(str(params.get("clubId", "1736")), params)
             save_kit_override(kit.club_id, kit.primary, kit.secondary, pattern=kit.pattern, db_path=self._db_path)
         tdir.mkdir(parents=True, exist_ok=True)
-        fd, tname = tempfile.mkstemp(prefix=f".{uid}_", suffix=".tmp", dir=str(tdir))
-        tp, dst = Path(tname), tdir / f"{uid}.{fmt}"
+        fd, tname = tempfile.mkstemp(prefix=f".{file_stem[:24]}_", suffix=".tmp", dir=str(tdir))
+        tp, dst = Path(tname), tdir / f"{file_stem}.{fmt}"
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(export_df11_bytes(self._compose(params), fmt=fmt))  # type: ignore[arg-type]
             safe_ntfs_replace(tp, dst)
         finally:
             tp.unlink(missing_ok=True)
-        if params.get("updateConfigXml", True) and fmt == "png":
-            upsert_fm_config_xml(tdir / "config.xml", [uid])
+        if fm_uid is not None and params.get("updateConfigXml", True) and fmt == "png":
+            upsert_fm_config_xml(tdir / "config.xml", [fm_uid])
         return {"savedPath": str(dst)}
 
     def scan_vault_summary(self) -> dict[str, Any]:
@@ -1070,15 +1129,19 @@ class StudioBridge:
 
     def export_modular_card(self, params: dict[str, Any]) -> dict[str, str]:
         from backend.core.compositor import export_df11_bytes
-        from backend.core.fm_config import safe_ntfs_replace, upsert_fm_config_xml, validate_fm_uid
+        from backend.core.fm_config import safe_ntfs_replace, upsert_fm_config_xml
         from backend.services.kits import save_kit_override
 
         step1_mode = str(params.get("step1Mode", "modular")).strip().lower()
         wear_mode = str(params.get("wearMode", "template"))
+        fallback_label = str(params.get("fileLabel", "")).strip()
         if step1_mode == "direct_photo":
             direct_id = str(params.get("directPhotoId", "")).strip()
-            if not direct_id or not self._mod().has_direct_photo(direct_id):
+            direct_entry = self._mod().get_direct_photo(direct_id) if direct_id else None
+            if direct_entry is None:
                 raise ValueError("La foto directa activa ya no está en memoria; vuelve a cargarla antes de exportar.")
+            if not fallback_label:
+                fallback_label = str(direct_entry[2] or "").strip()
         else:
             head_id = str(params.get("headAssetId", "")).strip()
             tpl_id = str(params.get("templateId", "")).strip()
@@ -1090,7 +1153,6 @@ class StudioBridge:
             else:
                 if wear_mode != "template" or not tpl_id:
                     raise ValueError("Añade una cara o selecciona una plantilla válida antes de exportar la ficha DF11.")
-        uid = validate_fm_uid(str(params.get("uid", "")))
         export_target = str(params.get("exportTarget", "creations")).strip().lower()
         fmt = "jpg" if str(params.get("fmt", "png")).lower() in ("jpg", "jpeg") else "png"
         if export_target == "facepack":
@@ -1102,22 +1164,29 @@ class StudioBridge:
             tdir = self._require_approved(cand_dir)
         else:
             tdir = self._require_approved(Path(params["outDir"]) if params.get("outDir") else self._export_dir)
+        file_stem, fm_uid = self._resolve_export_stem_and_uid(
+            str(params.get("uid", "")),
+            export_target,
+            tdir,
+            fmt,
+            fallback_label,
+        )
         if step1_mode != "direct_photo" and params.get("customKitDirty") and wear_mode in ("club", "staff_polo", "staff_suit"):
             kit = self._resolve_studio_kit(str(params.get("clubId", "1736")), params)
             save_kit_override(kit.club_id, kit.primary, kit.secondary, pattern=kit.pattern, db_path=self._db_path)
 
         card = self._mod().compose_step_card(params, custom_bg=self._custom_bg_img)
         tdir.mkdir(parents=True, exist_ok=True)
-        fd, tname = tempfile.mkstemp(prefix=f".{uid}_", suffix=".tmp", dir=str(tdir))
-        tp, dst = Path(tname), tdir / f"{uid}.{fmt}"
+        fd, tname = tempfile.mkstemp(prefix=f".{file_stem[:24]}_", suffix=".tmp", dir=str(tdir))
+        tp, dst = Path(tname), tdir / f"{file_stem}.{fmt}"
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(export_df11_bytes(card, fmt=fmt))  # type: ignore[arg-type]
             safe_ntfs_replace(tp, dst)
         finally:
             tp.unlink(missing_ok=True)
-        if params.get("updateConfigXml", True) and fmt == "png":
-            upsert_fm_config_xml(tdir / "config.xml", [uid])
+        if fm_uid is not None and params.get("updateConfigXml", True) and fmt == "png":
+            upsert_fm_config_xml(tdir / "config.xml", [fm_uid])
         return {"savedPath": str(dst)}
 
     def probe_architecture_health(self) -> dict[str, Any]:

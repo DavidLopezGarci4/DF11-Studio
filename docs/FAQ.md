@@ -37,7 +37,7 @@
 
 ### ¿Cómo edito una ficha ya montada de mi Pack de Faces de FM o guardo con su número original?
 * **Edición directa de fichas de Facepacks:** En el Paso 1 pulsa **`Cambiar camiseta a ficha FM`** para extraer limpiamente la cabeza y cuello del futbolista sobre cualquiera de tus plantillas, o **`Cambiar cara (conservar su camiseta)`** para aislar la equipación exacta de esa tarjeta en memoria (pudiendo alternar entre `Usar su cara` / `Usar su camiseta` o guardarla en `tshirt_templates`). Si el archivo se llama `<ID>.png`, el número del futbolista se rellena solo.
-* **Doble destino en el Paso 4:** Elige **`1. Nuestras creaciones`** para guardar en tu carpeta personal (`PNG Oficial` o `JPG`) o **`2. Pack de Faces FM`** para seleccionar la carpeta gráfica de caras de Football Manager y renombrar/guardar el archivo como `<ID>.png` actualizando `config.xml` de forma segura.
+* **Doble destino en el Paso 4:** Elige **`1. Nuestras creaciones`** para guardar en tu carpeta personal (`PNG Oficial` o `JPG`) **sin necesidad de indicar ningún `#ID` oficial de Football Manager** (puedes dejar el cuadro vacío para guardado automático o escribir cualquier nombre libre), o **`2. Pack de Faces FM`** para seleccionar la carpeta gráfica oficial de caras de Football Manager y guardar el archivo con su `<ID>.png` obligatorio actualizando `config.xml` de forma segura.
 
 ---
 
