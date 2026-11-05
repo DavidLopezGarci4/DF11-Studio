@@ -12,11 +12,12 @@ const SECTIONS: FAQSection[] = [
     items: [
       {
         id: 'screen-capture-hot',
-        question: '¿Cómo funciona «Capturar» para recortar la pantalla del PC en caliente sin borrar el #ID copiado?',
+        question: '¿Cómo funciona «Capturar» y el «Mini-Capturador flotante» para recortar la pantalla del PC sin tapar tu imagen ni borrar el #ID copiado?',
         badge: 'Novedad v1.5',
-        tags: ['capturar', 'recorte', 'pantalla', 'portapapeles', 'ctrl+shift+x', 'ctrl+v', 'drm', 'negro', 'png'],
+        tags: ['capturar', 'mini-capturador', 'flotante', 'addon', 'recorte', 'pantalla', 'portapapeles', 'ctrl+shift+x', 'ctrl+v', 'drm', 'negro', 'png'],
         bullets: [
-          'Cuatro destinos independientes sin tocar tu portapapeles: Pulsa «Capturar» en la barra superior (o abre su menú ▾) para enviar cualquier zona de tu pantalla directamente a «Foto Directa + Marco DF11», «Recortar Cara», «Extraer Camiseta» o «Guardar PNG como…», conservando intacto el #ID de Football Manager que tengas copiado.',
+          'Mini-Capturador flotante (pantalla despejada): Pulsa el icono de ventana flotante situado a la derecha de «Capturar» (o selecciona «Mini-Capturador flotante» en el menú ▾) para ocultar la app grande y dejar solo una pequeña barra flotante sobre tu escritorio con «Capturar», «Foto», «Cara», «Camiseta», «PNG» y el botón 📌 para encadenar varias capturas seguidas.',
+          'Cuatro destinos independientes y ocultación limpia sin tocar el portapapeles: Tanto desde la ventana completa como desde la barra flotante, la app desaparece por completo antes de tomar la captura para no salir jamás en tus recortes, conservando intacto el #ID de Football Manager que tengas copiado con Ctrl+C.',
           'Proporción DF11 con Shift, atajo Ctrl+Shift+X y Ctrl+V seguro: Mantén Shift mientras arrastras para bloquear la proporción oficial 260 × 310 px, activa opcionalmente el atajo global Ctrl+Shift+X en el menú ▾ y usa Ctrl+V en cualquiera de las tres herramientas sin interferir cuando escribes en cuadros de texto.',
           'Vídeos en negro por protección del navegador: Si al recortar un vídeo pausado obtienes un recuadro negro, desactiva «Usar aceleración por hardware» en los ajustes de tu navegador.',
         ],

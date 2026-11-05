@@ -15,8 +15,9 @@
 
 ## 1. Captura en Caliente, Montaje Paso a Paso, Foto Directa y Packs de Faces FM
 
-### ¿Cómo funciona «Capturar» para recortar la pantalla del PC en caliente sin borrar el #ID copiado?
-* **Cuatro destinos independientes sin tocar tu portapapeles:** Usa el botón superior **`Capturar`** (o su menú desplegable `▾`) para enviar el recorte directamente a **`Foto Directa + Marco DF11`**, **`Recortar Cara`**, **`Extraer Camiseta`** o **`Guardar PNG como…`**, conservando intacto cualquier `#ID` de Football Manager que ya tengas copiado con `Ctrl+C`.
+### ¿Cómo funciona «Capturar» y el «Mini-Capturador flotante» para recortar la pantalla del PC sin tapar tu imagen ni borrar el #ID copiado?
+* **Mini-Capturador flotante (pantalla despejada):** Pulsa el icono de ventana flotante situado a la derecha de **`Capturar`** (o elige **`Mini-Capturador flotante`** en el menú `▾`) para ocultar la aplicación principal y dejar únicamente una pequeña barra flotante con **`Capturar`**, **`Foto`**, **`Cara`**, **`Camiseta`**, **`PNG`** y el botón **`📌`** (fijar barra para encadenar varias capturas seguidas sin desplegar el Estudio).
+* **Cuatro destinos independientes y ocultación limpia sin tocar el portapapeles:** Tanto desde la ventana completa como desde la barra flotante, la app se oculta por completo antes de congelar el escritorio para no aparecer jamás en tus recortes, enviando la imagen directamente a **`Foto Directa + Marco DF11`**, **`Recortar Cara`**, **`Extraer Camiseta`** o **`Guardar PNG como…`** mientras conserva intacto cualquier `#ID` de Football Manager copiado con `Ctrl+C`.
 * **Proporción DF11 con `Shift`, atajo `Ctrl+Shift+X` y `Ctrl+V` seguro:** Mantén pulsado **`Shift`** al arrastrar para fijar la proporción oficial `260 × 310 px`, activa si lo deseas el atajo global **`Ctrl+Shift+X`** desde el menú `▾` y pega imágenes con **`Ctrl+V`** en cualquiera de las tres herramientas sin interferir cuando estés escribiendo en cuadros de texto o números.
 * **Vídeos en negro por protección del navegador:** Si al capturar un vídeo en pausa aparece un recuadro negro, desactiva *«Usar aceleración por hardware cuando esté disponible»* en los ajustes de tu navegador.
 

@@ -1338,6 +1338,7 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
     let nextCancelled = false;
     let nextDrm = false;
     let nextLowRes = false;
+    let addonPendingPayload: Record<string, unknown> | null = null;
 
     window.pywebview = {
       api: {
@@ -1423,6 +1424,17 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
             fileName: String(fileName || 'Pasted.png'),
           };
         },
+        open_capture_addon: async (defaultTarget: unknown, theme: unknown) => {
+          calls.push({ fn: 'open_capture_addon', args: [defaultTarget, theme] });
+          return { addonOpen: true, target: defaultTarget };
+        },
+        consume_addon_capture: async () => {
+          calls.push({ fn: 'consume_addon_capture', args: [] });
+          if (!addonPendingPayload) return null;
+          const out = addonPendingPayload;
+          addonPendingPayload = null;
+          return out;
+        },
         render_modular_preview: async () => ({ previewDataUrl: ONE_PX_PNG }),
       },
     };
@@ -1483,6 +1495,31 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       fireEvent.click(screen.getByRole('button', { name: /Opciones de captura de pantalla/i }));
       fireEvent.click(screen.getByRole('menuitem', { name: /Guardar PNG como/i }));
       expect(await screen.findByText(/Recorte guardado: D:\\Capturas\\Recorte_DF11\.png/i)).toBeInTheDocument();
+
+      // 7. Mini-Capturador flotante detaches with active tool target and routes incoming addon captures seamlessly
+      fireEvent.click(screen.getByRole('button', { name: /Abrir Mini-Capturador flotante/i }));
+      await waitFor(() => expect(calls.filter((c) => c.fn === 'open_capture_addon')).toHaveLength(1));
+      expect(calls.find((c) => c.fn === 'open_capture_addon')?.args[0]).toBe('raw_face');
+
+      addonPendingPayload = {
+        cancelled: false,
+        target: 'direct_photo',
+        captureWidth: 260,
+        captureHeight: 310,
+        drmWarning: false,
+        lowResWarning: false,
+        directPhotoId: 'direct-addon-99',
+        fileName: 'Captura_Flotante_99.png',
+        label: 'Captura_Flotante_99',
+        width: 260,
+        height: 310,
+        isPreCutout: false,
+        clampPan: true,
+        autoFit: { scale: 1.0, offsetX: 0, offsetY: 0 },
+        previewDataUrl: ONE_PX_PNG,
+      };
+      window.dispatchEvent(new CustomEvent('df11:addon-capture'));
+      expect(await screen.findByText(/Activa: Captura_Flotante_99/i)).toBeInTheDocument();
     } finally {
       delete window.pywebview;
     }

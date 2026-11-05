@@ -72,6 +72,7 @@ interface Props {
   hideInternalToolbar?: boolean;
   initialHotkeyEnabled?: boolean;
   externalCaptureReq?: { seq: number; target?: CaptureTarget; explicit?: boolean } | null;
+  onCaptureTargetHintChange?: (target: CaptureTarget) => void;
 }
 
 const UID_RE = /^(?:r-)?[0-9]{1,12}$/;
@@ -379,6 +380,7 @@ export default function StudioView({
   hideInternalToolbar = false,
   initialHotkeyEnabled = false,
   externalCaptureReq = null,
+  onCaptureTargetHintChange,
 }: Props) {
   const [internalToolTab, setInternalToolTab] = useState<ToolTab>('composer');
   const toolTab = controlledToolTab ?? internalToolTab;
@@ -788,7 +790,7 @@ export default function StudioView({
   }, [cropStage, isDirectMode, snap.directPhotoId, snap.headAssetId, snap.templateId, composePayload, updatePreviewUrl]);
 
   const applyDirectPhotoResult = useCallback(
-    (res: DirectPhotoResponse) => {
+    (res: DirectPhotoResponse, matchesComposePayload = true) => {
       reqSeqRef.current += 1;
       setActiveStep(1);
       setCropStage(null);
@@ -828,7 +830,7 @@ export default function StudioView({
       };
       const projectedSnap = buildNextDirectSnap(snap);
       if (res.previewDataUrl) {
-        updatePreviewUrl(res.previewDataUrl, JSON.stringify(buildComposePayload(projectedSnap)));
+        updatePreviewUrl(res.previewDataUrl, matchesComposePayload ? JSON.stringify(buildComposePayload(projectedSnap)) : '');
       } else {
         updatePreviewUrl('');
       }
@@ -1547,19 +1549,80 @@ export default function StudioView({
     handleConfirmCropAndExtract,
   ]);
 
+  const defaultCaptureTarget: CaptureTarget =
+    toolTab === 'shirt_tool'
+      ? 'raw_shirt'
+      : toolTab === 'face_tool'
+      ? 'raw_face'
+      : isDirectMode
+      ? 'direct_photo'
+      : 'raw_face';
+
+  useEffect(() => {
+    onCaptureTargetHintChange?.(defaultCaptureTarget);
+  }, [defaultCaptureTarget, onCaptureTargetHintChange]);
+
+  const applyCapturedPayload = useCallback(
+    (res: ScreenCapturePayload, fromExplicitMenu: boolean, matchesComposePayload: boolean) => {
+      if (!res || res.cancelled) return;
+      const effTarget: CaptureTarget = res.target ?? defaultCaptureTarget;
+
+      const notices: string[] = [];
+      if (res.drmWarning) {
+        notices.push('Posible bloqueo DRM (pantalla en negro): desactiva la aceleración por hardware del navegador.');
+      }
+      if (res.lowResWarning) {
+        notices.push('Recorte pequeño (< 150 px): puedes subir Calidad óptica (WGIF) en el Paso 4.');
+      }
+      if (effTarget === 'save_png' && 'savedPath' in res && res.savedPath) {
+        notices.push(`Recorte guardado: ${res.savedPath}`);
+      }
+      setCaptureNotice(notices.join(' · '));
+
+      if (effTarget === 'save_png') {
+        return;
+      }
+      if (effTarget === 'direct_photo' && 'directPhotoId' in res && res.directPhotoId) {
+        setToolTab('composer');
+        applyDirectPhotoResult(res as DirectPhotoResponse, matchesComposePayload);
+        return;
+      }
+      if (effTarget === 'raw_shirt' && 'rawDataUrl' in res && res.rawDataUrl) {
+        const shirtRes = res as StagedShirtResponse;
+        shirtToolCacheRef.current = pushStagedShirtToHistory(shirtToolCacheRef.current, shirtRes, step2Category);
+        const nextSeq = ++captureStageSeqRef.current;
+        setIncomingShirtStage({ seq: nextSeq, data: shirtRes });
+        setExtractorInitCategory(step2Category);
+        setToolTab('shirt_tool');
+        return;
+      }
+      if (effTarget === 'raw_face' && 'rawDataUrl' in res && res.rawDataUrl) {
+        const faceRes = res as StagedFaceResponse;
+        if (fromExplicitMenu || toolTab === 'face_tool') {
+          faceToolCacheRef.current = {
+            staged: faceRes,
+            viewport: faceRes.suggestedViewport,
+            removeBg: faceToolCacheRef.current?.removeBg ?? true,
+            extracted: null,
+            viewMode: 'crop',
+            saveName: faceRes.fileName ? faceRes.fileName.replace(/\.[^.]+$/, '') : 'Cara_Extraida',
+          };
+          const nextSeq = ++captureStageSeqRef.current;
+          setIncomingFaceStage({ seq: nextSeq, data: faceRes });
+          setToolTab('face_tool');
+        } else {
+          openStagedCrop(faceRes);
+        }
+      }
+    },
+    [defaultCaptureTarget, toolTab, step2Category, setToolTab, applyDirectPhotoResult, openStagedCrop],
+  );
+
   const handleScreenCapture = useCallback(
     async (explicitTarget?: CaptureTarget, fromExplicitMenu = false) => {
       if (busy) return;
       setCaptureMenuOpen(false);
-      const effTarget: CaptureTarget =
-        explicitTarget ??
-        (toolTab === 'shirt_tool'
-          ? 'raw_shirt'
-          : toolTab === 'face_tool'
-          ? 'raw_face'
-          : isDirectMode
-          ? 'direct_photo'
-          : 'raw_face');
+      const effTarget: CaptureTarget = explicitTarget ?? defaultCaptureTarget;
 
       setErrorMsg('');
       setBusy(true);
@@ -1570,69 +1633,56 @@ export default function StudioView({
         if (!res || res.cancelled) {
           return;
         }
-
-        const notices: string[] = [];
-        if (res.drmWarning) {
-          notices.push('Posible bloqueo DRM (pantalla en negro): desactiva la aceleración por hardware del navegador.');
-        }
-        if (res.lowResWarning) {
-          notices.push('Recorte pequeño (< 150 px): puedes subir Calidad óptica (WGIF) en el Paso 4.');
-        }
-        if (effTarget === 'save_png' && 'savedPath' in res && res.savedPath) {
-          notices.push(`Recorte guardado: ${res.savedPath}`);
-        }
-        setCaptureNotice(notices.join(' · '));
-
-        if (effTarget === 'save_png') {
-          return;
-        }
-        if (effTarget === 'direct_photo' && 'directPhotoId' in res && res.directPhotoId) {
-          setToolTab('composer');
-          applyDirectPhotoResult(res as DirectPhotoResponse);
-          return;
-        }
-        if (effTarget === 'raw_shirt' && 'rawDataUrl' in res && res.rawDataUrl) {
-          const shirtRes = res as StagedShirtResponse;
-          shirtToolCacheRef.current = pushStagedShirtToHistory(shirtToolCacheRef.current, shirtRes, step2Category);
-          const nextSeq = ++captureStageSeqRef.current;
-          setIncomingShirtStage({ seq: nextSeq, data: shirtRes });
-          setExtractorInitCategory(step2Category);
-          setToolTab('shirt_tool');
-          return;
-        }
-        if (effTarget === 'raw_face' && 'rawDataUrl' in res && res.rawDataUrl) {
-          const faceRes = res as StagedFaceResponse;
-          if (fromExplicitMenu || toolTab === 'face_tool') {
-            faceToolCacheRef.current = {
-              staged: faceRes,
-              viewport: faceRes.suggestedViewport,
-              removeBg: faceToolCacheRef.current?.removeBg ?? true,
-              extracted: null,
-              viewMode: 'crop',
-              saveName: faceRes.fileName ? faceRes.fileName.replace(/\.[^.]+$/, '') : 'Cara_Extraida',
-            };
-            const nextSeq = ++captureStageSeqRef.current;
-            setIncomingFaceStage({ seq: nextSeq, data: faceRes });
-            setToolTab('face_tool');
-          } else {
-            openStagedCrop(faceRes);
-          }
-        }
+        applyCapturedPayload({ ...res, target: res.target ?? effTarget }, fromExplicitMenu, true);
       } catch (e) {
         setErrorMsg(e instanceof Error ? e.message : 'No se pudo completar el recorte de pantalla.');
       } finally {
         setBusy(false);
       }
     },
-    [busy, toolTab, isDirectMode, composePayload, step2Category, setToolTab, applyDirectPhotoResult, openStagedCrop],
+    [busy, defaultCaptureTarget, composePayload, applyCapturedPayload],
   );
+
+  const consumeAddonCapture = useCallback(async () => {
+    try {
+      const pending = await callBridge<ScreenCapturePayload | null>('consume_addon_capture');
+      if (pending && !pending.cancelled) {
+        applyCapturedPayload(pending, true, false);
+      }
+    } catch {
+      /* ignore outside pywebview */
+    }
+  }, [applyCapturedPayload]);
+
+  useEffect(() => {
+    void consumeAddonCapture();
+    const onAddonCapture = () => {
+      void consumeAddonCapture();
+    };
+    window.addEventListener('df11:addon-capture', onAddonCapture);
+    return () => window.removeEventListener('df11:addon-capture', onAddonCapture);
+  }, [consumeAddonCapture]);
+
+  const handleOpenCaptureAddon = useCallback(async () => {
+    setCaptureMenuOpen(false);
+    setErrorMsg('');
+    try {
+      const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+      await callBridge('open_capture_addon', defaultCaptureTarget, theme);
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'No se pudo abrir el Mini-Capturador flotante.');
+    }
+  }, [defaultCaptureTarget]);
 
   const handleToggleHotkey = useCallback(async () => {
     const next = !captureHotkey;
     try {
-      const res = await callBridge<{ enabled: boolean; error?: string }>('toggle_capture_hotkey', next);
+      const res = await callBridge<{ enabled?: boolean; hotkeyEnabled?: boolean; error?: string }>(
+        'toggle_capture_hotkey',
+        next,
+      );
       if (res) {
-        setCaptureHotkey(Boolean(res.enabled));
+        setCaptureHotkey(Boolean(res.hotkeyEnabled ?? res.enabled));
         if (res.error) setCaptureNotice(res.error);
       }
     } catch (e) {
@@ -1882,7 +1932,7 @@ export default function StudioView({
                 aria-label="Capturar pantalla"
                 disabled={busy}
                 onClick={() => void handleScreenCapture()}
-                title="Recorte nativo de pantalla en caliente (Shift bloquea proporción 260×310)"
+                title="Recorte nativo de pantalla en caliente (oculta la app automáticamente; Shift bloquea 260×310)"
                 className="px-3 py-1.5 text-xs font-medium rounded-l-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white inline-flex items-center gap-1.5 transition"
               >
                 <Scissors className="w-3.5 h-3.5" /> Capturar
@@ -1894,17 +1944,43 @@ export default function StudioView({
                 aria-expanded={captureMenuOpen}
                 disabled={busy}
                 onClick={() => setCaptureMenuOpen((o) => !o)}
-                className="px-2 py-1.5 text-xs font-medium rounded-r-lg border-l border-emerald-700/60 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white inline-flex items-center transition"
+                title="Elegir destino de captura o abrir menú"
+                className="px-2 py-1.5 text-xs font-medium border-l border-emerald-700/60 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white inline-flex items-center transition"
               >
                 <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                aria-label="Abrir Mini-Capturador flotante"
+                disabled={busy}
+                onClick={() => void handleOpenCaptureAddon()}
+                title="Mini-Capturador flotante: oculta la ventana principal y deja solo una barra mínima para ver y capturar toda tu pantalla"
+                className="px-2 py-1.5 text-xs font-medium rounded-r-lg border-l border-emerald-700/60 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white inline-flex items-center justify-center transition"
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" stroke="currentColor" strokeWidth="1.4" strokeOpacity="0.82" />
+                  <rect x="7.75" y="4.5" width="5" height="3.5" rx="0.9" fill="currentColor" />
+                </svg>
               </button>
 
               {captureMenuOpen && (
                 <div
                   role="menu"
                   aria-label="Destinos independientes de captura"
-                  className="absolute right-0 top-full mt-1.5 z-40 w-64 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg py-1 text-xs text-slate-800 dark:text-slate-200"
+                  className="absolute right-0 top-full mt-1.5 z-40 w-72 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg py-1 text-xs text-slate-800 dark:text-slate-200"
                 >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => void handleOpenCaptureAddon()}
+                    className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between gap-2 font-medium text-emerald-700 dark:text-emerald-400"
+                  >
+                    <span>Mini-Capturador flotante</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20">
+                      Pantalla libre
+                    </span>
+                  </button>
+                  <div className="my-1 border-t border-slate-200 dark:border-slate-800" />
                   <button
                     type="button"
                     role="menuitem"
