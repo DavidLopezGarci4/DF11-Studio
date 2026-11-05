@@ -2018,10 +2018,9 @@ export default function StudioView({
           onSelectTemplateForComposer={(tid) => void handleSelectTemplate(tid)}
         />
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 lg:flex-1 lg:min-h-0 items-stretch">
-          {/* Left Workbench Column: Official 260x310 DF11 Canvas + Docked Paso 4 Export */}
-          <div className="lg:col-span-5 xl:col-span-4 flex flex-col justify-between gap-2.5 lg:h-full min-h-0 lg:overflow-y-auto">
-          <section className="rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 flex flex-col items-center gap-2 shrink-0">
+        <div className="grid grid-cols-1 lg:grid-cols-12 lg:grid-rows-[auto_minmax(0,1fr)] gap-3 lg:gap-x-3.5 lg:gap-y-2.5 lg:flex-1 lg:min-h-0">
+          {/* Official 260x310 DF11 Canvas (Top-left on desktop, 1st in compressed stack) */}
+          <section className="lg:col-span-5 xl:col-span-4 lg:col-start-1 lg:row-start-1 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 flex flex-col items-center gap-2 shrink-0">
             <div className="w-full flex items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
               <div>
                 <span className="font-medium text-slate-900 dark:text-white">Lienzo Oficial DF11</span>
@@ -2327,152 +2326,10 @@ export default function StudioView({
                 </span>
               </div>
             </div>
-            </section>
+          </section>
 
-            {/* PASO 4: DOCKED BENEATH CANVAS — MARCO MAESTRO DF11 Y EXPORTACIÓN */}
-            <section
-              onClick={() => setActiveStep(4)}
-              className="rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 space-y-2 text-xs shrink-0"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-                  Paso 4 · Marco Maestro DF11 y Exportación
-                </span>
-                <span className="text-[10px] text-slate-400 dark:text-slate-500">Alpha = 0 · 0% IA</span>
-              </div>
-
-              <div className="rounded-lg bg-slate-100 dark:bg-slate-950 px-2.5 py-1.5">
-                <PercentStepperControl
-                  sessionPrefix="quality"
-                  label="Calidad óptica"
-                  sliderAriaLabel="Barra de mejora de calidad óptica"
-                  inputAriaLabel="Valor exacto de Calidad óptica (%)"
-                  upAriaLabel="Subir Calidad óptica"
-                  downAriaLabel="Bajar Calidad óptica"
-                  titleHint="Filtro guiado ponderado WGIF en OKLab + subpíxel en luz lineal + deblocking JPEG 8×8 (100% offline, 0% IA)"
-                  value={snap.enhanceQuality}
-                  minPct={0}
-                  maxPct={100}
-                  onChangeValue={(nextQ, skey) => commitSessionSnap(skey, (s) => ({ ...s, enhanceQuality: nextQ }))}
-                  onEndSession={endEditSession}
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-1.5" role="group" aria-label="Destino de guardado DF11">
-                <button
-                  type="button"
-                  title="Guarda en tu carpeta de creaciones DF11"
-                  onClick={() => setExportTarget('creations')}
-                  className={`px-2.5 py-1.5 rounded-lg border text-left font-medium truncate transition ${
-                    exportTarget === 'creations'
-                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
-                      : 'border-slate-200/80 dark:border-slate-800 bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:border-slate-400'
-                  }`}
-                >
-                  1. Nuestras creaciones
-                </button>
-                <button
-                  type="button"
-                  title="Renombra con el #ID original del futbolista (.png)"
-                  onClick={() => {
-                    setExportTarget('facepack');
-                    setFmt('png');
-                  }}
-                  className={`px-2.5 py-1.5 rounded-lg border text-left font-medium truncate transition ${
-                    exportTarget === 'facepack'
-                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
-                      : 'border-slate-200/80 dark:border-slate-800 bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:border-slate-400'
-                  }`}
-                >
-                  2. Pack de Faces FM
-                </button>
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <input
-                  aria-label="ID Football Manager"
-                  value={uid}
-                  onChange={(e) => setUid(e.target.value)}
-                  placeholder="ID FM (ej: 29184012 o r-2002049102)"
-                  className="min-w-0 flex-1 px-2.5 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 tabular-nums font-mono"
-                />
-                <button
-                  type="button"
-                  onClick={() => setFmt('png')}
-                  className={segBtn(exportTarget === 'facepack' || fmt === 'png')}
-                >
-                  PNG Oficial
-                </button>
-                {exportTarget === 'creations' && (
-                  <button type="button" onClick={() => setFmt('jpg')} className={segBtn(fmt === 'jpg')}>
-                    JPG
-                  </button>
-                )}
-                <button
-                  type="button"
-                  disabled={busy || !hasComposition}
-                  onClick={() => void handleExport()}
-                  className="shrink-0 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white inline-flex items-center justify-center gap-1"
-                >
-                  <Download className="w-3.5 h-3.5" /> Exportar DF11
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-400">
-                <label className="inline-flex items-center gap-1.5 shrink-0">
-                  <input
-                    type="checkbox"
-                    checked={updateXml}
-                    disabled={exportTarget !== 'facepack' && fmt !== 'png'}
-                    onChange={(e) => setUpdateXml(e.target.checked)}
-                    className="accent-emerald-600"
-                  />
-                  Actualizar config.xml atómico
-                </label>
-                {exportTarget === 'creations' ? (
-                  <button
-                    type="button"
-                    aria-label="Elegir carpeta de nuestras creaciones"
-                    onClick={async () => {
-                      try {
-                        const p = await callBridge<{ path: string; storageHealth?: StorageHealth } | null>('choose_directory', 'export');
-                        if (p?.path) onExportDirChange(p.path, p.storageHealth);
-                      } catch (e) {
-                        setErrorMsg(e instanceof Error ? e.message : 'Carpeta no válida.');
-                      }
-                    }}
-                    title={exportDir}
-                    className="min-w-0 truncate inline-flex items-center gap-1 text-slate-700 dark:text-slate-300 hover:underline"
-                  >
-                    <FolderOpen className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
-                    <span className="truncate">{exportDir}</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    aria-label="Elegir carpeta Pack Faces FM"
-                    onClick={() => void handleChooseFacepackFolder()}
-                    title={effectiveFacepackDir || 'Seleccionar carpeta del Pack de Faces de Football Manager'}
-                    className="min-w-0 truncate inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-medium hover:underline"
-                  >
-                    <FolderOpen className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">{effectiveFacepackDir || 'Elegir carpeta Pack Faces FM…'}</span>
-                  </button>
-                )}
-              </div>
-
-              {uidInvalid && <p className="text-[11px] text-amber-600 dark:text-amber-400">Usa dígitos o r-&lt;dígitos&gt; (máx. 12 cifras).</p>}
-              {errorMsg && <p className="text-[11px] text-rose-600 dark:text-rose-400">{errorMsg}</p>}
-              {savedMsg && (
-                <p className="text-[11px] text-emerald-700 dark:text-emerald-400 inline-flex items-center gap-1 truncate">
-                  <Check className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">{savedMsg}</span>
-                </p>
-              )}
-            </section>
-          </div>
-
-          {/* Right Inspector Column: Elastic Single-Viewport Layer Builder (Paso 1 + Elastic Paso 2 + Paso 3) */}
-          <section className="lg:col-span-7 xl:col-span-8 lg:h-full min-h-0 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-200/80 dark:divide-slate-800 flex flex-col overflow-hidden">
+          {/* Right Inspector Column on desktop (lg:row-span-2), 2nd in compressed stack: Paso 1 + Paso 2 + Paso 3 */}
+          <section className="lg:col-span-7 xl:col-span-8 lg:col-start-6 xl:col-start-5 lg:row-start-1 lg:row-span-2 lg:h-full min-h-0 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-200/80 dark:divide-slate-800 flex flex-col overflow-hidden">
             {/* PASO 1: CARA Y CUELLO / FOTO DIRECTA + MARCO DF11 */}
             <div
               onClick={() => setActiveStep(1)}
@@ -2936,7 +2793,7 @@ export default function StudioView({
                   </div>
                 )}
 
-                <div className="flex-1 min-h-[112px] overflow-y-auto content-start grid grid-cols-3 sm:grid-cols-5 xl:grid-cols-6 gap-2 pr-1">
+                <div className="flex-1 min-h-[112px] max-h-72 lg:max-h-none overflow-y-auto content-start grid grid-cols-3 sm:grid-cols-5 xl:grid-cols-6 gap-2 pr-1">
                   {filteredStep2Templates.map((t) => {
                     const active = t.templateId === snap.templateId;
                     const isTitular = Boolean(t.clubId) && t.isActiveForClub !== false;
@@ -3217,6 +3074,149 @@ export default function StudioView({
               </div>
             </div>
           </section>
+
+          {/* PASO 4: ALWAYS LAST IN COMPRESSED STACK & TAB ORDER — DOCKED BENEATH CANVAS ON DESKTOP (lg:row-start-2) */}
+          <div className="lg:col-span-5 xl:col-span-4 lg:col-start-1 lg:row-start-2 min-h-0 flex flex-col lg:overflow-y-auto">
+            <section
+              onClick={() => setActiveStep(4)}
+              className="lg:mt-auto rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 space-y-2 text-xs shrink-0"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                  Paso 4 · Marco Maestro DF11 y Exportación
+                </h2>
+                <span className="text-[10px] text-slate-400 dark:text-slate-500">Alpha = 0 · 0% IA</span>
+              </div>
+
+              <div className="rounded-lg bg-slate-100 dark:bg-slate-950 px-2.5 py-1.5">
+                <PercentStepperControl
+                  sessionPrefix="quality"
+                  label="Calidad óptica"
+                  sliderAriaLabel="Barra de mejora de calidad óptica"
+                  inputAriaLabel="Valor exacto de Calidad óptica (%)"
+                  upAriaLabel="Subir Calidad óptica"
+                  downAriaLabel="Bajar Calidad óptica"
+                  titleHint="Filtro guiado ponderado WGIF en OKLab + subpíxel en luz lineal + deblocking JPEG 8×8 (100% offline, 0% IA)"
+                  value={snap.enhanceQuality}
+                  minPct={0}
+                  maxPct={100}
+                  onChangeValue={(nextQ, skey) => commitSessionSnap(skey, (s) => ({ ...s, enhanceQuality: nextQ }))}
+                  onEndSession={endEditSession}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-1.5" role="group" aria-label="Destino de guardado DF11">
+                <button
+                  type="button"
+                  title="Guarda en tu carpeta de creaciones DF11"
+                  onClick={() => setExportTarget('creations')}
+                  className={`px-2.5 py-1.5 rounded-lg border text-left font-medium truncate transition ${
+                    exportTarget === 'creations'
+                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+                      : 'border-slate-200/80 dark:border-slate-800 bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:border-slate-400'
+                  }`}
+                >
+                  1. Nuestras creaciones
+                </button>
+                <button
+                  type="button"
+                  title="Renombra con el #ID original del futbolista (.png)"
+                  onClick={() => {
+                    setExportTarget('facepack');
+                    setFmt('png');
+                  }}
+                  className={`px-2.5 py-1.5 rounded-lg border text-left font-medium truncate transition ${
+                    exportTarget === 'facepack'
+                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+                      : 'border-slate-200/80 dark:border-slate-800 bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:border-slate-400'
+                  }`}
+                >
+                  2. Pack de Faces FM
+                </button>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <input
+                  aria-label="ID Football Manager"
+                  value={uid}
+                  onChange={(e) => setUid(e.target.value)}
+                  placeholder="ID FM (ej: 29184012 o r-2002049102)"
+                  className="min-w-0 flex-1 px-2.5 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 tabular-nums font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => setFmt('png')}
+                  className={segBtn(exportTarget === 'facepack' || fmt === 'png')}
+                >
+                  PNG Oficial
+                </button>
+                {exportTarget === 'creations' && (
+                  <button type="button" onClick={() => setFmt('jpg')} className={segBtn(fmt === 'jpg')}>
+                    JPG
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={busy || !hasComposition}
+                  onClick={() => void handleExport()}
+                  className="shrink-0 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white inline-flex items-center justify-center gap-1"
+                >
+                  <Download className="w-3.5 h-3.5" /> Exportar DF11
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-400">
+                <label className="inline-flex items-center gap-1.5 shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={updateXml}
+                    disabled={exportTarget !== 'facepack' && fmt !== 'png'}
+                    onChange={(e) => setUpdateXml(e.target.checked)}
+                    className="accent-emerald-600"
+                  />
+                  Actualizar config.xml atómico
+                </label>
+                {exportTarget === 'creations' ? (
+                  <button
+                    type="button"
+                    aria-label="Elegir carpeta de nuestras creaciones"
+                    onClick={async () => {
+                      try {
+                        const p = await callBridge<{ path: string; storageHealth?: StorageHealth } | null>('choose_directory', 'export');
+                        if (p?.path) onExportDirChange(p.path, p.storageHealth);
+                      } catch (e) {
+                        setErrorMsg(e instanceof Error ? e.message : 'Carpeta no válida.');
+                      }
+                    }}
+                    title={exportDir}
+                    className="min-w-0 truncate inline-flex items-center gap-1 text-slate-700 dark:text-slate-300 hover:underline"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
+                    <span className="truncate">{exportDir}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    aria-label="Elegir carpeta Pack Faces FM"
+                    onClick={() => void handleChooseFacepackFolder()}
+                    title={effectiveFacepackDir || 'Seleccionar carpeta del Pack de Faces de Football Manager'}
+                    className="min-w-0 truncate inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-medium hover:underline"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{effectiveFacepackDir || 'Elegir carpeta Pack Faces FM…'}</span>
+                  </button>
+                )}
+              </div>
+
+              {uidInvalid && <p className="text-[11px] text-amber-600 dark:text-amber-400">Usa dígitos o r-&lt;dígitos&gt; (máx. 12 cifras).</p>}
+              {errorMsg && <p className="text-[11px] text-rose-600 dark:text-rose-400">{errorMsg}</p>}
+              {savedMsg && (
+                <p className="text-[11px] text-emerald-700 dark:text-emerald-400 inline-flex items-center gap-1 truncate">
+                  <Check className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">{savedMsg}</span>
+                </p>
+              )}
+            </section>
+          </div>
         </div>
       )}
     </div>

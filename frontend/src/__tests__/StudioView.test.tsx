@@ -24,10 +24,19 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
     expect(screen.getByRole('tab', { name: /Montaje Paso a Paso/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Extraer Cara/i })).toBeInTheDocument();
 
-    expect(screen.getByText(/Paso 1 · Capa Cara y Cuello/i)).toBeInTheDocument();
-    expect(screen.getByText(/Paso 2 · Capa Camiseta Plantilla/i)).toBeInTheDocument();
-    expect(screen.getByText(/Paso 3 · Capa Fondo/i)).toBeInTheDocument();
-    expect(screen.getByText(/Paso 4 · Marco Maestro DF11 y Exportación/i)).toBeInTheDocument();
+    const step1 = screen.getByText(/Paso 1 · Capa Cara y Cuello/i);
+    const step2 = screen.getByText(/Paso 2 · Capa Camiseta Plantilla/i);
+    const step3 = screen.getByText(/Paso 3 · Capa Fondo/i);
+    const step4 = screen.getByText(/Paso 4 · Marco Maestro DF11 y Exportación/i);
+    expect(step1).toBeInTheDocument();
+    expect(step2).toBeInTheDocument();
+    expect(step3).toBeInTheDocument();
+    expect(step4).toBeInTheDocument();
+
+    // In compressed / single-column layout and Tab focus order, Paso 1 -> 2 -> 3 -> 4 must stay strictly chronological
+    expect(step1.compareDocumentPosition(step2) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(step2.compareDocumentPosition(step3) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(step3.compareDocumentPosition(step4) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     // Procedural low-quality tabs must be completely gone; only Plantilla & Staff remain
     expect(screen.getByRole('button', { name: /^Plantilla$/i })).toBeInTheDocument();

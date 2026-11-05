@@ -102,7 +102,7 @@ export default function App() {
   };
 
   const navBtn = (active: boolean) =>
-    `px-2.5 py-1 text-xs font-medium rounded-md inline-flex items-center gap-1.5 transition ${
+    `px-2.5 py-1 text-xs font-medium rounded-md inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition ${
       active
         ? 'bg-emerald-600 text-white shadow-xs'
         : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200/70 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100'
@@ -124,7 +124,7 @@ export default function App() {
 
           <nav
             aria-label="Navegación principal DF11"
-            className="flex items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 overflow-x-auto"
+            className="min-w-0 flex items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 overflow-x-auto"
           >
             <button
               type="button"
