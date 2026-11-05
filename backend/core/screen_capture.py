@@ -25,6 +25,7 @@ MOD_SHIFT = 0x0004
 MOD_NOREPEAT = 0x4000
 VK_X = 0x58
 HOTKEY_ID = 0xDF11
+DWM_HIDE_SETTLE_SECONDS = 0.26
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,43 +66,49 @@ def get_screen_clipper_cmd() -> list[str]:
     return [str(exe), "-m", "backend.core.screen_clip_worker"]
 
 
-def _hide_host_window(host_window: Any) -> bool:
-    if host_window is None or not hasattr(host_window, "hide"):
-        return False
-    try:
-        host_window.hide()
+def _hide_windows_for_capture(windows: list[Any]) -> list[Any]:
+    hidden: list[Any] = []
+    for win in windows:
+        if win is None or not hasattr(win, "hide"):
+            continue
+        try:
+            win.hide()
+            hidden.append(win)
+        except Exception:
+            pass
+    if hidden:
         if sys.platform == "win32":
             try:
                 ctypes.windll.dwmapi.DwmFlush()
             except Exception:
                 pass
-        time.sleep(0.08)
-        return True
-    except Exception:
-        return False
+        time.sleep(DWM_HIDE_SETTLE_SECONDS)
+    return hidden
 
 
-def _restore_host_window(host_window: Any, was_hidden: bool) -> None:
-    if not was_hidden or host_window is None:
-        return
-    try:
-        if hasattr(host_window, "show"):
-            host_window.show()
-        if hasattr(host_window, "restore"):
-            host_window.restore()
-    except Exception:
-        pass
+def _restore_windows_after_capture(hidden_windows: list[Any]) -> None:
+    for win in hidden_windows:
+        try:
+            if hasattr(win, "show"):
+                win.show()
+            if hasattr(win, "restore"):
+                win.restore()
+        except Exception:
+            pass
 
 
 def capture_screen_png(
     hwnd: int | None = None,
     clipper_cmd: list[str] | None = None,
     host_window: Any = None,
+    extra_windows: list[Any] | None = None,
+    restore_after: bool = True,
 ) -> ScreenCaptureResult | None:
-    """Launch PSF-signed PerMonitorV2 screen_clip_worker and read lossless PNG bytes from stdout."""
-    _ = hwnd  # Preserved for caller compatibility without raw handle manipulation
+    """Launch PSF-signed PerMonitorV2 screen_clip_worker after DWM finishes hiding app windows."""
+    _ = hwnd
     cmd = clipper_cmd or get_screen_clipper_cmd()
-    was_hidden = _hide_host_window(host_window)
+    all_wins = [w for w in [host_window, *(extra_windows or [])] if w is not None]
+    hidden_wins = _hide_windows_for_capture(all_wins)
     try:
         proc = subprocess.run(
             cmd,
@@ -112,7 +119,8 @@ def capture_screen_png(
             check=False,
         )
     finally:
-        _restore_host_window(host_window, was_hidden)
+        if restore_after:
+            _restore_windows_after_capture(hidden_wins)
 
     if proc.returncode == 1 or not proc.stdout:
         return None

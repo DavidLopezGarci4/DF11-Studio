@@ -67,7 +67,8 @@ def test_screen_capture_sources_contain_zero_av_flagged_apis_or_unsigned_helper_
 
     worker_src = (WORKSPACE_ROOT / "backend" / "core" / "screen_clip_worker.py").read_text(encoding="utf-8")
     capture_src = (WORKSPACE_ROOT / "backend" / "core" / "screen_capture.py").read_text(encoding="utf-8")
-    combined = worker_src + "\n" + capture_src
+    addon_src = (WORKSPACE_ROOT / "backend" / "core" / "capture_addon_html.py").read_text(encoding="utf-8")
+    combined = worker_src + "\n" + capture_src + "\n" + addon_src
 
     forbidden_av_triggers = (
         "DF11ScreenClip",
@@ -238,3 +239,97 @@ def test_global_capture_hotkey_toggle_lifecycle(tmp_path: Path) -> None:
     )
     off_res = bridge.toggle_capture_hotkey(False)
     assert off_res == {"hotkeyEnabled": False}
+
+
+def test_floating_capture_addon_lifecycle_hides_main_app_and_routes_payload(tmp_path: Path, monkeypatch) -> None:
+    import backend.core.screen_capture as sc_mod
+
+    assert sc_mod.DWM_HIDE_SETTLE_SECONDS >= 0.24, "DWM fade-out needs >=240ms settle so app never appears in snap"
+
+    class _TrackedWin:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.visible = name == "main"
+            self.destroyed = False
+            self.js_calls: list[str] = []
+
+        def hide(self) -> None:
+            self.visible = False
+
+        def show(self) -> None:
+            self.visible = True
+
+        def restore(self) -> None:
+            self.visible = True
+
+        def destroy(self) -> None:
+            self.destroyed = True
+            self.visible = False
+
+        def evaluate_js(self, script: str) -> None:
+            self.js_calls.append(script)
+
+    main_win = _TrackedWin("main")
+    addon_win = _TrackedWin("addon")
+
+    bridge = StudioBridge(
+        vault_dir=tmp_path / "vault",
+        export_dir=tmp_path / "exports",
+        db_path=tmp_path / "state.sqlite3",
+    )
+    bridge._attach_window(main_win)
+    bridge._attach_addon_window(addon_win)
+
+    # 1. Opening Mini-Capturador hides the big Studio window and shows the compact floating add-on
+    opened = bridge.open_capture_addon("raw_face", "dark")
+    assert opened == {"addonOpen": True, "target": "raw_face"}
+    assert main_win.visible is False
+    assert addon_win.visible is True
+    assert any("raw_face" in s for s in addon_win.js_calls)
+
+    # 2. If user presses Esc during snip from add-on, add-on stays open and main stays hidden
+    seen_hidden_during_snap: list[tuple[bool, bool]] = []
+
+    def _mock_cancel(*_a: Any, **_kw: Any) -> None:
+        seen_hidden_during_snap.append((main_win.visible, addon_win.visible))
+        return None
+
+    monkeypatch.setattr(sc_mod, "capture_screen_png", _mock_cancel)
+    esc_res = bridge.capture_from_addon("raw_face", False)
+    assert esc_res == {"cancelled": True}
+    assert seen_hidden_during_snap == [(False, False)], "Both windows must be hidden while snipping screen"
+    assert addon_win.visible is True and main_win.visible is False
+
+    # 3. Successful snip with keep_pinned=True stages capture, notifies main, and keeps floating add-on visible
+    png_bytes = _encode_png(Image.new("RGBA", (220, 260), (40, 120, 200, 255)))
+
+    def _mock_ok(*_a: Any, **_kw: Any) -> sc_mod.ScreenCaptureResult:
+        seen_hidden_during_snap.append((main_win.visible, addon_win.visible))
+        return sc_mod.ScreenCaptureResult(
+            png_bytes=png_bytes, width=220, height=260, drm_black_warning=False, low_res_warning=False
+        )
+
+    monkeypatch.setattr(sc_mod, "capture_screen_png", _mock_ok)
+    pinned_res = bridge.capture_from_addon("direct_photo", True)
+    assert pinned_res["cancelled"] is False and pinned_res["target"] == "direct_photo"
+    assert addon_win.visible is True and main_win.visible is False
+    assert any("df11:addon-capture" in s for s in main_win.js_calls)
+
+    consumed = bridge.consume_addon_capture()
+    assert consumed is not None and consumed["target"] == "direct_photo" and consumed["directPhotoId"].startswith("direct-")
+    assert bridge.consume_addon_capture() is None
+
+    # 4. Successful snip with keep_pinned=False closes floating add-on and restores main Studio window automatically
+    unpinned_res = bridge.capture_from_addon("raw_face", False)
+    assert unpinned_res["cancelled"] is False and unpinned_res["target"] == "raw_face"
+    assert addon_win.visible is False and main_win.visible is True
+    consumed_face = bridge.consume_addon_capture()
+    assert consumed_face is not None and consumed_face["target"] == "raw_face"
+
+    # 5. Closing add-on with Alt+F4 while running cancels disposal and restores main; app shutdown destroys add-on cleanly
+    bridge.open_capture_addon("direct_photo", "light")
+    assert bridge._on_addon_closing() is True
+    assert addon_win.destroyed is False and addon_win.visible is False and main_win.visible is True
+
+    bridge._shutdown_windows()
+    assert addon_win.destroyed is True

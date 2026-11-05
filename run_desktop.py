@@ -30,6 +30,7 @@ def _bind_win32_app_identity_and_icon(ico_path: Path) -> None:
 
 def main() -> None:
     from backend.bridge import StudioBridge
+    from backend.core.capture_addon_html import CAPTURE_ADDON_HTML
     from backend.core.paths import ASSETS_DIR, WORKSPACE_ROOT, get_webview_profile_dir
 
     if sys.platform == "win32":
@@ -56,7 +57,33 @@ def main() -> None:
         min_size=(980, 680),
         background_color="#090d16",
     )
+    addon_x = 120
+    if sys.platform == "win32":
+        try:
+            addon_x = max(40, int(ctypes.windll.user32.GetSystemMetrics(0)) - 492)
+        except Exception:
+            addon_x = 120
+    addon_win = webview.create_window(
+        title="DF11 Mini-Capturador",
+        html=CAPTURE_ADDON_HTML,
+        js_api=bridge,
+        width=464,
+        height=52,
+        min_size=(340, 48),
+        x=addon_x,
+        y=24,
+        resizable=False,
+        hidden=True,
+        frameless=True,
+        easy_drag=True,
+        shadow=True,
+        on_top=True,
+        background_color="#090d16",
+    )
     bridge._attach_window(win)
+    bridge._attach_addon_window(addon_win)
+    addon_win.events.closing += bridge._on_addon_closing
+    win.events.closed += bridge._shutdown_windows
     ico_path = ASSETS_DIR / "icons" / "app.ico"
     win.events.shown += lambda: _bind_win32_app_identity_and_icon(ico_path)
     webview.start(
