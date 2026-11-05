@@ -35,11 +35,21 @@ def _make_torso_only_png(w: int = 300, h: int = 190) -> bytes:
 
 
 def test_screen_clip_worker_stdout_self_test_and_df11_aspect_math() -> None:
+    import sys
     from backend.core.screen_capture import get_screen_clipper_cmd
     from backend.core.screen_clip_worker import _compute_selection_rect
 
     cmd = [*get_screen_clipper_cmd(), "--self-test"]
-    proc = subprocess.run(cmd, cwd=str(WORKSPACE_ROOT), capture_output=True, timeout=10, check=False)
+    if sys.platform == "win32":
+        assert Path(cmd[0]).name.lower() == "pythonw.exe", "Must use signed GUI pythonw.exe without console flags"
+    proc = subprocess.run(
+        cmd,
+        cwd=str(WORKSPACE_ROOT),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
     assert proc.returncode == 0, f"--self-test failed: {proc.stderr.decode('utf-8', errors='replace')}"
     assert proc.stdout[:8] == b"\x89PNG\r\n\x1a\n", "--self-test must emit raw PNG bytes on stdout"
     with Image.open(io.BytesIO(proc.stdout)) as im:
@@ -49,6 +59,31 @@ def test_screen_clip_worker_stdout_self_test_and_df11_aspect_math() -> None:
     rx, ry, rw, rh = _compute_selection_rect((-1600, -120), (-1340, 140), lock_df11_aspect=True)
     assert rx == -1600 and ry == -120
     assert abs((rw / rh) - (260.0 / 310.0)) < 0.01
+
+
+def test_screen_capture_sources_contain_zero_av_flagged_apis_or_unsigned_helper_exes() -> None:
+    assert not (WORKSPACE_ROOT / "DF11ScreenClip.exe").exists()
+    assert not (WORKSPACE_ROOT / "scripts" / "ScreenClip.cs").exists()
+
+    worker_src = (WORKSPACE_ROOT / "backend" / "core" / "screen_clip_worker.py").read_text(encoding="utf-8")
+    capture_src = (WORKSPACE_ROOT / "backend" / "core" / "screen_capture.py").read_text(encoding="utf-8")
+    combined = worker_src + "\n" + capture_src
+
+    forbidden_av_triggers = (
+        "DF11ScreenClip",
+        "GetAsyncKeyState",
+        "GetKeyState",
+        "GetKeyboardState",
+        "SetWindowsHookEx",
+        "WDA_EXCLUDEFROMCAPTURE",
+        "SetWindowDisplayAffinity",
+        "WINFUNCTYPE",
+        "CREATE_NO_WINDOW",
+        "BitBlt",
+        "GetCursorPos",
+    )
+    for token in forbidden_av_triggers:
+        assert token not in combined, f"AV-heuristic trigger '{token}' must not appear in screen capture modules"
 
 
 def test_drm_black_frame_detector_distinguishes_drm_from_black_kit() -> None:
@@ -80,7 +115,7 @@ def test_bridge_capture_cancellation_and_independent_targets(tmp_path: Path, mon
     )
 
     # 1. User presses Esc -> capture returns None -> bridge reports cancelled=True cleanly
-    monkeypatch.setattr(sc_mod, "capture_screen_png", lambda hwnd=None: None)
+    monkeypatch.setattr(sc_mod, "capture_screen_png", lambda *_a, **_kw: None)
     cancelled = bridge.capture_screen_region("direct_photo")
     assert cancelled == {"cancelled": True}
 
@@ -90,7 +125,7 @@ def test_bridge_capture_cancellation_and_independent_targets(tmp_path: Path, mon
     monkeypatch.setattr(
         sc_mod,
         "capture_screen_png",
-        lambda hwnd=None: sc_mod.ScreenCaptureResult(
+        lambda *_a, **_kw: sc_mod.ScreenCaptureResult(
             png_bytes=tiny_png, width=110, height=130, drm_black_warning=False, low_res_warning=True
         ),
     )
@@ -131,7 +166,7 @@ def test_bridge_capture_cancellation_and_independent_targets(tmp_path: Path, mon
     monkeypatch.setattr(
         sc_mod,
         "capture_screen_png",
-        lambda hwnd=None: sc_mod.ScreenCaptureResult(
+        lambda *_a, **_kw: sc_mod.ScreenCaptureResult(
             png_bytes=torso_png, width=300, height=190, drm_black_warning=False, low_res_warning=False
         ),
     )
@@ -167,7 +202,7 @@ def test_capture_save_png_blocks_vault_overlap_and_saves_clean_png(tmp_path: Pat
     monkeypatch.setattr(
         sc_mod,
         "capture_screen_png",
-        lambda hwnd=None: sc_mod.ScreenCaptureResult(
+        lambda *_a, **_kw: sc_mod.ScreenCaptureResult(
             png_bytes=png_bytes, width=180, height=210, drm_black_warning=False, low_res_warning=False
         ),
     )

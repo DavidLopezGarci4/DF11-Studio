@@ -620,18 +620,6 @@ class StudioBridge:
         self._cutout_key = None
         self._dressed_key = None
 
-    def _resolve_hwnd(self) -> int | None:
-        import ctypes
-        import sys
-
-        if sys.platform != "win32" or self._window is None:
-            return None
-        try:
-            hwnd = int(ctypes.windll.user32.FindWindowW(None, "DF11 Face Studio — FM27 & NG_Regens"))
-            return hwnd if hwnd > 0 else None
-        except Exception:
-            return None
-
     def capture_screen_region(
         self, target: str = "direct_photo", params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -640,7 +628,7 @@ class StudioBridge:
         tgt = str(target or "direct_photo").strip().lower()
         if tgt not in ("direct_photo", "raw_face", "raw_shirt", "save_png"):
             raise ValueError(f"Destino de captura no soportado: {target}")
-        res = sc_mod.capture_screen_png(hwnd=self._resolve_hwnd())
+        res = sc_mod.capture_screen_png(host_window=self._window)
         if res is None:
             return {"cancelled": True}
 

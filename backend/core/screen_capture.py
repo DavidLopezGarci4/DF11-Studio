@@ -1,4 +1,4 @@
-"""Zero-clipboard, PerMonitorV2 native screen region capture and optional Win32 hotkey listener."""
+"""Zero-clipboard, AV-clean PerMonitorV2 screen region capture and optional Win32 hotkey listener."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 from PIL import Image
@@ -18,10 +18,6 @@ from PIL import Image
 from backend.core.image_guard import load_guarded_image
 from backend.core.paths import WORKSPACE_ROOT
 
-WDA_NONE = 0x00000000
-WDA_EXCLUDEFROMCAPTURE = 0x00000011
-SW_HIDE = 0
-SW_SHOW = 5
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
 MOD_CONTROL = 0x0002
@@ -60,47 +56,39 @@ def detect_drm_black_frame(img_rgba: Image.Image) -> bool:
 
 
 def get_screen_clipper_cmd() -> list[str]:
-    """Build isolated child command using the signed venv Python interpreter (zero AV false positives)."""
+    """Build child command using the PSF Authenticode-signed GUI Python interpreter (pythonw.exe)."""
     exe = Path(sys.executable)
-    if exe.name.lower() == "pythonw.exe":
-        console_sib = exe.with_name("python.exe")
-        if console_sib.is_file():
-            exe = console_sib
+    if sys.platform == "win32":
+        gui_sib = exe.with_name("pythonw.exe")
+        if gui_sib.is_file():
+            exe = gui_sib
     return [str(exe), "-m", "backend.core.screen_clip_worker"]
 
 
-def _exclude_hwnd_from_capture(hwnd: int | None) -> tuple[bool, bool]:
-    """Exclude host window in 0ms via WDA_EXCLUDEFROMCAPTURE, falling back to SW_HIDE + DwmFlush if unsupported."""
-    if sys.platform != "win32" or not hwnd:
-        return (False, False)
+def _hide_host_window(host_window: Any) -> bool:
+    if host_window is None or not hasattr(host_window, "hide"):
+        return False
     try:
-        user32 = ctypes.windll.user32
-        if user32.SetWindowDisplayAffinity(wintypes.HWND(hwnd), wintypes.DWORD(WDA_EXCLUDEFROMCAPTURE)):
+        host_window.hide()
+        if sys.platform == "win32":
             try:
                 ctypes.windll.dwmapi.DwmFlush()
             except Exception:
                 pass
-            return (True, False)
-        user32.ShowWindow(wintypes.HWND(hwnd), SW_HIDE)
-        try:
-            ctypes.windll.dwmapi.DwmFlush()
-        except Exception:
-            time.sleep(0.04)
-        return (False, True)
+        time.sleep(0.08)
+        return True
     except Exception:
-        return (False, False)
+        return False
 
 
-def _restore_hwnd_after_capture(hwnd: int | None, used_affinity: bool, used_hide: bool) -> None:
-    if sys.platform != "win32" or not hwnd:
+def _restore_host_window(host_window: Any, was_hidden: bool) -> None:
+    if not was_hidden or host_window is None:
         return
     try:
-        user32 = ctypes.windll.user32
-        if used_affinity:
-            user32.SetWindowDisplayAffinity(wintypes.HWND(hwnd), wintypes.DWORD(WDA_NONE))
-        if used_hide:
-            user32.ShowWindow(wintypes.HWND(hwnd), SW_SHOW)
-        user32.SetForegroundWindow(wintypes.HWND(hwnd))
+        if hasattr(host_window, "show"):
+            host_window.show()
+        if hasattr(host_window, "restore"):
+            host_window.restore()
     except Exception:
         pass
 
@@ -108,22 +96,23 @@ def _restore_hwnd_after_capture(hwnd: int | None, used_affinity: bool, used_hide
 def capture_screen_png(
     hwnd: int | None = None,
     clipper_cmd: list[str] | None = None,
+    host_window: Any = None,
 ) -> ScreenCaptureResult | None:
-    """Launch isolated PerMonitorV2 screen_clip_worker and read lossless PNG bytes from stdout."""
+    """Launch PSF-signed PerMonitorV2 screen_clip_worker and read lossless PNG bytes from stdout."""
+    _ = hwnd  # Preserved for caller compatibility without raw handle manipulation
     cmd = clipper_cmd or get_screen_clipper_cmd()
-    used_affinity, used_hide = _exclude_hwnd_from_capture(hwnd)
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0
+    was_hidden = _hide_host_window(host_window)
     try:
         proc = subprocess.run(
             cmd,
             cwd=str(WORKSPACE_ROOT),
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=180,
             check=False,
-            creationflags=creationflags,
         )
     finally:
-        _restore_hwnd_after_capture(hwnd, used_affinity, used_hide)
+        _restore_host_window(host_window, was_hidden)
 
     if proc.returncode == 1 or not proc.stdout:
         return None
@@ -144,7 +133,7 @@ def capture_screen_png(
 
 
 class GlobalCaptureHotkey:
-    """Optional non-intrusive Win32 hotkey (Ctrl+Shift+X) message loop."""
+    """Optional non-intrusive Win32 shortcut (Ctrl+Shift+X) via standard RegisterHotKey."""
 
     def __init__(self, on_trigger: Callable[[], None]) -> None:
         self._on_trigger = on_trigger
