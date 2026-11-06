@@ -7,9 +7,21 @@ export interface FAQSection { id: string; title: string; description: string; it
 const SECTIONS: FAQSection[] = [
   {
     id: 'studio',
-    title: 'Captura en Caliente, Montaje Paso a Paso, Foto Directa y Packs de Faces FM',
-    description: 'Recorte de pantalla sin tocar el portapapeles, Foto Directa + Marco DF11, Calidad óptica y exportación bajo el lienzo.',
+    title: 'Captura en Caliente, Montaje Paso a Paso, DF11 Pure / Dual y Packs de Faces FM',
+    description: 'Formatos DF11 Classic, Pure (220 × 276) y Dual en carpetas separadas, recorte en caliente, Foto Directa y Calidad óptica.',
     items: [
+      {
+        id: 'df11-pure-dual-export',
+        question: '¿Cómo exporto en formato DF11 Pure (220 × 276 sin marco) o en modo Dual a dos carpetas independientes a la vez?',
+        badge: 'Novedad v1.6',
+        tags: ['df11 pure', 'pure', 'dual', '220x276', '220 × 276', '260x310', 'sin marco', 'transparente', 'carpetas', 'ambas'],
+        bullets: [
+          'Tres modos en el Paso 4 (Classic, Pure y Dual): Elige «Classic 260×310» para la ficha tradicional con marco biselado, «Pure 220×276» para la silueta oficial sin marco y con fondo transparente, o «Dual (Ambas)» para generar las dos versiones a la vez de una sola pasada.',
+          'Carpetas independientes y conmutador de vista: En modo Dual dispones de botones separados para elegir la carpeta Classic y la carpeta Pure (tanto en «1. Nuestras creaciones» como en «2. Pack de Faces FM») y de los botones «Vista Classic | Vista Pure» bajo el lienzo para revisar ambos acabados antes de guardar.',
+          'Foto Directa con recorte autorizado en 1 clic y edición sin pérdida: Si usas «Foto Directa + Marco DF11» con una imagen de fondo opaco y eliges Pure o Dual, pulsa «Recortar fondo para Pure (IA · 1 vez)» en el Paso 1 conservando intacto tu encuadre; además, puedes abrir cualquier ficha DF11 Pure ya existente para cambiarle cara o camiseta manteniendo su escala 1:1 exacta.',
+          'Aviso si ambas carpetas están dentro de graphics/ de FM: Si en modo Dual apuntas las dos carpetas dentro de la carpeta activa graphics/ de Football Manager, verás un recordatorio porque el juego leería el mismo #ID por orden alfabético; guarda una fuera de graphics/ si prefieres alternar packs.',
+        ],
+      },
       {
         id: 'screen-capture-hot',
         question: '¿Cómo funciona «Capturar» y el «Mini-Capturador flotante» para recortar la pantalla del PC sin tapar tu imagen ni borrar el #ID copiado?',
@@ -120,12 +132,12 @@ const SECTIONS: FAQSection[] = [
     items: [
       {
         id: 'ng-vault',
-        question: '¿Cómo sincronizo miles de caras creadas con NG_Regens sin dañar mis archivos?',
-        tags: ['ng_regens', 'live', 'shrink', 'boveda'],
+        question: '¿Cómo sincronizo miles de caras creadas con NG_Regens en formato Classic, Pure o Dual sin dañar mis archivos?',
+        tags: ['ng_regens', 'live', 'shrink', 'boveda', 'pure', 'dual'],
         bullets: [
           'Modo no destructivo: Apunta NG_Regens a D:\\DF11Studio\\NG_Regens_Vault; su config.xml nunca se renombra.',
-          'Actualización en caliente: Activa Live Disk Sync (650ms) para convertir solo los regens nuevos aplicando la camiseta ★ Titular activa de cada #ID de club.',
-          'Protección Shrink Guard: Si tu bóveda pierde más del 50% de caras por error, la sincronización se detiene antes de borrar salidas previas.',
+          'Formatos Classic, Pure o Dual en carpetas separadas: Selecciona «Classic 260×310», «Pure 220×276» o «Dual (Ambas)» para generar una o ambas salidas a la vez con su propio config.xml y aplicando la camiseta ★ Titular activa de cada #ID de club.',
+          'Actualización en caliente y Shrink Guard: Activa Live Disk Sync (650ms) para convertir solo los regens nuevos y cuenta con detención automática si tu bóveda pierde más del 50% de caras por error.',
         ],
       },
       {

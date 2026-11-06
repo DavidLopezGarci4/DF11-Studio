@@ -1,19 +1,25 @@
 # Preguntas Frecuentes y Guía de Herramientas (FAQ) — DF11 Face Studio
 
 > Guía de referencia rápida y operativa sobre todas las funciones activas en la versión oficial.
-> **Versión:** `v1.5.0` • **Actualizado:** 2026-11-05 • **Módulos Auditados:** 4/4
+> **Versión:** `v1.6.0` • **Actualizado:** 2026-11-06 • **Módulos Auditados:** 4/4
 
 ---
 
 ## Índice Rápido
-1. [Captura en Caliente, Montaje Paso a Paso, Foto Directa y Packs de Faces FM](#1-captura-en-caliente-montaje-paso-a-paso-foto-directa-y-packs-de-faces-fm)
+1. [Captura en Caliente, Montaje Paso a Paso, DF11 Pure / Dual y Packs de Faces FM](#1-captura-en-caliente-montaje-paso-a-paso-df11-pure--dual-y-packs-de-faces-fm)
 2. [Extractor de Caras y Zona de Corte](#2-extractor-de-caras-y-zona-de-corte)
 3. [Extractor de Camisetas, Plantilla / Staff y #ID de Clubes](#3-extractor-de-camisetas-plantilla--staff-y-id-de-clubes)
 4. [Sincronizador NG_Regens, FM27 y OneDrive](#4-sincronizador-ng_regens-fm27-y-onedrive)
 
 ---
 
-## 1. Captura en Caliente, Montaje Paso a Paso, Foto Directa y Packs de Faces FM
+## 1. Captura en Caliente, Montaje Paso a Paso, DF11 Pure / Dual y Packs de Faces FM
+
+### ¿Cómo exporto en formato DF11 Pure (`220 × 276` sin marco) o en modo Dual a dos carpetas independientes a la vez?
+* **Tres modos en el Paso 4 (`Classic`, `Pure` y `Dual`):** Selecciona **`Classic 260×310`** para la ficha tradicional con marco biselado, **`Pure 220×276`** para el modelo oficial DF11 Pure sin marco y con fondo transparente (`Alfa = 0`), o **`Dual (Ambas)`** para generar las dos versiones simultáneamente de una sola pasada.
+* **Carpetas independientes y conmutador de vista en vivo:** En modo **`Dual (Ambas)`** puedes elegir carpetas separadas para Classic y para Pure (tanto en **`1. Nuestras creaciones`** como en **`2. Pack de Faces FM`**) y alternar bajo el lienzo entre **`Vista Classic`** y **`Vista Pure`** para comprobar ambos recortes antes de exportar.
+* **Foto Directa con recorte en 1 clic y reimportación `1:1` sin pérdida:** Si cargas una imagen opaca en **`Foto Directa + Marco DF11`** y eliges Pure o Dual, el Paso 1 muestra el botón **`Recortar fondo para Pure (IA · 1 vez)`** manteniendo intacto tu encuadre; además, puedes abrir cualquier tarjeta DF11 Pure (`220 × 276 px`) en el Estudio o en los extractores conservando su escala `1:1` exacta.
+* **Aviso de prioridad en `graphics/` de Football Manager:** Si en modo Dual apuntas ambas carpetas dentro del árbol activo `graphics/` de Football Manager, la app muestra un aviso preventivo recordando que el juego resuelve el mismo `#ID` por orden alfabético de carpetas.
 
 ### ¿Cómo funciona «Capturar» y el «Mini-Capturador flotante» para recortar la pantalla del PC sin tapar tu imagen ni borrar el #ID copiado?
 * **Mini-Capturador flotante (pantalla despejada):** Pulsa el icono de ventana flotante situado a la derecha de **`Capturar`** (o elige **`Mini-Capturador flotante`** en el menú `▾`) para ocultar la aplicación principal y dejar únicamente una pequeña barra flotante con **`Capturar`**, **`Foto`**, **`Cara`**, **`Camiseta`**, **`PNG`** y el botón **`📌`** (fijar barra para encadenar varias capturas seguidas sin desplegar el Estudio).
@@ -66,10 +72,10 @@
 
 ## 4. Sincronizador NG_Regens, FM27 y OneDrive
 
-### ¿Cómo sincronizo miles de caras creadas con NG_Regens sin dañar mis archivos?
+### ¿Cómo sincronizo miles de caras creadas con NG_Regens en formato Classic, Pure o Dual sin dañar mis archivos?
 * **Modo no destructivo:** Apunta NG_Regens a `D:\DF11Studio\NG_Regens_Vault`; la app lee la bóveda sin renombrar ni alterar su `config.xml` original.
-* **Actualización en caliente con plantilla titular:** Activa `Live Disk Sync (650ms)` en `Sincronizador NG_Regens` para convertir solo los regens nuevos hacia `000_DF11_Regens_Override` aplicando la camiseta `★ Titular activa` de `Plantilla` de cada `#ID` de club.
-* **Protección Shrink Guard:** Si un archivo se trunca por accidente a menos de la mitad, la sincronización automática se detiene para proteger tu partida.
+* **Formatos Classic, Pure o Dual en carpetas independientes:** Elige **`Classic 260×310`** (`000_DF11_Regens_Override`), **`Pure 220×276`** (`000_DF11_Pure_Override`) o **`Dual (Ambas)`** para sincronizar una o las dos variantes a la vez vistiendo la camiseta `★ Titular activa` de `Plantilla` de cada `#ID` de club y manteniendo cada `config.xml` sincronizado.
+* **Actualización en caliente y Shrink Guard:** Activa `Live Disk Sync (650ms)` en `Sincronizador NG_Regens` para convertir solo los regens nuevos y cuenta con detención automática si un archivo se trunca por accidente a menos de la mitad.
 
 ### ¿Cómo evito que OneDrive llene mi disco C: con gráficos de Football Manager 2027?
 * **Steam y Epic Games:** Copia el parámetro `--user_data_location="D:\FM27 Data"` desde el aviso superior y pégalo en Parámetros de lanzamiento del juego.

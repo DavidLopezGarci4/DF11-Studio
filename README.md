@@ -1,6 +1,6 @@
-# DF11 Face Studio (`v1.5.0`)
+# DF11 Face Studio (`v1.6.0`)
 
-Estudio fotográfico en **una sola vista sin scroll exterior (`100vh`)** con **captura nativa de pantalla en caliente (`✂ Capturar` cero-portapapeles)**, montaje paso a paso en **4 capas** (`260 × 310 px`), modo instantáneo **Foto Directa + Marco DF11**, mejora de **Calidad óptica 100% offline y 0% IA**, edición de fichas de **Packs de Faces FM** y sincronizador no destructivo `NG_Regens` para **Football Manager (FM24 / FM27)** en Windows PC.
+Estudio fotográfico en **una sola vista sin scroll exterior (`100vh`)** con soporte nativo para **DF11 Classic (`260 × 310 px` con marco)**, **DF11 Pure (`220 × 276 px` sin marco, `Alpha = 0`)** y **Exportación Dual simultánea en carpetas independientes**, **captura nativa de pantalla en caliente (`✂ Capturar` + Mini-Capturador flotante cero-portapapeles)**, modo instantáneo **Foto Directa + Marco DF11**, mejora de **Calidad óptica 100% offline y 0% IA**, edición `1:1` de fichas de **Packs de Faces FM** y sincronizador no destructivo `NG_Regens` para **Football Manager (FM24 / FM27)** en Windows PC.
 
 ---
 
@@ -20,13 +20,13 @@ Estudio fotográfico en **una sola vista sin scroll exterior (`100vh`)** con **c
     - **`Modo Capas (Cara + Camiseta)`**: Movimiento con ratón, pad cardinal o flechas (`←` `↑` `↓` `→`), controles exactos de **`Zoom`** y **`Cuello`** con cuadro numérico + flechas arriba/abajo (`±1%`), **engrosamiento progresivo real del cuello** en `OKLab` y edición directa de fichas ya montadas del Pack de Faces FM (*cambiar camiseta* o *cambiar cara conservando su camiseta*).
   - *Paso 2 · Camiseta Plantilla*: Pestañas limpias **`Plantilla`** (jugadores) y **`Staff`** (cuerpo técnico / trajes), buscador instantáneo, asignación de `#ID` numérico de club y temporada, insignia `★ Titular activa` y gestión completa de `tshirt_templates`.
   - *Paso 3 · Fondo*: Blanco Estudio DF11 por defecto, transparente, presets con bokeh o extracción automática del fondo limpio de la foto.
-  - *Paso 4 · Marco Maestro DF11, Calidad Óptica y Exportación*: Regulador **`Calidad óptica` (`0%–100%`)** basado en óptica matemática pura **100% offline y sin IA** (`WGIF` en `OKLab` + remuestreo subpíxel en luz lineal + deblocking JPEG `8×8`), doble destino (**1. Nuestras creaciones** o **2. Pack de Faces FM** renombrando al `<ID>.png` original y actualizando `config.xml`) y anillo exterior `Alpha = 0` garantizado.
+  - *Paso 4 · Marco Maestro DF11, Formato Classic / Pure / Dual y Exportación*: Selector **`Classic 260×310` | `Pure 220×276` | `Dual (Ambas)`**, conmutador en vivo **`Vista Classic | Vista Pure`**, regulador **`Calidad óptica` (`0%–100%`)** basado en óptica matemática pura **100% offline y sin IA** (`WGIF` en `OKLab` + remuestreo subpíxel en luz lineal + deblocking JPEG `8×8`), doble destino (**1. Nuestras creaciones** o **2. Pack de Faces FM**) con carpetas independientes Classic/Pure, guardado atómico en 2 fases con rollback y actualización segura de `config.xml`.
 - **Extraer Cara**: Aísla cabeza y cuello con control de zona de corte y guarda caras reutilizables en tu biblioteca local.
 - **Extraer Camiseta (`2× SSAA`)**: Encuadre previo sobre el lienzo `260 × 310 px` con rueda, arrastre y `Deshacer / Rehacer`, clasificación **`Plantilla` | `Staff`**, extracción super-muestreada `520 × 620 -> 260 × 310` con ribete de cuello `OKLab` y **Nitidez textil**, vinculación a cualquier `#ID` de club de Football Manager y gestión multi-temporada.
 
 ### 2. Sincronizador `NG_Regens` & `FM27` (`[ Sincronizador NG_Regens ]`)
 - **Bóveda Intacta**: Lee `D:\DF11Studio\NG_Regens_Vault\` en modo estricto de solo lectura (cero `.bak`, cero mutación de `NG_Regens`).
-- **Salida Prioritaria**: Escribe en `000_DF11_Regens_Override` usando 8 hilos paralelos, aplicando automáticamente la **camiseta titular activa (`★`)** de `Plantilla` asociada al `#ID` del club del regen, vigilancia `Live Disk Sync (650ms)` y protección `Shrink Guard (50%)`.
+- **Salida Prioritaria Classic, Pure o Dual**: Escribe hacia `000_DF11_Regens_Override` (`260 × 310`), `000_DF11_Pure_Override` (`220 × 276`) o **ambas carpetas a la vez (`Dual`)** usando 8 hilos paralelos sobre una única inferencia por regen, vistiendo la **camiseta titular activa (`★`)** de `Plantilla` asociada al `#ID` del club, con `Live Disk Sync (650ms)`, `Shrink Guard (50%)` y detección de colisión de `config.xml` bajo `graphics/`.
 - **Centinela OneDrive & Disco**: Detecta carpetas bajo OneDrive y ofrece el argumento `--user_data_location="D:\FM27 Data"` para **Steam/Epic** y la guía de desvinculación de carpeta para **Xbox / Game Pass**.
 
 ---

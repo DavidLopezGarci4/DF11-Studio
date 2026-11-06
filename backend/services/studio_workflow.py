@@ -13,12 +13,21 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from backend.core.compositor import render_df11_card
+from backend.core.compositor import (
+    DF11_HEIGHT,
+    DF11_WIDTH,
+    SingleCardVariant,
+    is_df11_pure_size,
+    render_df11_card,
+    render_df11_pure_card,
+    unfeather_pure_perimeter_rgba,
+)
 from backend.core.dsp import (
     FitMode,
     apply_oklab_harmonize_params,
     compute_effective_scale,
     compute_oklab_harmonize_params,
+    enhance_df11_pure_optics,
     resample_linear_subpixel_rgba,
 )
 from backend.core.fm_config import VALID_FM_UID_RE
@@ -30,6 +39,7 @@ from backend.services.head_neck import (
     HeadNeckAsset,
     _harmonize_melanin_safe,
     compose_modular_df11,
+    compose_modular_subject_rgba,
     extract_clean_head_and_neck,
     fit_head_to_shirt_template,
     list_face_library_files,
@@ -216,6 +226,18 @@ class ModularWorkflowSession:
         g = load_guarded_image(raw_bytes)
         if _has_df11_outer_ring(g.image):
             prep_im, prep_precut = self._extract_direct_df11_inner_crop(g.image)
+        elif is_df11_pure_size(g.image.size):
+            p_alpha = np.asarray(g.image.convert("RGBA"), dtype=np.uint8)[:, :, 3]
+            is_pure_cut = bool(
+                g.is_pre_cutout or (int(p_alpha[:55, :20].max()) == 0 and int(p_alpha[:55, -20:].max()) == 0)
+            )
+            if is_pure_cut:
+                unfeathered = unfeather_pure_perimeter_rgba(g.image)
+                win = Image.new("RGBA", (224, 278), (0, 0, 0, 0))
+                win.paste(unfeathered, (2, 1))
+                prep_im, prep_precut = win, True
+            else:
+                prep_im, prep_precut = g.image, False
         else:
             prep_im, prep_precut = g.image, g.is_pre_cutout
         harm_params = compute_oklab_harmonize_params(prep_im)
@@ -235,6 +257,8 @@ class ModularWorkflowSession:
             "offsetY": 0.0,
             "clampPan": clamp_pan,
         }
+        if not prep_precut:
+            comp_params["previewVariant"] = "classic"
         w, h = prep_im.size
         return {
             "directPhotoId": did,
@@ -246,6 +270,57 @@ class ModularWorkflowSession:
             "isPreCutout": prep_precut,
             "clampPan": clamp_pan,
             "autoFit": {"scale": 1.0, "offsetX": 0.0, "offsetY": 0.0, "neckFill": 1.0},
+            "previewDataUrl": _png_data_url(self.compose_step_card(comp_params, custom_bg=custom_bg)),
+        }
+
+    def cutout_direct_photo_for_pure(
+        self,
+        direct_photo_id: str,
+        extra_params: dict[str, Any] | None = None,
+        custom_bg: Image.Image | None = None,
+    ) -> dict[str, Any]:
+        """Explicit 1-click user-triggered BiRefNet background removal cached on the Direct Photo source."""
+        entry = self.get_direct_photo(direct_photo_id)
+        if entry is None:
+            raise ValueError("La foto directa activa ya no está en memoria; vuelve a cargarla.")
+        raw_im, is_precut, label, _old_harm = entry
+        w, h = raw_im.size
+        prev_scale = _finite_float((extra_params or {}).get("scale", 1.0), 1.0, 0.08, 8.0)
+        prev_ox = _finite_float((extra_params or {}).get("offsetX", 0.0), 0.0, -2000.0, 2000.0)
+        prev_oy = _finite_float((extra_params or {}).get("offsetY", 0.0), 0.0, -2000.0, 2000.0)
+        if not is_precut:
+            from backend.services.vision import remove_background_birefnet
+
+            cut_im = remove_background_birefnet(raw_im)
+            harm_params = compute_oklab_harmonize_params(cut_im)
+            with self._lock:
+                self._direct_photos[direct_photo_id] = (cut_im, True, label, harm_params)
+                self._direct_photos.move_to_end(direct_photo_id)
+            out_im = cut_im
+            w, h = out_im.size
+            base_cover = max(224.0 / max(1, w), 278.0 / max(1, h))
+            base_contain = min(224.0 / max(1, w), 278.0 / max(1, h))
+            next_scale = round(float(np.clip(prev_scale * (base_cover / max(base_contain, 1e-6)), 0.35, 3.0)), 4)
+        else:
+            out_im = raw_im
+            next_scale = prev_scale
+        comp_params = {
+            **(extra_params or {}),
+            "step1Mode": "direct_photo",
+            "directPhotoId": direct_photo_id,
+            "scale": next_scale,
+            "offsetX": prev_ox,
+            "offsetY": prev_oy,
+            "clampPan": False,
+        }
+        return {
+            "directPhotoId": direct_photo_id,
+            "label": label,
+            "width": w,
+            "height": h,
+            "isPreCutout": True,
+            "clampPan": False,
+            "autoFit": {"scale": next_scale, "offsetX": prev_ox, "offsetY": prev_oy, "neckFill": 1.0},
             "previewDataUrl": _png_data_url(self.compose_step_card(comp_params, custom_bg=custom_bg)),
         }
 
@@ -546,7 +621,7 @@ class ModularWorkflowSession:
         w, h = g.image.size
         stem = Path(file_name).stem if file_name else "Camiseta_Club"
         sug_vp = {"zoom": 1.0, "panX": 0.0, "panY": 0.0}
-        if auto_torso_frame and (w, h) != (260, 310):
+        if auto_torso_frame and (w, h) != (260, 310) and not is_df11_pure_size((w, h)):
             from backend.services.vision import detect_face_pose
 
             if detect_face_pose(g.image) is None:
@@ -866,10 +941,13 @@ class ModularWorkflowSession:
         fit = fit_head_to_shirt_template(asset, use_collar)
         return {"scale": fit.scale, "offsetX": fit.offset_x, "offsetY": fit.offset_y, "neckFill": fit.neck_fill}
 
-    def compose_step_card(self, p: dict[str, Any], custom_bg: Image.Image | None = None) -> Image.Image:
+    def _build_step_subject_rgba(
+        self,
+        p: dict[str, Any],
+        require_alpha_for_pure: bool = False,
+    ) -> Image.Image | None:
+        """Build the unified 260x310 frame-free Alpha=0 subject (with WGIF applied once) for Classic, Pure, or Dual."""
         step1_mode = str(p.get("step1Mode", "modular")).strip().lower()
-        bg_mode = p.get("bgMode", "white_df11")
-        bg_blur = _finite_float(p.get("bgBlur", 0.0), 0.0, 0.0, 24.0)
         scale = _finite_float(p.get("scale", 1.0), 1.0, 0.10, 4.0)
         ox = _finite_float(p.get("offsetX", 0.0), 0.0, -2000.0, 2000.0)
         oy = _finite_float(p.get("offsetY", 0.0), 0.0, -2000.0, 2000.0)
@@ -881,8 +959,12 @@ class ModularWorkflowSession:
             direct_id = str(p.get("directPhotoId", "")).strip()
             entry = self.get_direct_photo(direct_id) if direct_id else None
             if entry is None:
-                return render_df11_card(None, bg_mode=bg_mode, bg_custom_rgba=custom_bg, bg_blur=bg_blur)
+                return None
             raw_im, is_precut, _lbl, harm_params = entry
+            if require_alpha_for_pure and not is_precut:
+                raise ValueError(
+                    "En Foto Directa la imagen aún tiene fondo opaco. Pulsa «Recortar fondo para Pure (IA · 1 vez)» o sube un PNG sin fondo antes de exportar DF11 Pure."
+                )
             fit_mode: FitMode = "contain" if is_precut else "cover"
             clamp_pan = bool(p.get("clampPan", not is_precut))
             eff_s = compute_effective_scale(raw_im.width, raw_im.height, scale, fit_mode)
@@ -897,18 +979,14 @@ class ModularWorkflowSession:
             placed_im = Image.fromarray(placed_arr, mode="RGBA")
             if harmonize:
                 placed_im = apply_oklab_harmonize_params(placed_im, harm_params)
-            return render_df11_card(
-                portrait_rgba=placed_im,
-                portrait_offset=(0.0, 0.0),
-                portrait_scale=1.0,
-                bg_mode=bg_mode,
-                bg_custom_rgba=custom_bg,
-                bg_blur=bg_blur,
-                enhance_quality=enhance_q,
-                fit_mode="raw",
-                clamp_to_inner=False,
-                upscale_hint=max(1.0, eff_s),
-            )
+            if enhance_q > 1e-3:
+                enh_arr = enhance_df11_pure_optics(
+                    np.asarray(placed_im, dtype=np.uint8),
+                    amount=enhance_q,
+                    upscale_hint=max(1.0, eff_s),
+                )
+                placed_im = Image.fromarray(enh_arr, mode="RGBA")
+            return placed_im
 
         head_id = str(p.get("headAssetId", "")).strip()
         asset = self.get_head_asset(head_id) if head_id else None
@@ -916,7 +994,7 @@ class ModularWorkflowSession:
 
         if wear_mode in ("club", "staff_polo", "staff_suit"):
             if asset is None:
-                return render_df11_card(None, bg_mode=bg_mode, bg_custom_rgba=custom_bg, bg_blur=bg_blur)
+                return None
             cid = str(p.get("clubId", "1736"))
             base = resolve_club_kit(cid, db_path=self.db_path)
             if p.get("customKitDirty"):
@@ -930,30 +1008,76 @@ class ModularWorkflowSession:
             if harmonize:
                 src_im = Image.fromarray(_harmonize_melanin_safe(np.asarray(src_im)), mode="RGBA")
             dressed = dress_or_frame_portrait(src_im, kit_mode=wear_mode, kit_spec=kit)  # type: ignore[arg-type]
-            # Convert asset-space (scale, ox, oy) into relative 260x310 DF11 stage space so switching wearMode never shrinks/blows up
             base_fit = fit_head_to_shirt_template(asset, DEFAULT_DF11_COLLAR)
             rel_scale = float(np.clip(scale / max(base_fit.scale, 1e-4), 0.35, 2.2))
             rel_ox = ox - base_fit.offset_x
             rel_oy = oy - base_fit.offset_y
-            return render_df11_card(
-                portrait_rgba=dressed,
-                portrait_offset=(rel_ox, rel_oy),
-                portrait_scale=rel_scale,
-                bg_mode=bg_mode,
-                bg_custom_rgba=custom_bg,
-                bg_blur=bg_blur,
-                enhance_quality=enhance_q,
+            placed_arr = resample_linear_subpixel_rgba(
+                dressed,
+                zoom=rel_scale,
+                pan_x=rel_ox,
+                pan_y=rel_oy,
+                fit_mode="raw",
+                clamp_to_inner=False,
+                dst_size=(DF11_WIDTH, DF11_HEIGHT),
             )
+            if enhance_q > 1e-3:
+                placed_arr = enhance_df11_pure_optics(placed_arr, amount=enhance_q, upscale_hint=max(1.0, rel_scale))
+            return Image.fromarray(placed_arr, mode="RGBA")
 
         shirt_im, collar = self._resolve_shirt_layer(str(p.get("templateId", "")).strip()) if wear_mode == "template" else (None, None)
+        if asset is None and shirt_im is None:
+            return None
         fit = HeadFitParams(scale=scale, offset_x=ox, offset_y=oy, neck_fill=neck_fill, harmonize=harmonize)
-        return compose_modular_df11(
+        return compose_modular_subject_rgba(
             head_asset=asset,
             shirt_rgba=shirt_im,
             collar=collar,
             fit=fit,
+            enhance_quality=enhance_q,
+        )
+
+    def compose_step_card(
+        self,
+        p: dict[str, Any],
+        custom_bg: Image.Image | None = None,
+        variant: SingleCardVariant | None = None,
+    ) -> Image.Image:
+        eff_variant: SingleCardVariant = (
+            "pure" if str(variant or p.get("previewVariant") or "classic").strip().lower() == "pure" else "classic"
+        )
+        subject_im = self._build_step_subject_rgba(p, require_alpha_for_pure=(eff_variant == "pure"))
+        if eff_variant == "pure":
+            return render_df11_pure_card(subject_im)
+        bg_mode = p.get("bgMode", "white_df11")
+        bg_blur = _finite_float(p.get("bgBlur", 0.0), 0.0, 0.0, 24.0)
+        return render_df11_card(
+            portrait_rgba=subject_im,
+            portrait_offset=(0.0, 0.0),
+            portrait_scale=1.0,
             bg_mode=bg_mode,
             bg_custom_rgba=custom_bg,
             bg_blur=bg_blur,
-            enhance_quality=enhance_q,
+            enhance_quality=0.0,
         )
+
+    def compose_step_dual_cards(
+        self,
+        p: dict[str, Any],
+        custom_bg: Image.Image | None = None,
+    ) -> tuple[Image.Image, Image.Image]:
+        """Single-Subject Dual-Sink: build subject_260x310 once and emit (classic_260x310, pure_220x276) in < 2ms."""
+        subject_im = self._build_step_subject_rgba(p, require_alpha_for_pure=True)
+        bg_mode = p.get("bgMode", "white_df11")
+        bg_blur = _finite_float(p.get("bgBlur", 0.0), 0.0, 0.0, 24.0)
+        classic_im = render_df11_card(
+            portrait_rgba=subject_im,
+            portrait_offset=(0.0, 0.0),
+            portrait_scale=1.0,
+            bg_mode=bg_mode,
+            bg_custom_rgba=custom_bg,
+            bg_blur=bg_blur,
+            enhance_quality=0.0,
+        )
+        pure_im = render_df11_pure_card(subject_im)
+        return classic_im, pure_im

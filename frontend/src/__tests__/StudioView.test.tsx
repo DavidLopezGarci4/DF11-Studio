@@ -1560,4 +1560,209 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       delete window.pywebview;
     }
   });
+
+  it('supports DF11 Pure (220x276), Dual independent folder export, and explicit 1-click Direct Photo cutout without implicit AI', async () => {
+    const calls: Array<{ fn: string; args: unknown[] }> = [];
+    window.pywebview = {
+      api: {
+        list_shirt_templates: async () => [
+          {
+            templateId: 'Caucasian0',
+            filename: 'Caucasian0.png',
+            displayName: 'Blanca Real',
+            category: 'player',
+            clubId: '1736',
+            collarWidth: 79,
+            apexY: 229,
+            thumbDataUrl: ONE_PX_PNG,
+          },
+        ],
+        list_saved_faces: async () => [
+          {
+            faceId: 'face_saved_1',
+            filename: 'face_saved_1.png',
+            name: 'Pedri',
+            collarWidth: 78,
+            apexY: 228,
+            thumbDataUrl: ONE_PX_PNG,
+          },
+        ],
+        load_saved_face: async (...args: unknown[]) => {
+          calls.push({ fn: 'load_saved_face', args });
+          return {
+            headAssetId: 'head-saved-1',
+            name: 'Pedri',
+            isPreCutout: true,
+            autoFit: { scale: 1.0, offsetX: 0, offsetY: 0, neckFill: 1.0 },
+            previewDataUrl: ONE_PX_PNG,
+          };
+        },
+        set_export_variant: async (...args: unknown[]) => {
+          calls.push({ fn: 'set_export_variant', args });
+          return { exportVariant: args[0] };
+        },
+        render_modular_preview: async (...args: unknown[]) => {
+          calls.push({ fn: 'render_modular_preview', args });
+          return { previewDataUrl: ONE_PX_PNG };
+        },
+        choose_directory: async (...args: unknown[]) => {
+          calls.push({ fn: 'choose_directory', args });
+          const kind = args[0];
+          if (kind === 'facepack') {
+            return {
+              path: 'D:\\FM27\\graphics\\DF11_Classic',
+              fmFacepackCollision: false,
+            };
+          }
+          if (kind === 'facepack_pure') {
+            return {
+              path: 'D:\\FM27\\graphics\\DF11_Pure',
+              fmFacepackCollision: true,
+            };
+          }
+          return null;
+        },
+        pick_direct_photo_source: async (...args: unknown[]) => {
+          calls.push({ fn: 'pick_direct_photo_source', args });
+          return {
+            directPhotoId: 'direct-opaque-1',
+            fileName: 'Retrato_Opaco.jpg',
+            label: 'Retrato_Opaco',
+            width: 800,
+            height: 600,
+            isPreCutout: false,
+            clampPan: true,
+            autoFit: { scale: 1.0, offsetX: 0, offsetY: 0 },
+            previewDataUrl: ONE_PX_PNG,
+          };
+        },
+        cutout_direct_photo_for_pure: async (...args: unknown[]) => {
+          calls.push({ fn: 'cutout_direct_photo_for_pure', args });
+          return {
+            directPhotoId: 'direct-opaque-1',
+            fileName: 'Retrato_Opaco.jpg',
+            label: 'Retrato_Opaco',
+            width: 800,
+            height: 600,
+            isPreCutout: true,
+            clampPan: false,
+            autoFit: { scale: 1.48, offsetX: 0, offsetY: 0 },
+            previewDataUrl: ONE_PX_PNG,
+          };
+        },
+        export_modular_card: async (...args: unknown[]) => {
+          calls.push({ fn: 'export_modular_card', args });
+          const p = (args[0] ?? {}) as Record<string, unknown>;
+          if (p.exportVariant === 'dual') {
+            return {
+              savedPath: 'D:\\FM27\\graphics\\DF11_Classic\\29184012.png',
+              savedPurePath: 'D:\\FM27\\graphics\\DF11_Pure\\29184012.png',
+              exportVariant: 'dual',
+              fmGraphicsCollision: true,
+            };
+          }
+          return {
+            savedPurePath: 'D:\\DF11Studio\\Exports\\000_DF11_Pure_Override\\Retrato_Opaco.png',
+            exportVariant: 'pure',
+            fmGraphicsCollision: false,
+          };
+        },
+      },
+    };
+
+    try {
+      render(
+        <StudioView
+          clubs={CLUBS}
+          exportDir="D:\\DF11Studio\\Exports"
+          exportPureDir="D:\\DF11Studio\\Exports\\000_DF11_Pure_Override"
+          onExportDirChange={() => {}}
+          initialJump={null}
+        />,
+      );
+
+      const savedFaceBtn = await screen.findByTitle('Cargar Pedri');
+      fireEvent.click(savedFaceBtn);
+      expect(await screen.findByAltText('Previsualización DF11 260x310')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^JPG$/i })).toBeInTheDocument();
+
+      // 1. Switch to Pure 220x276: hides JPG, renders 220x276 inset inside 260x310 stage, requests pure preview
+      fireEvent.click(screen.getByRole('button', { name: /Pure 220×276/i }));
+      expect(screen.queryByRole('button', { name: /^JPG$/i })).not.toBeInTheDocument();
+      expect(screen.getByText(/Pure: Alfa = 0 \(sin fondo\)/i)).toBeInTheDocument();
+      const pureImg = await screen.findByAltText('Previsualización DF11 Pure 220x276');
+      expect(pureImg).toHaveClass('left-[20px]', 'top-[17px]', 'w-[220px]', 'h-[276px]');
+      await waitFor(() =>
+        expect(
+          calls.some(
+            (c) =>
+              c.fn === 'render_modular_preview' &&
+              (c.args[0] as Record<string, unknown>)?.previewVariant === 'pure',
+          ),
+        ).toBe(true),
+      );
+
+      // 2. Switch to Dual (Ambas): exposes Vista Classic | Vista Pure toggle and independent folder pickers
+      fireEvent.click(screen.getByRole('button', { name: /Dual \(Ambas\)/i }));
+      expect(screen.getByText(/Aplica a Classic · Pure siempre Alfa = 0/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Vista Classic/i }));
+      expect(await screen.findByAltText('Previsualización DF11 260x310')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Vista Pure/i }));
+      expect(await screen.findByAltText('Previsualización DF11 Pure 220x276')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /Pack de Faces FM/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Elegir carpeta Pack Faces Classic/i }));
+      await waitFor(() => expect(calls.some((c) => c.fn === 'choose_directory' && c.args[0] === 'facepack')).toBe(true));
+      fireEvent.click(screen.getByRole('button', { name: /Elegir carpeta Pack Faces Pure/i }));
+      await waitFor(() =>
+        expect(calls.some((c) => c.fn === 'choose_directory' && c.args[0] === 'facepack_pure')).toBe(true),
+      );
+      expect(await screen.findByText(/Ambas carpetas cuelgan de/i)).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText(/ID Football Manager/i), { target: { value: '29184012' } });
+      fireEvent.click(screen.getByRole('button', { name: /Exportar DF11 Dual/i }));
+      await waitFor(() => expect(calls.filter((c) => c.fn === 'export_modular_card')).toHaveLength(1));
+      expect(calls.find((c) => c.fn === 'export_modular_card')?.args[0]).toMatchObject({
+        uid: '29184012',
+        exportTarget: 'facepack',
+        exportVariant: 'dual',
+        outDir: 'D:\\FM27\\graphics\\DF11_Classic',
+        outPureDir: 'D:\\FM27\\graphics\\DF11_Pure',
+      });
+      expect(
+        await screen.findByText(
+          /Guardado Dual → Classic: D:\\FM27\\graphics\\DF11_Classic\\29184012\.png · Pure: D:\\FM27\\graphics\\DF11_Pure\\29184012\.png/i,
+        ),
+      ).toBeInTheDocument();
+
+      // 3. Direct Photo opaque in Pure mode: 0% implicit AI on load, explicit 1-click cached cutout enables Pure export
+      fireEvent.click(screen.getByRole('button', { name: /1\. Nuestras creaciones/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Pure 220×276/i }));
+      fireEvent.change(screen.getByLabelText(/ID Football Manager/i), { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: /Foto Directa \+ Marco DF11/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Subir foto directa/i }));
+
+      expect(await screen.findByText(/Activa: Retrato_Opaco/i)).toBeInTheDocument();
+      expect(screen.getByAltText('Previsualización DF11 260x310')).toBeInTheDocument();
+      expect(calls.filter((c) => c.fn === 'cutout_direct_photo_for_pure')).toHaveLength(0);
+
+      const cutoutBtn = screen.getByRole('button', { name: /Recortar fondo para Pure \(IA · 1 vez\)/i });
+      expect(cutoutBtn).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /Exportar DF11 Pure/i }));
+      expect(await screen.findByText(/En Foto Directa la imagen aún tiene fondo opaco/i)).toBeInTheDocument();
+      expect(calls.filter((c) => c.fn === 'export_modular_card')).toHaveLength(1);
+
+      fireEvent.click(cutoutBtn);
+      await waitFor(() => expect(calls.filter((c) => c.fn === 'cutout_direct_photo_for_pure')).toHaveLength(1));
+      expect(await screen.findByAltText('Previsualización DF11 Pure 220x276')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Recortar fondo para Pure \(IA · 1 vez\)/i })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /Exportar DF11 Pure/i }));
+      await waitFor(() => expect(calls.filter((c) => c.fn === 'export_modular_card')).toHaveLength(2));
+      expect(await screen.findByText(/Guardado Pure: D:\\DF11Studio\\Exports\\000_DF11_Pure_Override\\Retrato_Opaco\.png/i)).toBeInTheDocument();
+    } finally {
+      delete window.pywebview;
+    }
+  });
 });

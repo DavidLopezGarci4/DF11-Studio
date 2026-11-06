@@ -40,6 +40,18 @@ def safe_ntfs_replace(src: Path, dst: Path, retries: int = 5) -> None:
             time.sleep(0.02 * (2**attempt))
 
 
+def detect_fm_graphics_collision(dir_a: Path | None, dir_b: Path | None) -> bool:
+    """Return True if two distinct folders share a common Football Manager 'graphics' ancestor directory."""
+    if dir_a is None or dir_b is None:
+        return False
+    ra, rb = dir_a.resolve(), dir_b.resolve()
+    if ra == rb:
+        return False
+    ancestors_a = {ra, *ra.parents}
+    shared = [p for p in (rb, *rb.parents) if p in ancestors_a]
+    return any(p.name.lower() == "graphics" for p in shared)
+
+
 def upsert_fm_config_xml(config_path: Path, uids: Iterable[str]) -> int:
     """Idempotently merge portrait mappings for uids into config.xml using atomic NTFS replace."""
     validated = list(dict.fromkeys(validate_fm_uid(u) for u in uids))

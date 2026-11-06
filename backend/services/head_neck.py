@@ -15,8 +15,21 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 import backend.services.vision as vision_mod
-from backend.core.compositor import BgMode, DF11_HEIGHT, DF11_WIDTH, premul_over, render_df11_card
-from backend.core.dsp import oklab_to_srgb, resample_linear_subpixel_rgba, srgb_to_oklab
+from backend.core.compositor import (
+    BgMode,
+    DF11_HEIGHT,
+    DF11_WIDTH,
+    is_df11_pure_size,
+    pad_pure_to_df11_canvas,
+    premul_over,
+    render_df11_card,
+)
+from backend.core.dsp import (
+    enhance_df11_pure_optics,
+    oklab_to_srgb,
+    resample_linear_subpixel_rgba,
+    srgb_to_oklab,
+)
 from backend.core.fm_config import safe_ntfs_replace
 from backend.core.paths import get_caras_prueba_dir, get_extracted_faces_dir
 from backend.services.templates import CollarProfile, IMAGE_EXTS, _has_df11_outer_ring
@@ -70,8 +83,12 @@ class HeadFitParams:
 
 
 def prepare_facepack_card_for_head_extraction(raw_rgba: Image.Image, default_is_precut: bool = False) -> tuple[Image.Image, bool]:
-    """Unframe an already-assembled 260x310 DF11 card so outer alpha=0 borders never fool pre-cutout detection."""
+    """Unframe an already-assembled 260x310 Classic or 220x276 Pure DF11 card for clean head extraction."""
     im = raw_rgba.convert("RGBA")
+    if is_df11_pure_size(im.size):
+        p_alpha = np.asarray(im, dtype=np.uint8)[:, :, 3]
+        top_clear = int(p_alpha[:55, :20].max()) == 0 and int(p_alpha[:55, -20:].max()) == 0
+        return pad_pure_to_df11_canvas(im, unfeather_edges=False), (True if top_clear else default_is_precut)
     if not _has_df11_outer_ring(im):
         return im, default_is_precut
 
@@ -629,19 +646,16 @@ def _build_directional_neck_bridge(
     return bridge, z3_soft
 
 
-def compose_modular_df11(
+def compose_modular_subject_rgba(
     head_asset: HeadNeckAsset | None,
     shirt_rgba: Image.Image | None,
     collar: CollarProfile | None,
     fit: HeadFitParams | None = None,
-    bg_mode: BgMode = "white_df11",
-    bg_custom_rgba: Image.Image | None = None,
-    bg_blur: float = 0.0,
     enhance_quality: float = 0.0,
 ) -> Image.Image:
-    """Fuse Z0(Bg) + Z1(BackCollar) + Z2(NeckBridge) + Z3(Head) + Z4(Shirt) + Z5(HairOccluders) + Z6(DF11Frame)."""
+    """Build frame-free, Alpha=0 background 260x310 subject RGBA (Z1..Z5 + optional WGIF pure-optics)."""
     if head_asset is None and shirt_rgba is None:
-        return render_df11_card(None, bg_mode=bg_mode, bg_custom_rgba=bg_custom_rgba, bg_blur=bg_blur)
+        return Image.new("RGBA", (DF11_WIDTH, DF11_HEIGHT), (0, 0, 0, 0))
 
     f = fit or HeadFitParams()
     layer2 = np.zeros((DF11_HEIGHT, DF11_WIDTH, 4), dtype=np.uint8)
@@ -720,15 +734,40 @@ def compose_modular_df11(
     elif shirt_arr is not None:
         layer2 = shirt_arr
 
+    if float(enhance_quality) > 1e-3:
+        layer2 = enhance_df11_pure_optics(layer2, amount=float(enhance_quality), upscale_hint=max(1.0, float(f.scale)))
+    return Image.fromarray(layer2, mode="RGBA")
+
+
+def compose_modular_df11(
+    head_asset: HeadNeckAsset | None,
+    shirt_rgba: Image.Image | None,
+    collar: CollarProfile | None,
+    fit: HeadFitParams | None = None,
+    bg_mode: BgMode = "white_df11",
+    bg_custom_rgba: Image.Image | None = None,
+    bg_blur: float = 0.0,
+    enhance_quality: float = 0.0,
+) -> Image.Image:
+    """Fuse Z0(Bg) + Z1(BackCollar) + Z2(NeckBridge) + Z3(Head) + Z4(Shirt) + Z5(HairOccluders) + Z6(DF11Frame)."""
+    if head_asset is None and shirt_rgba is None:
+        return render_df11_card(None, bg_mode=bg_mode, bg_custom_rgba=bg_custom_rgba, bg_blur=bg_blur)
+
+    subject_im = compose_modular_subject_rgba(
+        head_asset=head_asset,
+        shirt_rgba=shirt_rgba,
+        collar=collar,
+        fit=fit,
+        enhance_quality=enhance_quality,
+    )
     return render_df11_card(
-        portrait_rgba=Image.fromarray(layer2, mode="RGBA"),
+        portrait_rgba=subject_im,
         portrait_offset=(0.0, 0.0),
         portrait_scale=1.0,
         bg_mode=bg_mode,
         bg_custom_rgba=bg_custom_rgba,
         bg_blur=bg_blur,
-        enhance_quality=enhance_quality,
-        upscale_hint=max(1.0, float(f.scale)),
+        enhance_quality=0.0,
     )
 
 

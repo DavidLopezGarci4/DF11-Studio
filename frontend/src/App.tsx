@@ -4,7 +4,7 @@ import AboutModal from './components/AboutModal';
 import FaqModal from './components/FaqModal';
 import RegensSyncView from './components/RegensSyncView';
 import StudioView, { StudioJumpPayload, ToolTab } from './components/StudioView';
-import { BootstrapState, CaptureTarget, ClubSeed, StorageHealth, callBridge } from './lib/ipc';
+import { BootstrapState, CaptureTarget, ClubSeed, ExportVariant, StorageHealth, callBridge } from './lib/ipc';
 
 const AppArchitectureGraph = lazy(() => import('./components/AppArchitectureGraph'));
 
@@ -19,7 +19,12 @@ export default function App() {
   const [clubs, setClubs] = useState<Record<string, ClubSeed>>({});
   const [vaultDir, setVaultDir] = useState('D:\\DF11Studio\\NG_Regens_Vault');
   const [exportDir, setExportDir] = useState('D:\\DF11Studio\\Exports\\000_DF11_Regens_Override');
+  const [exportPureDir, setExportPureDir] = useState('D:\\DF11Studio\\Exports\\000_DF11_Pure_Override');
   const [facepackDir, setFacepackDir] = useState('');
+  const [facepackPureDir, setFacepackPureDir] = useState('');
+  const [exportVariant, setExportVariant] = useState<ExportVariant>('classic');
+  const [fmGraphicsCollision, setFmGraphicsCollision] = useState(false);
+  const [fmFacepackCollision, setFmFacepackCollision] = useState(false);
   const [storageHealth, setStorageHealth] = useState<StorageHealth | null>(null);
   const [liveWatching, setLiveWatching] = useState(false);
   const [studioJump, setStudioJump] = useState<StudioJumpPayload | null>(null);
@@ -47,7 +52,14 @@ export default function App() {
         if (b.clubs) setClubs(b.clubs);
         if (b.vaultDir) setVaultDir(b.vaultDir);
         if (b.exportDir) setExportDir(b.exportDir);
+        if (b.exportPureDir) setExportPureDir(b.exportPureDir);
         if (typeof b.facepackDir === 'string') setFacepackDir(b.facepackDir);
+        if (typeof b.facepackPureDir === 'string') setFacepackPureDir(b.facepackPureDir);
+        if (b.exportVariant === 'classic' || b.exportVariant === 'pure' || b.exportVariant === 'dual') {
+          setExportVariant(b.exportVariant);
+        }
+        if (typeof b.fmGraphicsCollision === 'boolean') setFmGraphicsCollision(b.fmGraphicsCollision);
+        if (typeof b.fmFacepackCollision === 'boolean') setFmFacepackCollision(b.fmFacepackCollision);
         if (b.storageHealth) setStorageHealth(b.storageHealth);
         if (typeof b.liveWatching === 'boolean') setLiveWatching(b.liveWatching);
         if (typeof b.captureHotkey === 'boolean') setCaptureHotkey(b.captureHotkey);
@@ -56,6 +68,11 @@ export default function App() {
         }
       })
       .catch(() => {});
+  }, []);
+
+  const handleExportVariantChange = useCallback((next: ExportVariant) => {
+    setExportVariant(next);
+    void callBridge('set_export_variant', next).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -133,7 +150,7 @@ export default function App() {
               DF11 Face Studio
             </span>
             <span className="text-[11px] px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 tabular-nums">
-              v{boot?.version ?? '1.5.0'}
+              v{boot?.version ?? '1.6.0'}
             </span>
           </div>
 
@@ -302,9 +319,31 @@ export default function App() {
             clubs={clubs}
             onClubsUpdated={setClubs}
             exportDir={exportDir}
+            exportPureDir={exportPureDir}
             facepackDir={facepackDir}
-            onExportDirChange={(dir, sh) => { setExportDir(dir); if (sh) setStorageHealth(sh); }}
-            onFacepackDirChange={setFacepackDir}
+            facepackPureDir={facepackPureDir}
+            exportVariant={exportVariant}
+            fmGraphicsCollision={fmGraphicsCollision}
+            fmFacepackCollision={fmFacepackCollision}
+            onExportDirChange={(dir, sh, fmCol) => {
+              setExportDir(dir);
+              if (sh) setStorageHealth(sh);
+              if (typeof fmCol === 'boolean') setFmGraphicsCollision(fmCol);
+            }}
+            onExportPureDirChange={(dir, sh, fmCol) => {
+              setExportPureDir(dir);
+              if (sh) setStorageHealth(sh);
+              if (typeof fmCol === 'boolean') setFmGraphicsCollision(fmCol);
+            }}
+            onFacepackDirChange={(dir, fmFpCol) => {
+              setFacepackDir(dir);
+              if (typeof fmFpCol === 'boolean') setFmFacepackCollision(fmFpCol);
+            }}
+            onFacepackPureDirChange={(dir, fmFpCol) => {
+              setFacepackPureDir(dir);
+              if (typeof fmFpCol === 'boolean') setFmFacepackCollision(fmFpCol);
+            }}
+            onExportVariantChange={handleExportVariantChange}
             initialJump={studioJump}
             onConsumeJump={() => setStudioJump(null)}
             toolTab={studioToolTab}
@@ -320,11 +359,24 @@ export default function App() {
             clubs={clubs}
             vaultDir={vaultDir}
             exportDir={exportDir}
+            exportPureDir={exportPureDir}
+            exportVariant={exportVariant}
+            fmGraphicsCollision={fmGraphicsCollision}
             storageHealth={storageHealth}
             liveWatch={liveWatching}
             onLiveWatchChange={setLiveWatching}
             onVaultChange={setVaultDir}
-            onExportChange={(dir, sh) => { setExportDir(dir); if (sh) setStorageHealth(sh); }}
+            onExportChange={(dir, sh, fmCol) => {
+              setExportDir(dir);
+              if (sh) setStorageHealth(sh);
+              if (typeof fmCol === 'boolean') setFmGraphicsCollision(fmCol);
+            }}
+            onExportPureChange={(dir, sh, fmCol) => {
+              setExportPureDir(dir);
+              if (sh) setStorageHealth(sh);
+              if (typeof fmCol === 'boolean') setFmGraphicsCollision(fmCol);
+            }}
+            onExportVariantChange={handleExportVariantChange}
             onJumpToStudio={(payload) => { setStudioJump(payload); setStudioToolTab('composer'); setTab('studio'); }}
           />
         )}

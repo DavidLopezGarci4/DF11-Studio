@@ -17,7 +17,13 @@ import numpy as np
 from PIL import Image, ImageFilter
 
 import backend.services.vision as vision_mod
-from backend.core.compositor import DF11_HEIGHT, DF11_WIDTH, load_df11_assets
+from backend.core.compositor import (
+    DF11_HEIGHT,
+    DF11_WIDTH,
+    is_df11_pure_size,
+    load_df11_assets,
+    pad_pure_to_df11_canvas,
+)
 from backend.core.dsp import (
     fast_tent_f32,
     linear_to_srgb_u8,
@@ -132,6 +138,8 @@ def _frame_to_df11_stage(
     sm = max(1, int(scale_mult))
     tw, th = DF11_WIDTH * sm, DF11_HEIGHT * sm
     im = raw_rgba.convert("RGBA")
+    if is_df11_pure_size(im.size):
+        im = pad_pure_to_df11_canvas(im, unfeather_edges=True)
     if sm == 1 and im.size == (tw, th) and abs(zoom_c - 1.0) < 1e-3 and abs(px_c) < 0.5 and abs(py_c) < 0.5:
         return im
     w, h = im.size
@@ -176,7 +184,15 @@ def sanitize_shirt_template_rgba(
     zoom_c, px_c, py_c = _sanitize_viewport(zoom, pan_x, pan_y)
     raw_src_rgba = raw_rgba.convert("RGBA")
     raw_src_a = np.asarray(raw_src_rgba, dtype=np.uint8)[:, :, 3]
-    is_pre_cut = (
+    is_pure_cut = (
+        is_df11_pure_size(raw_src_rgba.size)
+        and int(raw_src_a[:60, :20].max()) == 0
+        and int(raw_src_a[:60, -20:].max()) == 0
+    )
+    if is_df11_pure_size(raw_src_rgba.size):
+        raw_src_rgba = pad_pure_to_df11_canvas(raw_src_rgba, unfeather_edges=True)
+        raw_src_a = np.asarray(raw_src_rgba, dtype=np.uint8)[:, :, 3]
+    is_pre_cut = is_pure_cut or (
         raw_src_rgba.size == (DF11_WIDTH, DF11_HEIGHT)
         and int(raw_src_a[:140, :].max()) == 0
         and int((raw_src_a[:150, :18] == 0).sum()) > 2000
@@ -384,7 +400,9 @@ def sanitize_shirt_template_rgba(
     unpremul_lin_1x = np.where(a_1x[:, :, None] > 1e-4, np.clip(lin_1x / safe_a_1x, 0.0, 1.0), 0.0)
     rgb_1x = linear_to_srgb_u8(unpremul_lin_1x)
 
-    final_a = np.clip(np.round(a_1x * inner_mask_f * 255.0), 0.0, 255.0).astype(np.uint8)
+    rect_mask_f = inner_mask_f.copy()
+    rect_mask_f[260:293, 19:242] = 1.0
+    final_a = np.clip(np.round(a_1x * rect_mask_f * 255.0), 0.0, 255.0).astype(np.uint8)
     final_a[:162, :] = 0
     final_a[:, :19] = 0
     final_a[:, 242:] = 0

@@ -1,8 +1,8 @@
 {
   "appName": "DF11 Face Studio",
-  "version": "1.5.0",
-  "category": "Estudio Fotográfico Modular & Sincronizador DF11 para Football Manager",
-  "description": "Arquitectura de escritorio 100% local en cabina única sin scroll exterior: interfaz React 19 sobre WebView2 conectada sin puertos de red a un motor Python 3.12 con captura nativa PerMonitorV2 cero-portapapeles, óptica pura WGIF/OKLab sin IA, inferencia GPU DirectML opcional por capas y persistencia atómica NTFS/SQLite v4.",
+  "version": "1.6.0",
+  "category": "Estudio Fotográfico Modular & Sincronizador DF11 Classic / Pure / Dual para Football Manager",
+  "description": "Arquitectura de escritorio 100% local en cabina única sin scroll exterior: interfaz React 19 sobre WebView2 conectada sin puertos de red a un motor Python 3.12 con formatos DF11 Classic (260×310), DF11 Pure (220×276) y exportación Dual simultánea, captura PerMonitorV2 cero-portapapeles, óptica pura WGIF/OKLab sin IA, inferencia GPU DirectML opcional por capas y persistencia atómica NTFS/SQLite v4.",
   "nodes": [
     {
       "id": "desktop_shell", "label": "pywebview 6.2 + WebView2", "version": "6.2.1",
@@ -19,11 +19,11 @@
       "useCases": ["Paso 1 en Modo Capas o Foto Directa + Marco DF11 con pad ↑N ↓S ←O →E", "Paso 2 Plantilla/Staff, remix FM y Paso 4 con Calidad óptica y guardado dual"]
     },
     {
-      "id": "ipc_bridge", "label": "StudioBridge + ScreenClip Worker", "version": "1.5.0",
-      "role": "Orquestador IPC, Captura PerMonitorV2 Cero-Portapapeles y Watcher 650 ms", "category": "server_web_apps", "color": "#8b5cf6", "icon": "Workflow", "healthType": "native_bridge",
-      "computationalModel": "Fachada síncrona/asíncrona con recorte físico 1:1 por stdout sin tocar el portapapeles, caché LRU acotada, ThreadPoolExecutor(8) y observador de 650 ms.",
-      "whyChosen": "Permite recortar cualquier región multimonitor sin sobrescribir el #UID copiado en Football Manager y separa la vía 0% IA de los extractores modulares.",
-      "useCases": ["Captura en caliente hacia Foto Directa, Cara, Camiseta o PNG independiente", "Remix bidireccional de fichas FM y sincronización masiva NG_Regens"]
+      "id": "ipc_bridge", "label": "StudioBridge + ScreenClip Worker", "version": "1.6.0",
+      "role": "Orquestador IPC, Exportación Dual Atómica, Captura PerMonitorV2 y Watcher 650 ms", "category": "server_web_apps", "color": "#8b5cf6", "icon": "Workflow", "healthType": "native_bridge",
+      "computationalModel": "Fachada síncrona/asíncrona con guardado Dual 2-phase commit, recorte físico 1:1 por stdout sin tocar el portapapeles, ThreadPoolExecutor(8) y observador de 650 ms.",
+      "whyChosen": "Permite recortar cualquier región multimonitor sin sobrescribir el #UID copiado en Football Manager y exportar Classic + Pure a la vez sin archivos huérfanos.",
+      "useCases": ["Captura en caliente hacia Foto Directa, Cara, Camiseta o PNG independiente", "Exportación Dual simultánea en carpetas independientes y sincronización NG_Regens"]
     },
     {
       "id": "onnx_dml", "label": "ONNX Runtime DirectML", "version": "1.24.4",
@@ -34,13 +34,13 @@
     },
     {
       "id": "compositor_engine", "label": "Pillow 13 + Compositor DF11", "version": "13.0.0",
-      "role": "Compositor DF11 Exacto (260×310), Puente de Cuello y Marco", "category": "graphics_multimedia", "color": "#ec4899", "icon": "Layers", "healthType": "static",
-      "computationalModel": "Álgebra RGBA premultiplicada, encuadre directo cover/contain con tope de bordes y marco maestro DF11 con anillo exterior Alpha = 0.",
-      "whyChosen": "Clava el bisel y sombra oficial DF11 tanto sobre fotos directas como en montajes multicapa cabeza-cuello-camiseta.",
-      "useCases": ["Enmarcado directo DF11 y puente progresivo de cuello (0% a 150%)", "Exportación PNG 32-bit oficial o JPG 4:4:4 sin halos oscuros"]
+      "role": "Compositor DF11 Classic (260×310) & DF11 Pure (220×276)", "category": "graphics_multimedia", "color": "#ec4899", "icon": "Layers", "healthType": "static",
+      "computationalModel": "Álgebra RGBA premultiplicada, encuadre directo cover/contain y doble sumidero exacto Classic (con marco) y Pure (220×276 sin marco, Alfa = 0).",
+      "whyChosen": "Clava tanto el bisel oficial DF11 Classic como la silueta transparente DF11 Pure a partir de una única composición sin duplicar trabajo.",
+      "useCases": ["Exportación Classic 260×310, Pure 220×276 o Dual (ambas a la vez)", "Reimportación 1:1 sin pérdida de fichas Classic y Pure"]
     },
     {
-      "id": "dsp_pure_optics", "label": "Óptica Pura WGIF + OKLab", "version": "1.5.0",
+      "id": "dsp_pure_optics", "label": "Óptica Pura WGIF + OKLab", "version": "1.6.0",
       "role": "Motor DSP 100% Offline (0% IA): Luz Lineal, Deblocking y WGIF", "category": "graphics_multimedia", "color": "#10b981", "icon": "Layers", "healthType": "static",
       "computationalModel": "Filtro guiado ponderado WGIF O(1) en espacio perceptual OKLab, remuestreo Lanczos/Bicubic en luz lineal y deblocking JPEG 8×8.",
       "whyChosen": "Maximiza la nitidez real de ojos, pelo y escudos en ~4 ms sin alucinaciones de IA ni dependencias pesadas.",

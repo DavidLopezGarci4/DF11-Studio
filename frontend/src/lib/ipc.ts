@@ -1,5 +1,6 @@
 export type TemplateCategory = 'player' | 'staff';
 export type Step1Mode = 'modular' | 'direct_photo';
+export type ExportVariant = 'classic' | 'pure' | 'dual';
 export type CaptureTarget = 'direct_photo' | 'raw_face' | 'raw_shirt' | 'save_png';
 export interface SaveProfileInfo { saveId: string; displayName: string; isActive: boolean; }
 export interface ClubSeed { name: string; pattern: string; primary: string; secondary: string; collar: string; }
@@ -9,7 +10,12 @@ export interface BootstrapState {
   clubs: Record<string, ClubSeed>;
   vaultDir: string;
   exportDir: string;
+  exportPureDir?: string;
   facepackDir?: string;
+  facepackPureDir?: string;
+  exportVariant?: ExportVariant;
+  fmGraphicsCollision?: boolean;
+  fmFacepackCollision?: boolean;
   storageHealth: StorageHealth;
   hasModels: boolean;
   liveWatching?: boolean;
@@ -177,7 +183,7 @@ declare global {
 }
 
 const FALLBACK_BOOT: BootstrapState = {
-  version: '1.5.0',
+  version: '1.6.0',
   clubs: {
     '1736': { name: 'Real Madrid', pattern: 'solid', primary: '#F7F8FA', secondary: '#1E293B', collar: '#D4AF37' },
     '1708': { name: 'FC Barcelona', pattern: 'stripes', primary: '#004D98', secondary: '#A50044', collar: '#EDBB00' },
@@ -185,6 +191,8 @@ const FALLBACK_BOOT: BootstrapState = {
   },
   vaultDir: 'D:\\DF11Studio\\NG_Regens_Vault',
   exportDir: 'D:\\DF11Studio\\Exports\\000_DF11_Regens_Override',
+  exportPureDir: 'D:\\DF11Studio\\Exports\\000_DF11_Pure_Override',
+  exportVariant: 'classic',
   storageHealth: { target_path: 'D:\\DF11Studio\\Exports\\000_DF11_Regens_Override', in_onedrive: false, free_gb: 654.0, warning: false, steam_launch_arg: '--user_data_location="D:\\FM27 Data"', gamepass_guide: 'Desmarca Sports Interactive en Ajustes de OneDrive.' },
   hasModels: true,
 };
@@ -248,6 +256,7 @@ export async function callBridge<T>(method: string, ...args: unknown[]): Promise
       method === 'capture_screen_region' ||
       method === 'open_capture_addon' ||
       method === 'capture_from_addon' ||
+      method === 'cutout_direct_photo_for_pure' ||
       method.startsWith('extract_face_'))
   ) {
     throw new Error('Ejecuta DF11FaceStudio.exe para procesar imágenes con el motor nativo.');

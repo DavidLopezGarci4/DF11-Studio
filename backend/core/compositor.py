@@ -22,6 +22,15 @@ DF11_HEIGHT = 310
 INNER_X0, INNER_Y0, INNER_X1, INNER_Y1 = 19, 17, 242, 293  # 223x276 incl. AA edge
 CROWN_Y, EYES_Y, SHOULDERS_Y = 24, 112, 292
 
+DF11_PURE_WIDTH = 220
+DF11_PURE_HEIGHT = 276
+PURE_CROP_X0, PURE_CROP_Y0, PURE_CROP_X1, PURE_CROP_Y1 = 20, 17, 240, 293
+PURE_CROP_BOX = (PURE_CROP_X0, PURE_CROP_Y0, PURE_CROP_X1, PURE_CROP_Y1)
+PURE_EDGE_FEATHER_RATIO = 220.0 / 255.0
+
+CardVariant = Literal["classic", "pure", "dual"]
+SingleCardVariant = Literal["classic", "pure"]
+
 BgMode = Literal[
     "transparent",
     "white_df11",
@@ -168,18 +177,140 @@ def render_df11_card(
     return Image.fromarray(final_arr, mode="RGBA")
 
 
+def is_df11_pure_size(size: tuple[int, int]) -> bool:
+    """Return True if dimensions match official DF11 Pure (220x276 px)."""
+    return size == (DF11_PURE_WIDTH, DF11_PURE_HEIGHT)
+
+
+@lru_cache(maxsize=1)
+def _build_pure_perimeter_feather() -> np.ndarray:
+    """Symmetric 1px perimeter alpha feather matching shipped DF11 Pure FM27 megapacks (~220/255 edges, ~190/255 corners)."""
+    f = np.ones((DF11_PURE_HEIGHT, DF11_PURE_WIDTH), dtype=np.float32)
+    r = np.float32(PURE_EDGE_FEATHER_RATIO)
+    f[:, 0] *= r
+    f[:, -1] *= r
+    f[0, :] *= r
+    f[-1, :] *= r
+    return f
+
+
+def unfeather_pure_perimeter_rgba(pure_rgba: Image.Image) -> Image.Image:
+    """Idempotently invert the 1px Pure perimeter feather on opaque sleeves/bottom when re-importing a 220x276 Pure card."""
+    im = pure_rgba if pure_rgba.mode == "RGBA" else pure_rgba.convert("RGBA")
+    if im.size != (DF11_PURE_WIDTH, DF11_PURE_HEIGHT):
+        return im
+    arr = np.asarray(im, dtype=np.uint8).copy()
+    f = _build_pure_perimeter_feather()
+    edge = f < 0.999
+    a_f = arr[:, :, 3].astype(np.float32)
+    # Restore full 255 opacity where pixel matches a feathered opaque silhouette (e.g. >= 200*f)
+    restored = np.where(edge & (a_f >= 205.0 * f), np.clip(np.round(a_f / np.maximum(f, 0.5)), 0.0, 255.0), a_f)
+    arr[:, :, 3] = restored.astype(np.uint8)
+    return Image.fromarray(arr, mode="RGBA")
+
+
+def pad_pure_to_df11_canvas(pure_rgba: Image.Image, unfeather_edges: bool = False) -> Image.Image:
+    """Place a 220x276 DF11 Pure card bit-exact at (20, 17) inside a 260x310 stage (zero scale distortion)."""
+    im = unfeather_pure_perimeter_rgba(pure_rgba) if unfeather_edges else pure_rgba.convert("RGBA")
+    if im.size != (DF11_PURE_WIDTH, DF11_PURE_HEIGHT):
+        return im
+    stage = Image.new("RGBA", (DF11_WIDTH, DF11_HEIGHT), (0, 0, 0, 0))
+    stage.paste(im, (PURE_CROP_X0, PURE_CROP_Y0))
+    # Extend 1px outer sleeve columns into x=19 and x=240 when unfeathering for Classic inner window [19..241]
+    if unfeather_edges:
+        st_arr = np.asarray(stage, dtype=np.uint8).copy()
+        left_sleeve = st_arr[PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X0, 3] >= 245
+        if np.any(left_sleeve):
+            st_arr[PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X0 - 1][left_sleeve] = st_arr[
+                PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X0
+            ][left_sleeve]
+        right_sleeve = st_arr[PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X1 - 1, 3] >= 245
+        if np.any(right_sleeve):
+            st_arr[PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X1][right_sleeve] = st_arr[
+                PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X1 - 1
+            ][right_sleeve]
+        return Image.fromarray(st_arr, mode="RGBA")
+    return stage
+
+
+def _heal_pure_bottom_corners(crop_arr: np.ndarray) -> np.ndarray:
+    """Heal 6x6 bottom-corner bites and bevel darkening baked into legacy tshirt_templates by df11_inner_mask."""
+    out = crop_arr
+    # Bottom-left 7x7 corner patch: y in [269..275], x in [0..6]
+    if float(out[261:268, 1:5, 3].mean()) > 235.0 and (int(out[275, 0, 3]) < 245 or int(out[275, 1, 3]) < 250):
+        ref_l = np.median(out[262:268, 5:11, :3].reshape(-1, 3).astype(np.float32), axis=0)
+        ref_lum_l = float(ref_l.mean())
+        for x in range(7):
+            if int(out[264, min(x, 6), 3]) > 220 or int(out[264, 1, 3]) > 235:
+                col_rgb = out[269:276, x, :3].astype(np.float32)
+                col_a = out[269:276, x, 3]
+                darkened = (col_a < 250) | (col_rgb.mean(axis=-1) < ref_lum_l * 0.78)
+                out[269:276, x, :3] = np.where(darkened[:, None], np.round(ref_l).astype(np.uint8), out[269:276, x, :3])
+                out[269:276, x, 3] = 255
+
+    # Bottom-right 7x7 corner patch: y in [269..275], x in [213..219]
+    if float(out[261:268, 215:219, 3].mean()) > 235.0 and (int(out[275, 219, 3]) < 245 or int(out[275, 218, 3]) < 250):
+        ref_r = np.median(out[262:268, 209:215, :3].reshape(-1, 3).astype(np.float32), axis=0)
+        ref_lum_r = float(ref_r.mean())
+        for x in range(213, 220):
+            if int(out[264, x, 3]) > 220 or int(out[264, 218, 3]) > 235:
+                col_rgb = out[269:276, x, :3].astype(np.float32)
+                col_a = out[269:276, x, 3]
+                darkened = (col_a < 250) | (col_rgb.mean(axis=-1) < ref_lum_r * 0.78)
+                out[269:276, x, :3] = np.where(darkened[:, None], np.round(ref_r).astype(np.uint8), out[269:276, x, :3])
+                out[269:276, x, 3] = 255
+
+    # Restore y=275 interior row from df11_inner_mask's Alpha=252 up to 255 before perimeter feathering
+    mid_solid = (out[273, 7:213, 3] == 255) & (out[275, 7:213, 3] >= 230)
+    if np.any(mid_solid):
+        out[275, 7:213, 3] = np.where(mid_solid, 255, out[275, 7:213, 3])
+    return out
+
+
+def render_df11_pure_card(
+    subject_260x310: Image.Image | None,
+    enhance_quality: float = 0.0,
+    upscale_hint: float = 1.0,
+) -> Image.Image:
+    """Render an official 220x276 RGBA DF11 Pure card (Alpha=0 background, 0% frame, 1px perimeter feather)."""
+    if subject_260x310 is None:
+        return Image.new("RGBA", (DF11_PURE_WIDTH, DF11_PURE_HEIGHT), (0, 0, 0, 0))
+    im = subject_260x310 if subject_260x310.mode == "RGBA" else subject_260x310.convert("RGBA")
+    if im.size == (DF11_PURE_WIDTH, DF11_PURE_HEIGHT):
+        im = pad_pure_to_df11_canvas(im, unfeather_edges=True)
+    elif im.size != (DF11_WIDTH, DF11_HEIGHT):
+        placed = _place_portrait(im, (0.0, 0.0), 1.0, fit_mode="contain", clamp_to_inner=False)
+        im = Image.fromarray(placed, mode="RGBA")
+
+    arr_260 = np.asarray(im, dtype=np.uint8)
+    if float(enhance_quality) > 1e-3:
+        arr_260 = enhance_df11_pure_optics(arr_260, amount=float(enhance_quality), upscale_hint=max(1.0, float(upscale_hint)))
+
+    crop = arr_260[PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X0:PURE_CROP_X1].copy()
+    crop = _heal_pure_bottom_corners(crop)
+    feather = _build_pure_perimeter_feather()
+    feathered_a = np.clip(np.round(crop[:, :, 3].astype(np.float32) * feather), 0.0, 255.0).astype(np.uint8)
+    crop[:, :, 3] = feathered_a
+    crop[:, :, :3] = np.where(feathered_a[:, :, None] > 0, crop[:, :, :3], 0)
+    return Image.fromarray(crop, mode="RGBA")
+
+
 def export_df11_bytes(card_rgba: Image.Image, fmt: Literal["png", "jpg"] = "png", compress_level: int = 6) -> bytes:
-    """Encode a 260x310 DF11 card as official 32-bit RGBA PNG or 4:4:4 RGB JPEG over pure white."""
+    """Encode a 260x310 Classic or 220x276 Pure DF11 card as official 72-DPI RGBA PNG (or 4:4:4 JPEG for Classic)."""
     rgba = card_rgba.convert("RGBA")
-    if rgba.size != (DF11_WIDTH, DF11_HEIGHT):
-        rgba = rgba.resize((DF11_WIDTH, DF11_HEIGHT), Image.Resampling.LANCZOS)
+    w, h = rgba.size
+    if (w, h) not in ((DF11_WIDTH, DF11_HEIGHT), (DF11_PURE_WIDTH, DF11_PURE_HEIGHT)):
+        raise ValueError(f"Dimensiones DF11 no válidas para exportación: {w}x{h} (esperado 260x310 o 220x276).")
+    fmt_low = fmt.lower()
+    if (w, h) == (DF11_PURE_WIDTH, DF11_PURE_HEIGHT) and fmt_low != "png":
+        raise ValueError("El formato oficial DF11 Pure (220×276, fondo transparente Alpha = 0) exige exportación en PNG.")
     buf = io.BytesIO()
-    if fmt.lower() == "png":
-        rgba.save(buf, format="PNG", compress_level=compress_level)
-    elif fmt.lower() in ("jpg", "jpeg"):
-        white = np.full((DF11_HEIGHT, DF11_WIDTH, 4), 255, dtype=np.uint8)
+    if fmt_low == "png":
+        rgba.save(buf, format="PNG", compress_level=compress_level, dpi=(72, 72))
+    elif fmt_low in ("jpg", "jpeg"):
+        white = np.full((h, w, 4), 255, dtype=np.uint8)
         flat = premul_over(white, np.asarray(rgba, dtype=np.uint8))[:, :, :3]
-        Image.fromarray(flat, mode="RGB").save(buf, format="JPEG", quality=95, subsampling=0)
+        Image.fromarray(flat, mode="RGB").save(buf, format="JPEG", quality=95, subsampling=0, dpi=(72, 72))
     else:
         raise ValueError(f"Formato de exportación no soportado: {fmt}")
     return buf.getvalue()

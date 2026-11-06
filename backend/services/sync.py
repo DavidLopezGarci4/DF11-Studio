@@ -16,7 +16,7 @@ from pathlib import Path
 
 from defusedxml import ElementTree as SafeET
 
-from backend.core.compositor import BgMode, export_df11_bytes, render_df11_card
+from backend.core.compositor import BgMode, CardVariant, export_df11_bytes, render_df11_card, render_df11_pure_card
 from backend.core.fm_config import safe_ntfs_replace, upsert_fm_config_xml, validate_fm_uid
 from backend.core.image_guard import load_guarded_image
 from backend.core.paths import get_default_vault_dir
@@ -277,6 +277,27 @@ def import_squad_club_mappings(
     return len(roster_rows)
 
 
+def _parse_manifest_sigs(raw_sig: str) -> tuple[str, str]:
+    s = str(raw_sig or "")
+    if s.startswith("c=") and "||p=" in s:
+        c_part, p_part = s[2:].split("||p=", 1)
+        return c_part, p_part
+    return s, ""
+
+
+def _atomic_write_png(dst_dir: Path, uid: str, png_bytes: bytes) -> None:
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{uid}_", suffix=".tmp", dir=str(dst_dir))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(png_bytes)
+        safe_ntfs_replace(tmp_path, dst_dir / f"{uid}.png")
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+
 def _process_single_regen(
     uid: str,
     src_png: Path,
@@ -287,6 +308,11 @@ def _process_single_regen(
     bg_mode: BgMode,
     db_path: Path | None,
     club_tpl: tuple[Path, str, str] | None = None,
+    pure_out_dir: Path | None = None,
+    need_classic: bool = True,
+    need_pure: bool = False,
+    prev_c_sig: str = "",
+    prev_p_sig: str = "",
 ) -> tuple[str, int, int, str]:
     st = src_png.stat()
     guarded = load_guarded_image(src_png)
@@ -295,7 +321,7 @@ def _process_single_regen(
     if use_kit and club_tpl is not None and club_tpl[0].is_file():
         from backend.services.head_neck import (
             HeadFitParams,
-            compose_modular_df11,
+            compose_modular_subject_rgba,
             extract_clean_head_and_neck,
             fit_head_to_shirt_template,
             suggest_safe_crop_viewport,
@@ -309,35 +335,47 @@ def _process_single_regen(
         head_asset = extract_clean_head_and_neck(guarded.image, is_pre_cutout=guarded.is_pre_cutout, crop_viewport=vp)
         auto_fit = fit_head_to_shirt_template(head_asset, collar)
         fit = HeadFitParams(scale=auto_fit.scale, offset_x=auto_fit.offset_x, offset_y=auto_fit.offset_y, neck_fill=1.0, harmonize=harmonize)
-        card = compose_modular_df11(head_asset=head_asset, shirt_rgba=shirt_im, collar=collar, fit=fit, bg_mode=bg_mode)
+        subject_rgba = compose_modular_subject_rgba(head_asset=head_asset, shirt_rgba=shirt_im, collar=collar, fit=fit)
     else:
         cutout = guarded.image if guarded.is_pre_cutout else remove_background_birefnet(guarded.image)
         if harmonize:
             cutout = harmonize_df11_studio_grade(cutout)
         kit = resolve_club_kit(club_id, db_path=db_path) if use_kit and club_id else None
-        card = render_df11_card(portrait_rgba=dress_or_frame_portrait(cutout, kit_mode="club" if use_kit else "original", kit_spec=kit), bg_mode=bg_mode)
-    png_bytes = export_df11_bytes(card, fmt="png", compress_level=4)
+        subject_rgba = dress_or_frame_portrait(cutout, kit_mode="club" if use_kit else "original", kit_spec=kit)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{uid}_", suffix=".tmp", dir=str(out_dir))
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(png_bytes)
-        safe_ntfs_replace(tmp_path, out_dir / f"{uid}.png")
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
-    return (uid, st.st_mtime_ns, st.st_size, f"{club_id or ''}:{int(apply_club_kits)}:{int(harmonize)}:{bg_mode}{tpl_sig}")
+    c_sig_out = prev_c_sig
+    p_sig_out = prev_p_sig
+    if need_classic:
+        classic_card = render_df11_card(portrait_rgba=subject_rgba, bg_mode=bg_mode)
+        _atomic_write_png(out_dir, uid, export_df11_bytes(classic_card, fmt="png", compress_level=4))
+        c_sig_out = f"{club_id or ''}:{int(apply_club_kits)}:{int(harmonize)}:{bg_mode}{tpl_sig}"
+    if need_pure and pure_out_dir is not None:
+        pure_card = render_df11_pure_card(subject_rgba)
+        _atomic_write_png(pure_out_dir, uid, export_df11_bytes(pure_card, fmt="png", compress_level=4))
+        p_sig_out = f"{club_id or ''}:{int(apply_club_kits)}:{int(harmonize)}:pure{tpl_sig}"
+
+    packed_sig = f"c={c_sig_out}||p={p_sig_out}" if p_sig_out else c_sig_out
+    return (uid, st.st_mtime_ns, st.st_size, packed_sig)
 
 
 def sync_ng_regens_batch(
     vault_dir: Path, out_dir: Path, db_path: Path | None = None, apply_club_kits: bool = True, harmonize: bool = True,
     bg_mode: BgMode = "white_df11", allow_shrink: bool = False, cancel_event: threading.Event | None = None,
     progress_cb: Callable[[int, int], None] | None = None, templates_dir: Path | None = None,
+    pure_out_dir: Path | None = None, variant: CardVariant = "classic",
 ) -> SyncResult:
     from backend.core.paths import get_tshirt_templates_dir
     from backend.services.templates import sync_tshirt_templates_dir
+
+    eff_variant: CardVariant = variant if variant in ("classic", "pure", "dual") else "classic"
+    want_classic = eff_variant in ("classic", "dual")
+    want_pure = eff_variant in ("pure", "dual")
+    if want_pure and pure_out_dir is None:
+        raise ValueError("Se requiere una carpeta de salida DF11 Pure para sincronizar en modo Pure o Dual.")
+    if want_classic and want_pure and pure_out_dir is not None:
+        ra, rb = out_dir.resolve(), pure_out_dir.resolve()
+        if ra == rb or ra.is_relative_to(rb) or rb.is_relative_to(ra):
+            raise ValueError("Las carpetas de salida Classic y DF11 Pure no pueden ser la misma ni estar anidadas.")
 
     if cancel_event is not None and cancel_event.is_set():
         return SyncResult(0, 0, 0, cancelled=True)
@@ -368,7 +406,7 @@ def sync_ng_regens_batch(
     if len(prev_manifest) >= 2 and len(entries) < len(prev_manifest) * 0.5 and not allow_shrink:
         return SyncResult(len(entries), 0, 0, aborted_by_shrink_guard=True)
 
-    todo: list[tuple[str, Path, str | None, tuple[Path, str, str] | None]] = []
+    todo: list[tuple[str, Path, str | None, tuple[Path, str, str] | None, bool, bool, str, str]] = []
     skipped = 0
     for uid, src_png in entries.items():
         st, cid = src_png.stat(), squad_clubs.get(uid)
@@ -376,11 +414,21 @@ def sync_ng_regens_batch(
         if ctpl is not None and not ctpl[0].is_file():
             ctpl = None
         tpl_sig = f":tpl={ctpl[2][:10]}" if ctpl is not None else ""
-        sig = f"{cid or ''}:{int(apply_club_kits)}:{int(harmonize)}:{bg_mode}{tpl_sig}"
-        if prev_manifest.get(uid) == (st.st_mtime_ns, st.st_size, sig) and (out_dir / f"{uid}.png").is_file():
+        target_c_sig = f"{cid or ''}:{int(apply_club_kits)}:{int(harmonize)}:{bg_mode}{tpl_sig}"
+        target_p_sig = f"{cid or ''}:{int(apply_club_kits)}:{int(harmonize)}:pure{tpl_sig}"
+        prev_row = prev_manifest.get(uid)
+        if prev_row is not None and prev_row[0] == st.st_mtime_ns and prev_row[1] == st.st_size:
+            prev_c, prev_p = _parse_manifest_sigs(prev_row[2])
+        else:
+            prev_c, prev_p = "", ""
+        classic_ok = (prev_c == target_c_sig) and (out_dir / f"{uid}.png").is_file()
+        pure_ok = (pure_out_dir is not None) and (prev_p == target_p_sig) and (pure_out_dir / f"{uid}.png").is_file()
+        need_c = want_classic and not classic_ok
+        need_p = want_pure and not pure_ok
+        if not need_c and not need_p:
             skipped += 1
         else:
-            todo.append((uid, src_png, cid, ctpl))
+            todo.append((uid, src_png, cid, ctpl, need_c, need_p, prev_c if classic_ok else "", prev_p if pure_ok else ""))
 
     completed_rows: list[tuple[str, int, int, str]] = []
     failed = 0
@@ -388,8 +436,24 @@ def sync_ng_regens_batch(
     if todo:
         with ThreadPoolExecutor(max_workers=8) as pool:
             futs = {
-                pool.submit(_process_single_regen, u, p, out_dir, c, apply_club_kits, harmonize, bg_mode, db_path, ct): u
-                for u, p, c, ct in todo
+                pool.submit(
+                    _process_single_regen,
+                    u,
+                    p,
+                    out_dir,
+                    c,
+                    apply_club_kits,
+                    harmonize,
+                    bg_mode,
+                    db_path,
+                    ct,
+                    pure_out_dir,
+                    nc,
+                    np_flag,
+                    pc_sig,
+                    pp_sig,
+                ): u
+                for u, p, c, ct, nc, np_flag, pc_sig, pp_sig in todo
             }
             for idx, fut in enumerate(as_completed(futs), 1):
                 if cancel_event is not None and cancel_event.is_set():
@@ -406,9 +470,14 @@ def sync_ng_regens_batch(
     if completed_rows:
         with init_state_db(db_path) as conn:
             conn.executemany("INSERT OR REPLACE INTO regen_manifest VALUES (?, ?, ?, ?)", completed_rows)
-    exported_uids = [u for u in entries if (out_dir / f"{u}.png").is_file()]
-    if exported_uids:
-        upsert_fm_config_xml(out_dir / "config.xml", exported_uids)
+    if want_classic:
+        exported_uids = [u for u in entries if (out_dir / f"{u}.png").is_file()]
+        if exported_uids:
+            upsert_fm_config_xml(out_dir / "config.xml", exported_uids)
+    if want_pure and pure_out_dir is not None:
+        exported_pure_uids = [u for u in entries if (pure_out_dir / f"{u}.png").is_file()]
+        if exported_pure_uids:
+            upsert_fm_config_xml(pure_out_dir / "config.xml", exported_pure_uids)
     return SyncResult(len(entries), len(completed_rows), skipped, failed=failed, cancelled=cancelled)
 
 

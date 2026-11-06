@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, ArrowUpRight, Check, ClipboardPaste, Copy, FolderOpen, Play, Radio, RefreshCw, ShieldAlert, Square, Tag } from 'lucide-react';
-import { ClubSeed, StorageHealth, callBridge } from '../lib/ipc';
+import { ClubSeed, ExportVariant, StorageHealth, callBridge } from '../lib/ipc';
 import { StudioJumpPayload } from './StudioView';
 
 interface RegenRow { uid: string; clubId: string; }
@@ -10,16 +10,34 @@ interface Props {
   clubs: Record<string, ClubSeed>;
   vaultDir: string;
   exportDir: string;
+  exportPureDir?: string;
+  exportVariant?: ExportVariant;
+  fmGraphicsCollision?: boolean;
   storageHealth: StorageHealth | null;
   liveWatch?: boolean;
   onLiveWatchChange?: (watching: boolean) => void;
   onVaultChange: (dir: string) => void;
-  onExportChange: (dir: string, sh?: StorageHealth) => void;
+  onExportChange: (dir: string, sh?: StorageHealth, fmGraphicsCollision?: boolean) => void;
+  onExportPureChange?: (dir: string, sh?: StorageHealth, fmGraphicsCollision?: boolean) => void;
+  onExportVariantChange?: (variant: ExportVariant) => void;
   onJumpToStudio: (payload: StudioJumpPayload) => void;
 }
 
 export default function RegensSyncView({
-  clubs, vaultDir, exportDir, storageHealth, liveWatch: externalLiveWatch, onLiveWatchChange, onVaultChange, onExportChange, onJumpToStudio,
+  clubs,
+  vaultDir,
+  exportDir,
+  exportPureDir,
+  exportVariant,
+  fmGraphicsCollision,
+  storageHealth,
+  liveWatch: externalLiveWatch,
+  onLiveWatchChange,
+  onVaultChange,
+  onExportChange,
+  onExportPureChange,
+  onExportVariantChange,
+  onJumpToStudio,
 }: Props) {
   const [totalFound, setTotalFound] = useState(0);
   const [sample, setSample] = useState<RegenRow[]>([]);
@@ -28,12 +46,31 @@ export default function RegensSyncView({
   const [applyKits, setApplyKits] = useState(true);
   const [harmonize, setHarmonize] = useState(true);
   const [localLiveWatch, setLocalLiveWatch] = useState(false);
+  const [localPureDir, setLocalPureDir] = useState(exportPureDir ?? 'D:\\DF11Studio\\Exports\\000_DF11_Pure_Override');
+  const [localVariant, setLocalVariant] = useState<ExportVariant>(exportVariant ?? 'classic');
+  const [localFmCollision, setLocalFmCollision] = useState(fmGraphicsCollision ?? false);
   const [running, setRunning] = useState(false);
   const [importText, setImportText] = useState('');
   const [showImporter, setShowImporter] = useState(false);
   const [copiedArg, setCopiedArg] = useState(false);
   const [lastSync, setLastSync] = useState<SyncSummary | null>(null);
   const [statusMsg, setStatusMsg] = useState('');
+
+  useEffect(() => {
+    if (exportPureDir) setLocalPureDir(exportPureDir);
+  }, [exportPureDir]);
+
+  useEffect(() => {
+    if (exportVariant) setLocalVariant(exportVariant);
+  }, [exportVariant]);
+
+  useEffect(() => {
+    if (typeof fmGraphicsCollision === 'boolean') setLocalFmCollision(fmGraphicsCollision);
+  }, [fmGraphicsCollision]);
+
+  const activeVariant: ExportVariant = exportVariant ?? localVariant;
+  const effectivePureDir = exportPureDir || localPureDir;
+  const effectiveFmCollision = fmGraphicsCollision ?? localFmCollision;
 
   const liveWatch = externalLiveWatch ?? localLiveWatch;
   const setLiveWatch = (val: boolean) => { setLocalLiveWatch(val); onLiveWatchChange?.(val); };
@@ -56,7 +93,13 @@ export default function RegensSyncView({
   const handleSync = async (allowShrink = false) => {
     setRunning(true); setStatusMsg('');
     try {
-      const res = await callBridge<SyncSummary>('start_regens_sync', { applyClubKits: applyKits, harmonize, bgMode: 'white_df11', allowShrink });
+      const res = await callBridge<SyncSummary>('start_regens_sync', {
+        applyClubKits: applyKits,
+        harmonize,
+        bgMode: 'white_df11',
+        allowShrink,
+        variant: activeVariant,
+      });
       setLastSync(res);
       await refreshVault();
     } catch (e) {
@@ -66,12 +109,35 @@ export default function RegensSyncView({
     }
   };
 
-  const handleToggleLiveWatch = async (next: boolean, nextKits = applyKits, nextHarm = harmonize) => {
+  const handleToggleLiveWatch = async (
+    next: boolean,
+    nextKits = applyKits,
+    nextHarm = harmonize,
+    nextVar: ExportVariant = activeVariant,
+  ) => {
     try {
-      const res = await callBridge<{ watching?: boolean }>('toggle_live_watch', next, { applyClubKits: nextKits, harmonize: nextHarm });
+      const res = await callBridge<{ watching?: boolean }>('toggle_live_watch', next, {
+        applyClubKits: nextKits,
+        harmonize: nextHarm,
+        bgMode: 'white_df11',
+        variant: nextVar,
+      });
       setLiveWatch(Boolean(res?.watching ?? next));
     } catch (e) {
       setStatusMsg(e instanceof Error ? e.message : 'No se pudo cambiar el estado de Live Disk Sync.');
+    }
+  };
+
+  const handleSelectVariant = (next: ExportVariant) => {
+    if (next === activeVariant) return;
+    setLocalVariant(next);
+    if (onExportVariantChange) {
+      onExportVariantChange(next);
+    } else {
+      void callBridge('set_export_variant', next).catch(() => {});
+    }
+    if (liveWatch) {
+      void handleToggleLiveWatch(true, applyKits, harmonize, next);
     }
   };
 
@@ -146,7 +212,7 @@ export default function RegensSyncView({
       )}
 
       <section className="flex-1 min-h-0 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-200/80 dark:divide-slate-800 flex flex-col overflow-hidden">
-        <div className="shrink-0 p-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+        <div className={`shrink-0 p-3 grid grid-cols-1 ${activeVariant === 'dual' ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-3 text-xs`}>
           <div className="space-y-1">
             <span className="font-semibold text-slate-900 dark:text-slate-100">1. Bóveda NG_Regens (Solo lectura · Cero .bak)</span>
             <button
@@ -160,22 +226,86 @@ export default function RegensSyncView({
             </button>
           </div>
 
-          <div className="space-y-1">
-            <span className="font-semibold text-slate-900 dark:text-slate-100">2. Salida FM27 (000_DF11_Regens_Override)</span>
-            <button
-              type="button"
-              onClick={async () => { try { const p = await callBridge<{ path: string; storageHealth: StorageHealth } | null>('choose_directory', 'export'); if (p?.path) onExportChange(p.path, p.storageHealth); } catch (e) { setStatusMsg(e instanceof Error ? e.message : 'Carpeta de salida inválida.'); } }}
-              title={exportDir}
-              className="w-full px-3 py-2 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 flex items-center justify-between gap-2"
-            >
-              <span className="truncate font-mono">{exportDir}</span>
-              <FolderOpen className="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-            </button>
-          </div>
+          {activeVariant !== 'pure' && (
+            <div className="space-y-1">
+              <span className="font-semibold text-slate-900 dark:text-slate-100">
+                {activeVariant === 'dual' ? '2A. Salida FM Classic (260×310)' : '2. Salida FM27 (000_DF11_Regens_Override)'}
+              </span>
+              <button
+                type="button"
+                aria-label="Elegir carpeta de salida Classic NG_Regens"
+                onClick={async () => {
+                  try {
+                    const p = await callBridge<{ path: string; storageHealth: StorageHealth; fmGraphicsCollision?: boolean } | null>('choose_directory', 'export');
+                    if (p?.path) {
+                      if (typeof p.fmGraphicsCollision === 'boolean') setLocalFmCollision(p.fmGraphicsCollision);
+                      onExportChange(p.path, p.storageHealth, p.fmGraphicsCollision);
+                    }
+                  } catch (e) {
+                    setStatusMsg(e instanceof Error ? e.message : 'Carpeta de salida inválida.');
+                  }
+                }}
+                title={exportDir}
+                className="w-full px-3 py-2 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 flex items-center justify-between gap-2"
+              >
+                <span className="truncate font-mono">{exportDir}</span>
+                <FolderOpen className="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              </button>
+            </div>
+          )}
+
+          {activeVariant !== 'classic' && (
+            <div className="space-y-1">
+              <span className="font-semibold text-slate-900 dark:text-slate-100">
+                {activeVariant === 'dual' ? '2B. Salida FM Pure (220×276)' : '2. Salida FM Pure (220×276 · 000_DF11_Pure_Override)'}
+              </span>
+              <button
+                type="button"
+                aria-label="Elegir carpeta de salida Pure NG_Regens"
+                onClick={async () => {
+                  try {
+                    const p = await callBridge<{ path: string; storageHealth: StorageHealth; fmGraphicsCollision?: boolean } | null>('choose_directory', 'export_pure');
+                    if (p?.path) {
+                      setLocalPureDir(p.path);
+                      if (typeof p.fmGraphicsCollision === 'boolean') setLocalFmCollision(p.fmGraphicsCollision);
+                      onExportPureChange?.(p.path, p.storageHealth, p.fmGraphicsCollision);
+                    }
+                  } catch (e) {
+                    setStatusMsg(e instanceof Error ? e.message : 'Carpeta de salida DF11 Pure inválida.');
+                  }
+                }}
+                title={effectivePureDir}
+                className="w-full px-3 py-2 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 flex items-center justify-between gap-2"
+              >
+                <span className="truncate font-mono">{effectivePureDir}</span>
+                <FolderOpen className="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="shrink-0 p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex flex-wrap items-center gap-4 text-slate-700 dark:text-slate-300">
+          <div className="flex flex-wrap items-center gap-3 text-slate-700 dark:text-slate-300">
+            <div className="inline-flex items-center gap-1 rounded-lg bg-slate-100 dark:bg-slate-950 p-0.5 border border-slate-200/80 dark:border-slate-800" role="group" aria-label="Formato de sincronización DF11">
+              {([
+                ['classic', 'Classic 260×310'],
+                ['pure', 'Pure 220×276'],
+                ['dual', 'Dual (Ambas)'],
+              ] as const).map(([vKey, vLabel]) => (
+                <button
+                  key={vKey}
+                  type="button"
+                  onClick={() => handleSelectVariant(vKey)}
+                  className={`px-2 py-1 rounded-md text-[11px] font-medium transition ${
+                    activeVariant === vKey
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                  }`}
+                >
+                  {vLabel}
+                </button>
+              ))}
+            </div>
             <label className="inline-flex items-center gap-2"><input type="checkbox" checked={applyKits} onChange={(e) => { const v = e.target.checked; setApplyKits(v); if (liveWatch) void handleToggleLiveWatch(true, v, harmonize); }} className="accent-emerald-600" /> Equipación real de club (P_clothes = 0)</label>
             <label className="inline-flex items-center gap-2"><input type="checkbox" checked={harmonize} onChange={(e) => { const v = e.target.checked; setHarmonize(v); if (liveWatch) void handleToggleLiveWatch(true, applyKits, v); }} className="accent-emerald-600" /> Armonizar luz DF11 (OKLab)</label>
             <button
@@ -192,10 +322,26 @@ export default function RegensSyncView({
             {running ? (
               <button type="button" onClick={() => void callBridge('cancel_regens_sync')} className="px-3.5 py-1.5 rounded-md bg-rose-600 text-white font-medium inline-flex items-center gap-1.5"><Square className="w-3.5 h-3.5" /> Cancelar</button>
             ) : (
-              <button type="button" onClick={() => void handleSync(false)} className="px-4 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-medium inline-flex items-center gap-1.5 tabular-nums"><Play className="w-3.5 h-3.5" /> Convertir {totalFound} regens a DF11</button>
+              <button type="button" onClick={() => void handleSync(false)} className="px-4 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-medium inline-flex items-center gap-1.5 tabular-nums">
+                <Play className="w-3.5 h-3.5" />{' '}
+                {activeVariant === 'dual'
+                  ? `Convertir ${totalFound} regens (Dual)`
+                  : activeVariant === 'pure'
+                  ? `Convertir ${totalFound} regens a Pure`
+                  : `Convertir ${totalFound} regens a DF11`}
+              </button>
             )}
           </div>
         </div>
+
+        {activeVariant === 'dual' && effectiveFmCollision && (
+          <div className="shrink-0 px-3 py-2 bg-amber-50/80 dark:bg-amber-950/30 text-[11px] text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <span>
+              Ambas salidas cuelgan de <code className="font-mono">graphics/</code> de Football Manager: el juego aplicará prioridad alfabética sobre el mismo <code className="font-mono">config.xml</code>. Guarda una variante fuera de <code className="font-mono">graphics/</code> si deseas alternarlas manualmente.
+            </span>
+          </div>
+        )}
 
         <div className="shrink-0 p-3 space-y-2 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">

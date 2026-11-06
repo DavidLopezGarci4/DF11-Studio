@@ -21,7 +21,7 @@ def _sample_png_data_url() -> str:
 def test_bridge_bootstrap_and_capability_guard_blocks_unapproved_paths(tmp_path: Path) -> None:
     bridge = StudioBridge(vault_dir=tmp_path / "vault", export_dir=tmp_path / "approved_out", db_path=tmp_path / "state.sqlite3")
     boot = bridge.get_bootstrap_state()
-    assert boot["version"] == "1.5.0" and "1736" in boot["clubs"] and "1744" in boot["clubs"]
+    assert boot["version"] == "1.6.0" and "1736" in boot["clubs"] and "1744" in boot["clubs"]
     bridge.upload_studio_image(_sample_png_data_url(), remove_bg=False, harmonize=True, extract_bg=False)
     with pytest.raises(CapabilityError):
         bridge.export_studio_card({"uid": "29184012", "fmt": "png", "outDir": str(tmp_path / "unapproved_evil")})

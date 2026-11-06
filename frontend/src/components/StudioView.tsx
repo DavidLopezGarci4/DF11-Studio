@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   Check,
   ChevronDown,
   ChevronUp,
@@ -30,6 +31,7 @@ import {
   ClubSeed,
   CropViewportDTO,
   DirectPhotoResponse,
+  ExportVariant,
   ExtractedFaceResponse,
   FacepackRemixResponse,
   SavedFaceInfo,
@@ -61,9 +63,17 @@ interface Props {
   clubs: Record<string, ClubSeed>;
   onClubsUpdated?: (clubs: Record<string, ClubSeed>) => void;
   exportDir: string;
+  exportPureDir?: string;
   facepackDir?: string;
-  onExportDirChange: (dir: string, sh?: StorageHealth) => void;
-  onFacepackDirChange?: (dir: string) => void;
+  facepackPureDir?: string;
+  exportVariant?: ExportVariant;
+  fmGraphicsCollision?: boolean;
+  fmFacepackCollision?: boolean;
+  onExportDirChange: (dir: string, sh?: StorageHealth, fmGraphicsCollision?: boolean) => void;
+  onExportPureDirChange?: (dir: string, sh?: StorageHealth, fmGraphicsCollision?: boolean) => void;
+  onFacepackDirChange?: (dir: string, fmFacepackCollision?: boolean) => void;
+  onFacepackPureDirChange?: (dir: string, fmFacepackCollision?: boolean) => void;
+  onExportVariantChange?: (variant: ExportVariant) => void;
   initialJump: StudioJumpPayload | null;
   onConsumeJump?: () => void;
   toolTab?: ToolTab;
@@ -185,12 +195,12 @@ function clampDirectOffsets(
   };
 }
 
-function buildComposePayload(s: LayerSnapshot) {
+function buildComposePayload(s: LayerSnapshot, previewVariant: 'classic' | 'pure' = 'classic') {
   const direct = s.step1Mode === 'direct_photo';
   const sc = direct ? s.directScale : s.scale;
   const ox = direct ? s.directOffsetX : s.offsetX;
   const oy = direct ? s.directOffsetY : s.offsetY;
-  return {
+  const base = {
     modular: true,
     step1Mode: s.step1Mode,
     directPhotoId: s.directPhotoId,
@@ -208,6 +218,7 @@ function buildComposePayload(s: LayerSnapshot) {
     bgMode: s.bgMode,
     bgBlur: s.bgBlur,
   };
+  return previewVariant === 'pure' ? { ...base, previewVariant: 'pure' as const } : base;
 }
 
 interface PercentStepperProps {
@@ -369,9 +380,17 @@ export default function StudioView({
   clubs,
   onClubsUpdated,
   exportDir,
+  exportPureDir,
   facepackDir,
+  facepackPureDir,
+  exportVariant,
+  fmGraphicsCollision,
+  fmFacepackCollision,
   onExportDirChange,
+  onExportPureDirChange,
   onFacepackDirChange,
+  onFacepackPureDirChange,
+  onExportVariantChange,
   initialJump,
   onConsumeJump,
   toolTab: controlledToolTab,
@@ -476,16 +495,77 @@ export default function StudioView({
   // Paso 4 export options
   const [uid, setUid] = useState('');
   const [exportTarget, setExportTarget] = useState<ExportTarget>('creations');
+  const [localExportPureDir, setLocalExportPureDir] = useState(
+    exportPureDir ?? 'D:\\DF11Studio\\Exports\\000_DF11_Pure_Override',
+  );
   const [localFacepackDir, setLocalFacepackDir] = useState(facepackDir ?? '');
+  const [localFacepackPureDir, setLocalFacepackPureDir] = useState(facepackPureDir ?? '');
+  const [localExportVariant, setLocalExportVariant] = useState<ExportVariant>(exportVariant ?? 'classic');
+  const [dualPreviewSide, setDualPreviewSide] = useState<'classic' | 'pure'>('classic');
+  const [localFmGraphicsCollision, setLocalFmGraphicsCollision] = useState(fmGraphicsCollision ?? false);
+  const [localFmFacepackCollision, setLocalFmFacepackCollision] = useState(fmFacepackCollision ?? false);
   const [fmt, setFmt] = useState<'png' | 'jpg'>('png');
   const [updateXml, setUpdateXml] = useState(true);
+
+  useEffect(() => {
+    if (exportPureDir) setLocalExportPureDir(exportPureDir);
+  }, [exportPureDir]);
 
   useEffect(() => {
     if (facepackDir) setLocalFacepackDir(facepackDir);
   }, [facepackDir]);
 
+  useEffect(() => {
+    if (facepackPureDir) setLocalFacepackPureDir(facepackPureDir);
+  }, [facepackPureDir]);
+
+  useEffect(() => {
+    if (exportVariant) setLocalExportVariant(exportVariant);
+  }, [exportVariant]);
+
+  useEffect(() => {
+    if (typeof fmGraphicsCollision === 'boolean') setLocalFmGraphicsCollision(fmGraphicsCollision);
+  }, [fmGraphicsCollision]);
+
+  useEffect(() => {
+    if (typeof fmFacepackCollision === 'boolean') setLocalFmFacepackCollision(fmFacepackCollision);
+  }, [fmFacepackCollision]);
+
+  const activeExportVariant: ExportVariant = exportVariant ?? localExportVariant;
+  const effectiveExportPureDir = exportPureDir || localExportPureDir;
   const effectiveFacepackDir = facepackDir || localFacepackDir;
+  const effectiveFacepackPureDir = facepackPureDir || localFacepackPureDir;
+  const activeFmCollision =
+    exportTarget === 'facepack'
+      ? (fmFacepackCollision ?? localFmFacepackCollision)
+      : (fmGraphicsCollision ?? localFmGraphicsCollision);
+
+  useEffect(() => {
+    if (activeExportVariant !== 'classic' && fmt !== 'png') {
+      setFmt('png');
+    }
+  }, [activeExportVariant, fmt]);
+
+  const handleSelectExportVariant = useCallback(
+    (next: ExportVariant) => {
+      setLocalExportVariant(next);
+      if (next !== 'classic') setFmt('png');
+      if (onExportVariantChange) {
+        onExportVariantChange(next);
+      } else {
+        void callBridge('set_export_variant', next).catch(() => {});
+      }
+    },
+    [onExportVariantChange],
+  );
+
   const isDirectMode = snap.step1Mode === 'direct_photo';
+  const desiredPreviewVariant: 'classic' | 'pure' =
+    activeExportVariant === 'pure' ? 'pure' : activeExportVariant === 'dual' ? dualPreviewSide : 'classic';
+  const needsDirectCutoutForPure =
+    isDirectMode && Boolean(snap.directPhotoId) && !snap.directPhotoIsPreCutout && activeExportVariant !== 'classic';
+  const effectivePreviewVariant: 'classic' | 'pure' =
+    isDirectMode && !snap.directPhotoIsPreCutout ? 'classic' : desiredPreviewVariant;
   const activeScale = isDirectMode ? snap.directScale : snap.scale;
   const activeOffsetX = isDirectMode ? snap.directOffsetX : snap.offsetX;
   const activeOffsetY = isDirectMode ? snap.directOffsetY : snap.offsetY;
@@ -737,7 +817,10 @@ export default function StudioView({
 
   const hasComposition = isDirectMode ? Boolean(snap.directPhotoId) : Boolean(snap.headAssetId || snap.templateId);
 
-  const composePayload = useMemo(() => buildComposePayload(snap), [snap]);
+  const composePayload = useMemo(
+    () => buildComposePayload(snap, effectivePreviewVariant),
+    [snap, effectivePreviewVariant],
+  );
 
   // Live modular preview when layers/fit/background/quality change
   useEffect(() => {
@@ -790,7 +873,11 @@ export default function StudioView({
   }, [cropStage, isDirectMode, snap.directPhotoId, snap.headAssetId, snap.templateId, composePayload, updatePreviewUrl]);
 
   const applyDirectPhotoResult = useCallback(
-    (res: DirectPhotoResponse, matchesComposePayload = true) => {
+    (
+      res: DirectPhotoResponse,
+      matchesComposePayload = true,
+      renderedVariantOverride?: 'classic' | 'pure',
+    ) => {
       reqSeqRef.current += 1;
       setActiveStep(1);
       setCropStage(null);
@@ -804,10 +891,10 @@ export default function StudioView({
         const w = Math.max(1, Math.round(res.width || DIRECT_INNER_W));
         const h = Math.max(1, Math.round(res.height || DIRECT_INNER_H));
         const nextClamp = res.clampPan ?? !isPrecut;
-        const nextScale = res.autoFit?.scale ?? 1.0;
+        const nextScale = res.autoFit?.scale ?? s.directScale ?? 1.0;
         const clamped = clampDirectOffsets(
-          res.autoFit?.offsetX ?? 0,
-          res.autoFit?.offsetY ?? 0,
+          res.autoFit?.offsetX ?? s.directOffsetX ?? 0,
+          res.autoFit?.offsetY ?? s.directOffsetY ?? 0,
           nextScale,
           w,
           h,
@@ -829,15 +916,48 @@ export default function StudioView({
         };
       };
       const projectedSnap = buildNextDirectSnap(snap);
+      const projectedVariant: 'classic' | 'pure' =
+        projectedSnap.step1Mode === 'direct_photo' && !projectedSnap.directPhotoIsPreCutout
+          ? 'classic'
+          : (renderedVariantOverride ?? desiredPreviewVariant);
       if (res.previewDataUrl) {
-        updatePreviewUrl(res.previewDataUrl, matchesComposePayload ? JSON.stringify(buildComposePayload(projectedSnap)) : '');
+        updatePreviewUrl(
+          res.previewDataUrl,
+          matchesComposePayload ? JSON.stringify(buildComposePayload(projectedSnap, projectedVariant)) : '',
+        );
       } else {
         updatePreviewUrl('');
       }
       commitSnap(buildNextDirectSnap);
     },
-    [snap, commitSnap, updatePreviewUrl],
+    [snap, desiredPreviewVariant, commitSnap, updatePreviewUrl],
   );
+
+  const handleCutoutDirectPhotoForPure = useCallback(async () => {
+    if (busy || !isDirectMode || !snap.directPhotoId) return;
+    const targetVar: 'classic' | 'pure' = activeExportVariant === 'dual' ? 'pure' : desiredPreviewVariant;
+    setErrorMsg('');
+    setSavedMsg('');
+    setBusy(true);
+    try {
+      const out = await callBridge<DirectPhotoResponse>(
+        'cutout_direct_photo_for_pure',
+        snap.directPhotoId,
+        buildComposePayload(snap, targetVar),
+      );
+      if (out?.directPhotoId) {
+        if (activeExportVariant === 'dual') {
+          setDualPreviewSide('pure');
+        }
+        applyDirectPhotoResult(out, true, targetVar);
+        setSavedMsg('Fondo recortado (IA · 1 vez): Foto Directa lista para DF11 Pure y Dual.');
+      }
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'No se pudo recortar el fondo para DF11 Pure.');
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, isDirectMode, snap, activeExportVariant, desiredPreviewVariant, applyDirectPhotoResult]);
 
   const handleDirectFileBlob = useCallback(
     async (file: File) => {
@@ -1044,6 +1164,7 @@ export default function StudioView({
         bgBlur: snap.bgBlur,
         harmonize: snap.harmonize,
         enhanceQuality: snap.enhanceQuality,
+        ...(effectivePreviewVariant === 'pure' ? { previewVariant: 'pure' } : {}),
       });
       reqSeqRef.current += 1;
       setActiveStep(1);
@@ -1064,7 +1185,7 @@ export default function StudioView({
     } finally {
       setBusy(false);
     }
-  }, [cropStage, cropVp, removeBgCrop, snap.templateId, snap.bgMode, snap.bgBlur, snap.harmonize, snap.enhanceQuality, commitSnap, updatePreviewUrl]);
+  }, [cropStage, cropVp, removeBgCrop, snap.templateId, snap.bgMode, snap.bgBlur, snap.harmonize, snap.enhanceQuality, effectivePreviewVariant, commitSnap, updatePreviewUrl]);
 
   const handlePickSavedFace = useCallback(
     async (faceId: string) => {
@@ -1806,16 +1927,73 @@ export default function StudioView({
     }
   };
 
+  const handleChooseCreationsFolder = async (): Promise<string> => {
+    try {
+      const p = await callBridge<{ path: string; storageHealth?: StorageHealth; fmGraphicsCollision?: boolean } | null>(
+        'choose_directory',
+        'export',
+      );
+      if (p?.path) {
+        if (typeof p.fmGraphicsCollision === 'boolean') setLocalFmGraphicsCollision(p.fmGraphicsCollision);
+        onExportDirChange(p.path, p.storageHealth, p.fmGraphicsCollision);
+        return p.path;
+      }
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'Carpeta no válida.');
+    }
+    return '';
+  };
+
+  const handleChooseCreationsPureFolder = async (): Promise<string> => {
+    try {
+      const p = await callBridge<{ path: string; storageHealth?: StorageHealth; fmGraphicsCollision?: boolean } | null>(
+        'choose_directory',
+        'export_pure',
+      );
+      if (p?.path) {
+        setLocalExportPureDir(p.path);
+        if (typeof p.fmGraphicsCollision === 'boolean') setLocalFmGraphicsCollision(p.fmGraphicsCollision);
+        onExportPureDirChange?.(p.path, p.storageHealth, p.fmGraphicsCollision);
+        return p.path;
+      }
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'Carpeta DF11 Pure no válida.');
+    }
+    return '';
+  };
+
   const handleChooseFacepackFolder = async (): Promise<string> => {
     try {
-      const p = await callBridge<{ path: string; storageHealth?: StorageHealth } | null>('choose_directory', 'facepack');
+      const p = await callBridge<{ path: string; storageHealth?: StorageHealth; fmFacepackCollision?: boolean } | null>(
+        'choose_directory',
+        'facepack',
+      );
       if (p?.path) {
         setLocalFacepackDir(p.path);
-        onFacepackDirChange?.(p.path);
+        if (typeof p.fmFacepackCollision === 'boolean') setLocalFmFacepackCollision(p.fmFacepackCollision);
+        onFacepackDirChange?.(p.path, p.fmFacepackCollision);
         return p.path;
       }
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'Carpeta de Pack de Faces no válida.');
+    }
+    return '';
+  };
+
+  const handleChooseFacepackPureFolder = async (): Promise<string> => {
+    try {
+      const p = await callBridge<{ path: string; storageHealth?: StorageHealth; fmFacepackCollision?: boolean } | null>(
+        'choose_directory',
+        'facepack_pure',
+      );
+      if (p?.path) {
+        setLocalFacepackPureDir(p.path);
+        if (typeof p.fmFacepackCollision === 'boolean') setLocalFmFacepackCollision(p.fmFacepackCollision);
+        onFacepackPureDirChange?.(p.path, p.fmFacepackCollision);
+        return p.path;
+      }
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'Carpeta de Pack de Faces DF11 Pure no válida.');
     }
     return '';
   };
@@ -1836,32 +2014,69 @@ export default function StudioView({
       setErrorMsg('El nombre para Nuestras creaciones no puede contener barras ni caracteres reservados.');
       return;
     }
+    if (isDirectMode && !snap.directPhotoIsPreCutout && activeExportVariant !== 'classic') {
+      setErrorMsg(
+        'En Foto Directa la imagen aún tiene fondo opaco. Pulsa «Recortar fondo para Pure (IA · 1 vez)» en el Paso 1 o exporta en Classic 260×310.',
+      );
+      return;
+    }
     let activeFpDir = effectiveFacepackDir;
-    if (exportTarget === 'facepack' && !activeFpDir) {
-      activeFpDir = await handleChooseFacepackFolder();
-      if (!activeFpDir) {
-        setErrorMsg('Indica primero la carpeta del Pack de Faces de Football Manager.');
-        return;
+    let activeFpPureDir = effectiveFacepackPureDir;
+    if (exportTarget === 'facepack') {
+      if (activeExportVariant !== 'pure' && !activeFpDir) {
+        activeFpDir = await handleChooseFacepackFolder();
+        if (!activeFpDir) {
+          setErrorMsg('Indica primero la carpeta del Pack de Faces de Football Manager.');
+          return;
+        }
+      }
+      if (activeExportVariant !== 'classic' && !activeFpPureDir) {
+        activeFpPureDir = await handleChooseFacepackPureFolder();
+        if (!activeFpPureDir) {
+          setErrorMsg('Indica primero la carpeta del Pack de Faces DF11 Pure de Football Manager.');
+          return;
+        }
       }
     }
     setBusy(true);
     setErrorMsg('');
     try {
-      const effectiveFmt = exportTarget === 'facepack' ? 'png' : fmt;
+      const effectiveFmt = exportTarget === 'facepack' || activeExportVariant !== 'classic' ? 'png' : fmt;
       const effectiveUpdateXml =
         exportTarget === 'facepack' ? updateXml : updateXml && effectiveFmt === 'png' && UID_RE.test(cleanUid);
       const fallbackLabel = isDirectMode ? snap.directPhotoLabel : snap.faceLabel;
       const method = !isDirectMode && snap.headAssetId === 'legacy-jump' ? 'export_studio_card' : 'export_modular_card';
-      const res = await callBridge<{ savedPath: string }>(method, {
+      const res = await callBridge<{
+        savedPath?: string;
+        savedPurePath?: string;
+        exportVariant?: ExportVariant;
+        fmGraphicsCollision?: boolean;
+      }>(method, {
         uid: cleanUid,
         fileLabel: fallbackLabel,
         fmt: effectiveFmt,
         exportTarget,
-        outDir: exportTarget === 'facepack' ? activeFpDir : undefined,
+        exportVariant: activeExportVariant,
+        outDir: exportTarget === 'facepack' && activeExportVariant !== 'pure' ? activeFpDir : undefined,
+        outPureDir: exportTarget === 'facepack' && activeExportVariant !== 'classic' ? activeFpPureDir : undefined,
         updateConfigXml: effectiveUpdateXml,
         ...composePayload,
       });
-      setSavedMsg(`Guardado: ${res.savedPath ?? `${cleanUid || fallbackLabel || 'DF11'}.${effectiveFmt}`}`);
+      if (typeof res?.fmGraphicsCollision === 'boolean') {
+        if (exportTarget === 'facepack') setLocalFmFacepackCollision(res.fmGraphicsCollision);
+        else setLocalFmGraphicsCollision(res.fmGraphicsCollision);
+      }
+      if (activeExportVariant === 'dual') {
+        const cPath = res?.savedPath ?? `${cleanUid || fallbackLabel || 'DF11'}.${effectiveFmt}`;
+        const pPath = res?.savedPurePath ?? `${cleanUid || fallbackLabel || 'DF11'}.png`;
+        setSavedMsg(`Guardado Dual → Classic: ${cPath} · Pure: ${pPath}`);
+      } else if (activeExportVariant === 'pure') {
+        setSavedMsg(
+          `Guardado Pure: ${res?.savedPurePath || res?.savedPath || `${cleanUid || fallbackLabel || 'DF11'}.png`}`,
+        );
+      } else {
+        setSavedMsg(`Guardado: ${res?.savedPath ?? `${cleanUid || fallbackLabel || 'DF11'}.${effectiveFmt}`}`);
+      }
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'Error al exportar la ficha DF11.');
     } finally {
@@ -2112,7 +2327,9 @@ export default function StudioView({
             <div className="w-full flex items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
               <div>
                 <span className="font-medium text-slate-900 dark:text-white">Lienzo Oficial DF11</span>
-                <span className="ml-2 tabular-nums font-mono text-[11px]">260 × 310 px</span>
+                <span className="ml-2 tabular-nums font-mono text-[11px]">
+                  {effectivePreviewVariant === 'pure' ? '220 × 276 px · Pure' : '260 × 310 px'}
+                </span>
               </div>
               <div className="flex items-center gap-1">
                 <button
@@ -2293,15 +2510,31 @@ export default function StudioView({
                     className="absolute max-w-none pointer-events-none"
                   />
                 ) : (isDirectMode ? snap.directPhotoId : snap.headAssetId) && previewUrl ? (
-                  <img src={previewUrl} alt="Previsualización DF11 260x310" className="w-[260px] h-[310px] pointer-events-none" />
+                  effectivePreviewVariant === 'pure' ? (
+                    <img
+                      src={previewUrl}
+                      alt="Previsualización DF11 Pure 220x276"
+                      className="absolute left-[20px] top-[17px] w-[220px] h-[276px] pointer-events-none"
+                    />
+                  ) : (
+                    <img src={previewUrl} alt="Previsualización DF11 260x310" className="w-[260px] h-[310px] pointer-events-none" />
+                  )
                 ) : (
                   <>
                     {!isDirectMode && previewUrl && (
-                      <img
-                        src={previewUrl}
-                        alt="Plantilla base DF11"
-                        className="absolute inset-0 w-[260px] h-[310px] opacity-75 pointer-events-none"
-                      />
+                      effectivePreviewVariant === 'pure' ? (
+                        <img
+                          src={previewUrl}
+                          alt="Plantilla base DF11 Pure"
+                          className="absolute left-[20px] top-[17px] w-[220px] h-[276px] opacity-75 pointer-events-none"
+                        />
+                      ) : (
+                        <img
+                          src={previewUrl}
+                          alt="Plantilla base DF11"
+                          className="absolute inset-0 w-[260px] h-[310px] opacity-75 pointer-events-none"
+                        />
+                      )
                     )}
                     <button
                       type="button"
@@ -2325,6 +2558,19 @@ export default function StudioView({
 
                 {(showGuides || cropStage) && (
                   <svg className="absolute inset-0 w-[260px] h-[310px] pointer-events-none" viewBox="0 0 260 310">
+                    {effectivePreviewVariant === 'pure' && !cropStage && (
+                      <rect
+                        x="20"
+                        y="17"
+                        width="220"
+                        height="276"
+                        fill="none"
+                        stroke="#10b981"
+                        strokeOpacity="0.55"
+                        strokeDasharray="3 3"
+                        strokeWidth="1"
+                      />
+                    )}
                     <line
                       x1="19"
                       y1="21"
@@ -2394,7 +2640,7 @@ export default function StudioView({
             )}
 
             <div className="w-full flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="flex items-center gap-1">
+              <div className="flex flex-wrap items-center gap-1">
                 <button type="button" onClick={() => setStageSkin('fm_dark')} className={segBtn(stageSkin === 'fm_dark')}>
                   Skin Oscura
                 </button>
@@ -2404,6 +2650,36 @@ export default function StudioView({
                 <button type="button" onClick={() => setStageSkin('checker')} className={segBtn(stageSkin === 'checker')}>
                   Alfa 0
                 </button>
+                {activeExportVariant === 'dual' && (
+                  <div
+                    className="inline-flex items-center rounded-md border border-emerald-500/40 bg-emerald-500/10 p-0.5"
+                    role="group"
+                    aria-label="Vista previa Dual"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setDualPreviewSide('classic')}
+                      className={`px-2 py-0.5 text-[11px] font-medium rounded transition ${
+                        dualPreviewSide === 'classic'
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-emerald-800 dark:text-emerald-300'
+                      }`}
+                    >
+                      Vista Classic
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDualPreviewSide('pure')}
+                      className={`px-2 py-0.5 text-[11px] font-medium rounded transition ${
+                        dualPreviewSide === 'pure'
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-emerald-800 dark:text-emerald-300'
+                      }`}
+                    >
+                      Vista Pure
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <button type="button" onClick={() => setShowGuides((g) => !g)} className={segBtn(showGuides)} title="Guías ópticas">
@@ -2594,6 +2870,22 @@ export default function StudioView({
                   </button>
                 </div>
               </div>
+
+              {needsDirectCutoutForPure && (
+                <div className="rounded-lg border border-amber-500/40 bg-amber-50/80 dark:bg-amber-950/30 px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="text-amber-900 dark:text-amber-200">
+                    DF11 Pure exige fondo transparente (<code className="font-mono">Alfa = 0</code>). Foto Directa mantiene 0% IA hasta que lo autorices:
+                  </span>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void handleCutoutDirectPhotoForPure()}
+                    className="px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium inline-flex items-center gap-1.5 transition"
+                  >
+                    <Scissors className="w-3.5 h-3.5" /> Recortar fondo para Pure (IA · 1 vez)
+                  </button>
+                </div>
+              )}
 
               {!isDirectMode && (
                 <>
@@ -3070,9 +3362,21 @@ export default function StudioView({
             {/* PASO 3: FONDO (Sin alterar comportamiento confirmado por el usuario) */}
             <div onClick={() => setActiveStep(3)} className="shrink-0 px-3 py-2.5 space-y-2 rounded-b-xl">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-                  Paso 3 · Capa Fondo (Por defecto DF11)
-                </h2>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                    Paso 3 · Capa Fondo (Por defecto DF11)
+                  </h2>
+                  {activeExportVariant === 'pure' && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
+                      Pure: Alfa = 0 (sin fondo)
+                    </span>
+                  )}
+                  {activeExportVariant === 'dual' && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300">
+                      Aplica a Classic · Pure siempre Alfa = 0
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2">
                   <input
                     ref={bgInputRef}
@@ -3167,16 +3471,50 @@ export default function StudioView({
           <div className="lg:col-span-5 xl:col-span-4 lg:col-start-1 lg:row-start-2 min-h-0 flex flex-col lg:overflow-y-auto">
             <section
               onClick={() => setActiveStep(4)}
-              className="lg:mt-auto rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 space-y-2 text-xs shrink-0"
+              className="lg:mt-auto rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5 space-y-1.5 text-xs shrink-0"
             >
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
                   Paso 4 · Marco Maestro DF11 y Exportación
                 </h2>
-                <span className="text-[10px] text-slate-400 dark:text-slate-500">Alpha = 0 · 0% IA</span>
+                <span className="text-[10px] text-slate-400 dark:text-slate-500 tabular-nums">
+                  {activeExportVariant === 'pure'
+                    ? 'Pure 220×276 · Alfa = 0'
+                    : activeExportVariant === 'dual'
+                    ? 'Dual: 260×310 + 220×276'
+                    : 'Alpha = 0 · 0% IA'}
+                </span>
               </div>
 
-              <div className="rounded-lg bg-slate-100 dark:bg-slate-950 px-2.5 py-1.5">
+              <div
+                className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 dark:bg-slate-950 p-0.5 border border-slate-200/80 dark:border-slate-800"
+                role="group"
+                aria-label="Formato de modelo DF11"
+              >
+                {(
+                  [
+                    ['classic', 'Classic 260×310', 'Formato estándar DF11 con marco biselado 260×310 px'],
+                    ['pure', 'Pure 220×276', 'Formato DF11 Pure 220×276 px sin marco y fondo transparente (Alfa = 0)'],
+                    ['dual', 'Dual (Ambas)', 'Exporta Classic (260×310) y Pure (220×276) a la vez en carpetas independientes'],
+                  ] as const
+                ).map(([vKey, vLabel, vTitle]) => (
+                  <button
+                    key={vKey}
+                    type="button"
+                    title={vTitle}
+                    onClick={() => handleSelectExportVariant(vKey)}
+                    className={`px-2 py-1 rounded-md text-[11px] font-medium truncate transition ${
+                      activeExportVariant === vKey
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                    }`}
+                  >
+                    {vLabel}
+                  </button>
+                ))}
+              </div>
+
+              <div className="rounded-lg bg-slate-100 dark:bg-slate-950 px-2.5 py-1">
                 <PercentStepperControl
                   sessionPrefix="quality"
                   label="Calidad óptica"
@@ -3198,7 +3536,7 @@ export default function StudioView({
                   type="button"
                   title="Guarda en tu carpeta de creaciones DF11"
                   onClick={() => setExportTarget('creations')}
-                  className={`px-2.5 py-1.5 rounded-lg border text-left font-medium truncate transition ${
+                  className={`px-2.5 py-1 rounded-lg border text-left font-medium truncate transition ${
                     exportTarget === 'creations'
                       ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
                       : 'border-slate-200/80 dark:border-slate-800 bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:border-slate-400'
@@ -3213,7 +3551,7 @@ export default function StudioView({
                     setExportTarget('facepack');
                     setFmt('png');
                   }}
-                  className={`px-2.5 py-1.5 rounded-lg border text-left font-medium truncate transition ${
+                  className={`px-2.5 py-1 rounded-lg border text-left font-medium truncate transition ${
                     exportTarget === 'facepack'
                       ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
                       : 'border-slate-200/80 dark:border-slate-800 bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:border-slate-400'
@@ -3243,11 +3581,11 @@ export default function StudioView({
                 <button
                   type="button"
                   onClick={() => setFmt('png')}
-                  className={segBtn(exportTarget === 'facepack' || fmt === 'png')}
+                  className={segBtn(exportTarget === 'facepack' || activeExportVariant !== 'classic' || fmt === 'png')}
                 >
                   PNG Oficial
                 </button>
-                {exportTarget === 'creations' && (
+                {exportTarget === 'creations' && activeExportVariant === 'classic' && (
                   <button type="button" onClick={() => setFmt('jpg')} className={segBtn(fmt === 'jpg')}>
                     JPG
                   </button>
@@ -3258,7 +3596,12 @@ export default function StudioView({
                   onClick={() => void handleExport()}
                   className="shrink-0 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white inline-flex items-center justify-center gap-1"
                 >
-                  <Download className="w-3.5 h-3.5" /> Exportar DF11
+                  <Download className="w-3.5 h-3.5" />{' '}
+                  {activeExportVariant === 'dual'
+                    ? 'Exportar DF11 Dual'
+                    : activeExportVariant === 'pure'
+                    ? 'Exportar DF11 Pure'
+                    : 'Exportar DF11'}
                 </button>
               </div>
 
@@ -3273,44 +3616,131 @@ export default function StudioView({
                 >
                   <input
                     type="checkbox"
-                    checked={exportTarget === 'facepack' ? updateXml : updateXml && fmt === 'png' && hasValidFmUid}
-                    disabled={exportTarget !== 'facepack' && (fmt !== 'png' || !hasValidFmUid)}
+                    checked={
+                      exportTarget === 'facepack'
+                        ? updateXml
+                        : updateXml && (activeExportVariant !== 'classic' || fmt === 'png') && hasValidFmUid
+                    }
+                    disabled={
+                      exportTarget !== 'facepack' &&
+                      ((activeExportVariant === 'classic' && fmt !== 'png') || !hasValidFmUid)
+                    }
                     onChange={(e) => setUpdateXml(e.target.checked)}
                     className="accent-emerald-600"
                   />
                   Actualizar config.xml atómico
                 </label>
-                {exportTarget === 'creations' ? (
-                  <button
-                    type="button"
-                    aria-label="Elegir carpeta de nuestras creaciones"
-                    onClick={async () => {
-                      try {
-                        const p = await callBridge<{ path: string; storageHealth?: StorageHealth } | null>('choose_directory', 'export');
-                        if (p?.path) onExportDirChange(p.path, p.storageHealth);
-                      } catch (e) {
-                        setErrorMsg(e instanceof Error ? e.message : 'Carpeta no válida.');
-                      }
-                    }}
-                    title={exportDir}
-                    className="min-w-0 truncate inline-flex items-center gap-1 text-slate-700 dark:text-slate-300 hover:underline"
-                  >
-                    <FolderOpen className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
-                    <span className="truncate">{exportDir}</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    aria-label="Elegir carpeta Pack Faces FM"
-                    onClick={() => void handleChooseFacepackFolder()}
-                    title={effectiveFacepackDir || 'Seleccionar carpeta del Pack de Faces de Football Manager'}
-                    className="min-w-0 truncate inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-medium hover:underline"
-                  >
-                    <FolderOpen className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">{effectiveFacepackDir || 'Elegir carpeta Pack Faces FM…'}</span>
-                  </button>
-                )}
+                {activeExportVariant === 'classic' &&
+                  (exportTarget === 'creations' ? (
+                    <button
+                      type="button"
+                      aria-label="Elegir carpeta de nuestras creaciones"
+                      onClick={() => void handleChooseCreationsFolder()}
+                      title={exportDir}
+                      className="min-w-0 truncate inline-flex items-center gap-1 text-slate-700 dark:text-slate-300 hover:underline"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
+                      <span className="truncate">{exportDir}</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      aria-label="Elegir carpeta Pack Faces FM"
+                      onClick={() => void handleChooseFacepackFolder()}
+                      title={effectiveFacepackDir || 'Seleccionar carpeta del Pack de Faces de Football Manager'}
+                      className="min-w-0 truncate inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-medium hover:underline"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">{effectiveFacepackDir || 'Elegir carpeta Pack Faces FM…'}</span>
+                    </button>
+                  ))}
+                {activeExportVariant === 'pure' &&
+                  (exportTarget === 'creations' ? (
+                    <button
+                      type="button"
+                      aria-label="Elegir carpeta Pure de nuestras creaciones"
+                      onClick={() => void handleChooseCreationsPureFolder()}
+                      title={effectiveExportPureDir}
+                      className="min-w-0 truncate inline-flex items-center gap-1 text-slate-700 dark:text-slate-300 hover:underline"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
+                      <span className="truncate">{effectiveExportPureDir}</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      aria-label="Elegir carpeta Pack Faces Pure"
+                      onClick={() => void handleChooseFacepackPureFolder()}
+                      title={effectiveFacepackPureDir || 'Seleccionar carpeta del Pack de Faces DF11 Pure'}
+                      className="min-w-0 truncate inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-medium hover:underline"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">{effectiveFacepackPureDir || 'Elegir carpeta Pack Faces Pure…'}</span>
+                    </button>
+                  ))}
               </div>
+
+              {activeExportVariant === 'dual' && (
+                <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                  {exportTarget === 'creations' ? (
+                    <>
+                      <button
+                        type="button"
+                        aria-label="Elegir carpeta Classic de nuestras creaciones"
+                        onClick={() => void handleChooseCreationsFolder()}
+                        title={`Carpeta Classic (260×310): ${exportDir}`}
+                        className="px-2 py-1 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 flex items-center gap-1.5 min-w-0 hover:border-emerald-500 transition"
+                      >
+                        <FolderOpen className="w-3 h-3 shrink-0 text-emerald-500" />
+                        <span className="truncate">Classic: {exportDir}</span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Elegir carpeta Pure de nuestras creaciones"
+                        onClick={() => void handleChooseCreationsPureFolder()}
+                        title={`Carpeta Pure (220×276): ${effectiveExportPureDir}`}
+                        className="px-2 py-1 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 flex items-center gap-1.5 min-w-0 hover:border-emerald-500 transition"
+                      >
+                        <FolderOpen className="w-3 h-3 shrink-0 text-emerald-500" />
+                        <span className="truncate">Pure: {effectiveExportPureDir}</span>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        aria-label="Elegir carpeta Pack Faces Classic"
+                        onClick={() => void handleChooseFacepackFolder()}
+                        title={effectiveFacepackDir || 'Seleccionar carpeta Pack Faces Classic (260×310)'}
+                        className="px-2 py-1 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-emerald-700 dark:text-emerald-400 font-medium flex items-center gap-1.5 min-w-0 hover:border-emerald-500 transition"
+                      >
+                        <FolderOpen className="w-3 h-3 shrink-0" />
+                        <span className="truncate">Classic: {effectiveFacepackDir || 'Elegir Pack Classic…'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Elegir carpeta Pack Faces Pure"
+                        onClick={() => void handleChooseFacepackPureFolder()}
+                        title={effectiveFacepackPureDir || 'Seleccionar carpeta Pack Faces DF11 Pure (220×276)'}
+                        className="px-2 py-1 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-emerald-700 dark:text-emerald-400 font-medium flex items-center gap-1.5 min-w-0 hover:border-emerald-500 transition"
+                      >
+                        <FolderOpen className="w-3 h-3 shrink-0" />
+                        <span className="truncate">Pure: {effectiveFacepackPureDir || 'Elegir Pack Pure…'}</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {activeExportVariant === 'dual' && activeFmCollision && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-300 inline-flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+                  <span>
+                    Ambas carpetas cuelgan de <code className="font-mono">graphics/</code> de FM: compartirán #ID en{' '}
+                    <code className="font-mono">config.xml</code> (prioridad alfabética).
+                  </span>
+                </p>
+              )}
 
               {uidInvalid && (
                 <p className="text-[11px] text-amber-600 dark:text-amber-400">

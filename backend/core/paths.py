@@ -31,6 +31,10 @@ def get_default_vault_dir() -> Path:
     return get_studio_root() / "NG_Regens_Vault"
 
 
+def get_default_pure_export_dir() -> Path:
+    return get_studio_root() / "Exports" / "000_DF11_Pure_Override"
+
+
 def get_tshirt_templates_dir() -> Path:
     return get_studio_root() / "tshirt_templates"
 

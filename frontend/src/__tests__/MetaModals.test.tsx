@@ -22,12 +22,14 @@ describe('FAQ and About human metadata modals', () => {
     expect(screen.getAllByText(/100% offline/i).length).toBeGreaterThanOrEqual(1);
     fireEvent.change(search, { target: { value: 'Capturar' } });
     expect(screen.getAllByText(/portapapeles/i).length).toBeGreaterThanOrEqual(1);
+    fireEvent.change(search, { target: { value: 'DF11 Pure' } });
+    expect(screen.getAllByText(/220 × 276/i).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders human-readable v1.5.0 release highlights and collapsible previous history without developer jargon', () => {
+  it('renders human-readable v1.6.0 release highlights and collapsible previous history without developer jargon', () => {
     render(<AboutModal onClose={() => {}} onOpenGraph={() => {}} />);
-    expect(screen.getAllByText(/v1\.5\.0/i).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/Build 10500/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/v1\.6\.0/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Build 10600/i)).toBeInTheDocument();
     expect(screen.getAllByText(/100% Local/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/Historial de versiones anteriores/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Inspeccionar Salud de la Arquitectura/i })).toBeInTheDocument();

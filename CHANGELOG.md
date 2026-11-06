@@ -1,5 +1,21 @@
 # Changelog Técnico — DF11 Face Studio
 
+## [1.6.0] - 2026-11-06
+### Added
+- **Formato Oficial DF11 Pure (`220 × 276 px` RGBA PNG, `72 DPI`, `Alpha = 0`, `0%` marco) (`backend/core/compositor.py`, `backend/services/head_neck.py`, `backend/services/templates.py`, `backend/services/studio_workflow.py`)**:
+  - Renderizador `render_df11_pure_card` sobre sub-ventana interior exacta `PURE_CROP_BOX = (20, 17, 240, 293)` del espacio canónico `260 × 310`, con feather perimetral determinista de `1 px` (`0.55` en aristas laterales/inferiores, `0.3025` en esquinas inferiores) y saneado `OKLab` en las esquinas inferiores `6 × 6` (`_heal_pure_bottom_corners`) para eliminar muescas heredadas de plantillas Classic redondeadas.
+  - Metadato estándar `dpi=(72, 72)` en `export_df11_bytes` y bloqueo estricto de formato `JPG` cuando se exporta una variante transparente DF11 Pure.
+  - Reimportación `1:1` sin pérdida (*round-trip* bit-exacto de geometría): detección `is_df11_pure_size(220, 276)`, restauración `pad_pure_to_df11_canvas` en `(20, 17)` + `unfeather_pure_perimeter_rgba` en `Foto Directa`, `Extraer Camiseta` y `Remix de Pack de Faces FM`, y máscara rectangular inferior `[19:242]` (`y >= 260`) en `templates.py` para preservar hombros inferiores rectos en Pure.
+- **Arquitectura *Single-Subject Dual-Sink* y Exportación Dual Atómica (`backend/bridge.py`, `backend/core/fm_config.py`, `backend/core/paths.py`, `frontend/src/components/StudioView.tsx`, `frontend/src/App.tsx`)**:
+  - Composición única de sujeto y filtro óptico `WGIF` (`compose_modular_subject_rgba` / `_build_step_subject_rgba`) bifurcada sin recalcular inferencia hacia `Classic (260 × 310)` y `Pure (220 × 276)` (`compose_step_dual_cards`, `_compose_dual`).
+  - Enrutamiento de carpetas independientes aprobadas por capacidades (`export_dir` / `export_pure_dir` en *1. Nuestras creaciones* y `facepack_dir` / `facepack_pure_dir` en *2. Pack de Faces FM*), resolución de colisiones asimétricas en auto-numeración y commit atómico en 2 fases (`_commit_card_exports_atomic` vía `.tmp` + `safe_ntfs_replace`) con rollback automático si falla cualquiera de los dos sumideros o `config.xml`.
+  - Detector `detect_fm_graphics_collision` con aviso preventivo no bloqueante cuando ambas salidas Dual cuelgan simultáneamente de la carpeta activa `graphics/` de Football Manager.
+  - Conmutador `Classic 260×310 | Pure 220×276 | Dual (Ambas)` en Paso 4 conservando el layout `100vh` sin scroll exterior, guía óptica `220 × 276` en el lienzo fijo `260 × 310` y selector `Vista Classic | Vista Pure` en modo Dual.
+- **Garantía `0% IA` en Foto Directa Opaca + Recorte Explícito en 1 Clic (`cutout_direct_photo_for_pure` en `studio_workflow.py`, `bridge.py`, `StudioView.tsx`)**:
+  - Cargar fotos opacas en `Foto Directa + Marco DF11` jamás ejecuta `BiRefNet` de forma implícita; si el usuario elige `Pure` o `Dual`, el Paso 1 ofrece el botón explícito `Recortar fondo para Pure (IA · 1 vez)` cacheado por foto y con conversión matemática de escala `base_cover / base_contain` para mantener el encuadre visual idéntico sin saltos.
+- **Sincronización Masiva `NG_Regens` en Modos Classic, Pure y Dual (`backend/services/sync.py`, `frontend/src/components/RegensSyncView.tsx`)**:
+  - Soporte `variant="classic" | "pure" | "dual"` y `pure_out_dir` tanto en lote multihilo (`sync_ng_regens_batch`) como en `Live Disk Sync (650ms)`, reutilizando una única extracción facial por regen y registrando firmas por variante en `.df11_sync_manifest.json` para que cambiar a `Pure` o `Dual` genere inmediatamente las salidas faltantes sin omitirlas como *skipped*.
+
 ## [1.5.0] - 2026-11-05
 ### Added
 - **Captura Nativa de Pantalla `PerMonitorV2` Cero-Portapapeles y Enrutamiento Independiente en Caliente (`backend/core/screen_clip_worker.py`, `backend/core/screen_capture.py`, `bridge.py`, `App.tsx`)**:
