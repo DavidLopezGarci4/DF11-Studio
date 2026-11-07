@@ -81,8 +81,9 @@ interface Props {
   onTemplatesCountChange?: (count: number) => void;
   hideInternalToolbar?: boolean;
   initialHotkeyEnabled?: boolean;
-  externalCaptureReq?: { seq: number; target?: CaptureTarget; explicit?: boolean } | null;
+  externalCaptureReq?: { seq: number; target?: CaptureTarget; explicit?: boolean; directBgReplace?: boolean } | null;
   onCaptureTargetHintChange?: (target: CaptureTarget) => void;
+  onCaptureBgReplaceHintChange?: (directBgReplace: boolean) => void;
 }
 
 const UID_RE = /^(?:r-)?[0-9]{1,12}$/;
@@ -111,6 +112,16 @@ type WearMode = 'template';
 type BgMode = 'transparent' | 'white_df11' | 'pearl_studio' | 'stadium_bokeh' | 'tunnel_club' | 'office_staff' | 'custom';
 type ExportTarget = 'creations' | 'facepack';
 
+const VALID_BG_MODES = new Set<BgMode>([
+  'transparent',
+  'white_df11',
+  'pearl_studio',
+  'stadium_bokeh',
+  'tunnel_club',
+  'office_staff',
+  'custom',
+]);
+
 interface LayerSnapshot {
   step1Mode: Step1Mode;
   headAssetId: string;
@@ -125,6 +136,8 @@ interface LayerSnapshot {
   directOffsetY: number;
   clampPan: boolean;
   enhanceQuality: number;
+  pureContourTolerance: number;
+  directBgReplace: boolean;
   wearMode: WearMode;
   templateId: string;
   clubId: string;
@@ -154,6 +167,8 @@ const INITIAL_SNAP: LayerSnapshot = {
   directOffsetY: 0,
   clampPan: true,
   enhanceQuality: 0,
+  pureContourTolerance: 0.5,
+  directBgReplace: false,
   wearMode: 'template',
   templateId: '',
   clubId: '1736',
@@ -206,6 +221,8 @@ function buildComposePayload(s: LayerSnapshot, previewVariant: 'classic' | 'pure
     directPhotoId: s.directPhotoId,
     clampPan: s.clampPan,
     enhanceQuality: s.enhanceQuality,
+    pureContourTolerance: Number(s.pureContourTolerance.toFixed(3)),
+    directBgReplace: s.directBgReplace,
     headAssetId: s.headAssetId === 'legacy-jump' ? '' : s.headAssetId,
     wearMode: 'template' as const,
     templateId: s.templateId,
@@ -400,6 +417,7 @@ export default function StudioView({
   initialHotkeyEnabled = false,
   externalCaptureReq = null,
   onCaptureTargetHintChange,
+  onCaptureBgReplaceHintChange,
 }: Props) {
   const [internalToolTab, setInternalToolTab] = useState<ToolTab>('composer');
   const toolTab = controlledToolTab ?? internalToolTab;
@@ -562,10 +580,7 @@ export default function StudioView({
   const isDirectMode = snap.step1Mode === 'direct_photo';
   const desiredPreviewVariant: 'classic' | 'pure' =
     activeExportVariant === 'pure' ? 'pure' : activeExportVariant === 'dual' ? dualPreviewSide : 'classic';
-  const needsDirectCutoutForPure =
-    isDirectMode && Boolean(snap.directPhotoId) && !snap.directPhotoIsPreCutout && activeExportVariant !== 'classic';
-  const effectivePreviewVariant: 'classic' | 'pure' =
-    isDirectMode && !snap.directPhotoIsPreCutout ? 'classic' : desiredPreviewVariant;
+  const effectivePreviewVariant: 'classic' | 'pure' = desiredPreviewVariant;
   const activeScale = isDirectMode ? snap.directScale : snap.scale;
   const activeOffsetX = isDirectMode ? snap.directOffsetX : snap.offsetX;
   const activeOffsetY = isDirectMode ? snap.directOffsetY : snap.offsetY;
@@ -586,7 +601,7 @@ export default function StudioView({
   const directFileInputRef = useRef<HTMLInputElement>(null);
   const bgInputRef = useRef<HTMLInputElement>(null);
   const facepackInputRef = useRef<HTMLInputElement>(null);
-  const pendingRemixModeRef = useRef<'swap_shirt' | 'swap_face'>('swap_shirt');
+  const pendingRemixModeRef = useRef<'swap_shirt' | 'swap_face' | 'to_pure'>('swap_shirt');
 
   const endEditSession = useCallback((sessionKey?: string) => {
     setHistory((h) => {
@@ -901,6 +916,21 @@ export default function StudioView({
           isPrecut,
           nextClamp,
         );
+        const hasExplicitBgReplace = typeof res.directBgReplace === 'boolean';
+        const nextDirectBgReplace = isPrecut
+          ? false
+          : hasExplicitBgReplace
+          ? Boolean(res.directBgReplace)
+          : s.directBgReplace;
+        let nextBgMode: BgMode =
+          typeof res.bgMode === 'string' && VALID_BG_MODES.has(res.bgMode as BgMode)
+            ? (res.bgMode as BgMode)
+            : s.bgMode;
+        if (nextDirectBgReplace && !isPrecut && nextBgMode === 'transparent') {
+          nextBgMode = 'white_df11';
+        }
+        const nextBgBlur =
+          hasExplicitBgReplace && nextDirectBgReplace && nextBgMode === 'white_df11' ? 0 : s.bgBlur;
         return {
           ...s,
           step1Mode: 'direct_photo',
@@ -913,13 +943,13 @@ export default function StudioView({
           directScale: nextScale,
           directOffsetX: clamped.x,
           directOffsetY: clamped.y,
+          directBgReplace: nextDirectBgReplace,
+          bgMode: nextBgMode,
+          bgBlur: nextBgBlur,
         };
       };
       const projectedSnap = buildNextDirectSnap(snap);
-      const projectedVariant: 'classic' | 'pure' =
-        projectedSnap.step1Mode === 'direct_photo' && !projectedSnap.directPhotoIsPreCutout
-          ? 'classic'
-          : (renderedVariantOverride ?? desiredPreviewVariant);
+      const projectedVariant: 'classic' | 'pure' = renderedVariantOverride ?? desiredPreviewVariant;
       if (res.previewDataUrl) {
         updatePreviewUrl(
           res.previewDataUrl,
@@ -933,31 +963,52 @@ export default function StudioView({
     [snap, desiredPreviewVariant, commitSnap, updatePreviewUrl],
   );
 
-  const handleCutoutDirectPhotoForPure = useCallback(async () => {
-    if (busy || !isDirectMode || !snap.directPhotoId) return;
-    const targetVar: 'classic' | 'pure' = activeExportVariant === 'dual' ? 'pure' : desiredPreviewVariant;
+  const applyFacepackPureResult = useCallback(
+    (out: DirectPhotoResponse) => {
+      if (out.facepackDir) {
+        setLocalFacepackDir(out.facepackDir);
+        if (typeof out.fmFacepackCollision === 'boolean') {
+          setLocalFmFacepackCollision(out.fmFacepackCollision);
+        }
+        onFacepackDirChange?.(out.facepackDir, out.fmFacepackCollision);
+        setExportTarget('facepack');
+        setFmt('png');
+      }
+      if (activeExportVariant === 'classic') {
+        handleSelectExportVariant('pure');
+      } else if (activeExportVariant === 'dual') {
+        setDualPreviewSide('pure');
+      }
+      applyDirectPhotoResult(out, true, 'pure');
+      setSavedMsg(`Ficha FM ${out.label || ''} convertida a DF11 Pure (0% IA · contorno óptico limpio).`.trim());
+    },
+    [activeExportVariant, handleSelectExportVariant, onFacepackDirChange, applyDirectPhotoResult],
+  );
+
+  const handlePickFacepackForPure = useCallback(async () => {
+    if (busy) return;
+    if (!window.pywebview?.api?.pick_facepack_card_for_pure) {
+      pendingRemixModeRef.current = 'to_pure';
+      facepackInputRef.current?.click();
+      return;
+    }
+    setBusy(true);
     setErrorMsg('');
     setSavedMsg('');
-    setBusy(true);
     try {
-      const out = await callBridge<DirectPhotoResponse>(
-        'cutout_direct_photo_for_pure',
-        snap.directPhotoId,
-        buildComposePayload(snap, targetVar),
+      const out = await callBridge<DirectPhotoResponse | null>(
+        'pick_facepack_card_for_pure',
+        buildComposePayload(snap, 'pure'),
       );
       if (out?.directPhotoId) {
-        if (activeExportVariant === 'dual') {
-          setDualPreviewSide('pure');
-        }
-        applyDirectPhotoResult(out, true, targetVar);
-        setSavedMsg('Fondo recortado (IA · 1 vez): Foto Directa lista para DF11 Pure y Dual.');
+        applyFacepackPureResult(out);
       }
     } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'No se pudo recortar el fondo para DF11 Pure.');
+      setErrorMsg(e instanceof Error ? e.message : 'No se pudo convertir la ficha FM a DF11 Pure.');
     } finally {
       setBusy(false);
     }
-  }, [busy, isDirectMode, snap, activeExportVariant, desiredPreviewVariant, applyDirectPhotoResult]);
+  }, [busy, snap, applyFacepackPureResult]);
 
   const handleDirectFileBlob = useCallback(
     async (file: File) => {
@@ -1187,6 +1238,41 @@ export default function StudioView({
     }
   }, [cropStage, cropVp, removeBgCrop, snap.templateId, snap.bgMode, snap.bgBlur, snap.harmonize, snap.enhanceQuality, effectivePreviewVariant, commitSnap, updatePreviewUrl]);
 
+  const handlePromoteStagedCropToDirectPhoto = useCallback(
+    async (replaceBg = false) => {
+      if (!cropStage || busy) return;
+      setBusy(true);
+      setErrorMsg('');
+      setSavedMsg('');
+      try {
+        const { clampPan: _omitClamp, ...loadParams } = composePayload;
+        const nextBgMode: BgMode = replaceBg && snap.bgMode === 'transparent' ? 'white_df11' : snap.bgMode;
+        const out = await callBridge<DirectPhotoResponse>('promote_staged_crop_to_direct_photo', {
+          ...loadParams,
+          step1Mode: 'direct_photo',
+          directBgReplace: replaceBg,
+          bgMode: nextBgMode,
+          ...(replaceBg && nextBgMode === 'white_df11' ? { bgBlur: 0 } : {}),
+        });
+        if (out?.directPhotoId) {
+          applyDirectPhotoResult(
+            {
+              ...out,
+              directBgReplace: out.directBgReplace ?? (out.isPreCutout ? false : replaceBg),
+              bgMode: out.bgMode ?? nextBgMode,
+            },
+            true,
+          );
+        }
+      } catch (e) {
+        setErrorMsg(e instanceof Error ? e.message : 'No se pudo pasar el recorte a Foto Directa.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [cropStage, busy, composePayload, snap.bgMode, applyDirectPhotoResult],
+  );
+
   const handlePickSavedFace = useCallback(
     async (faceId: string) => {
       setBusy(true);
@@ -1328,7 +1414,7 @@ export default function StudioView({
   );
 
   const handleFacepackFileBlob = useCallback(
-    async (file: File, mode: 'swap_shirt' | 'swap_face') => {
+    async (file: File, mode: 'swap_shirt' | 'swap_face' | 'to_pure') => {
       if (busy) return;
       if (file.size > 20 * 1024 * 1024) {
         setErrorMsg('El archivo supera el límite máximo permitido de 20 MB.');
@@ -1344,6 +1430,16 @@ export default function StudioView({
           r.onerror = () => rej(new Error('No se pudo leer la ficha.'));
           r.readAsDataURL(file);
         });
+        if (mode === 'to_pure') {
+          const outPure = await callBridge<DirectPhotoResponse>(
+            'load_facepack_card_for_pure',
+            dataUrl,
+            file.name,
+            buildComposePayload(snap, 'pure'),
+          );
+          if (outPure?.directPhotoId) applyFacepackPureResult(outPure);
+          return;
+        }
         const reqTemplateId = snap.templateId.startsWith('adhoc:') ? '' : snap.templateId;
         const out = await callBridge<FacepackRemixResponse>(
           'load_facepack_card',
@@ -1360,7 +1456,7 @@ export default function StudioView({
         setBusy(false);
       }
     },
-    [busy, snap.templateId, composePayload, applyFacepackRemixResult],
+    [busy, snap, composePayload, applyFacepackPureResult, applyFacepackRemixResult],
   );
 
   const isUsingCardFace = Boolean(
@@ -1683,6 +1779,10 @@ export default function StudioView({
     onCaptureTargetHintChange?.(defaultCaptureTarget);
   }, [defaultCaptureTarget, onCaptureTargetHintChange]);
 
+  useEffect(() => {
+    onCaptureBgReplaceHintChange?.(Boolean(isDirectMode && !snap.directPhotoIsPreCutout && snap.directBgReplace));
+  }, [isDirectMode, snap.directPhotoIsPreCutout, snap.directBgReplace, onCaptureBgReplaceHintChange]);
+
   const applyCapturedPayload = useCallback(
     (res: ScreenCapturePayload, fromExplicitMenu: boolean, matchesComposePayload: boolean) => {
       if (!res || res.cancelled) return;
@@ -1740,7 +1840,7 @@ export default function StudioView({
   );
 
   const handleScreenCapture = useCallback(
-    async (explicitTarget?: CaptureTarget, fromExplicitMenu = false) => {
+    async (explicitTarget?: CaptureTarget, fromExplicitMenu = false, explicitDirectBgReplace?: boolean) => {
       if (busy) return;
       setCaptureMenuOpen(false);
       const effTarget: CaptureTarget = explicitTarget ?? defaultCaptureTarget;
@@ -1749,19 +1849,43 @@ export default function StudioView({
       setBusy(true);
       try {
         const { clampPan: _omitClamp, ...loadParams } = composePayload;
-        const directParams = effTarget === 'direct_photo' ? { ...loadParams, step1Mode: 'direct_photo' } : undefined;
+        const hasExplicitBg = typeof explicitDirectBgReplace === 'boolean';
+        const effBgReplace = hasExplicitBg ? explicitDirectBgReplace : snap.directBgReplace;
+        const effBgMode: BgMode = effBgReplace && snap.bgMode === 'transparent' ? 'white_df11' : snap.bgMode;
+        const directParams =
+          effTarget === 'direct_photo'
+            ? {
+                ...loadParams,
+                step1Mode: 'direct_photo',
+                ...(hasExplicitBg
+                  ? {
+                      directBgReplace: effBgReplace,
+                      bgMode: effBgMode,
+                      ...(effBgReplace && effBgMode === 'white_df11' ? { bgBlur: 0 } : {}),
+                    }
+                  : {}),
+              }
+            : undefined;
         const res = await callBridge<ScreenCapturePayload>('capture_screen_region', effTarget, directParams);
         if (!res || res.cancelled) {
           return;
         }
-        applyCapturedPayload({ ...res, target: res.target ?? effTarget }, fromExplicitMenu, true);
+        const hydratedRes: ScreenCapturePayload =
+          effTarget === 'direct_photo' && hasExplicitBg && res.directBgReplace === undefined
+            ? {
+                ...res,
+                directBgReplace: res.isPreCutout ? false : effBgReplace,
+                bgMode: res.bgMode ?? effBgMode,
+              }
+            : res;
+        applyCapturedPayload({ ...hydratedRes, target: hydratedRes.target ?? effTarget }, fromExplicitMenu, true);
       } catch (e) {
         setErrorMsg(e instanceof Error ? e.message : 'No se pudo completar el recorte de pantalla.');
       } finally {
         setBusy(false);
       }
     },
-    [busy, defaultCaptureTarget, composePayload, applyCapturedPayload],
+    [busy, defaultCaptureTarget, composePayload, snap.directBgReplace, snap.bgMode, applyCapturedPayload],
   );
 
   const consumeAddonCapture = useCallback(async () => {
@@ -1789,11 +1913,15 @@ export default function StudioView({
     setErrorMsg('');
     try {
       const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-      await callBridge('open_capture_addon', defaultCaptureTarget, theme);
+      const args: unknown[] = [defaultCaptureTarget, theme];
+      if (defaultCaptureTarget === 'direct_photo' && isDirectMode && !snap.directPhotoIsPreCutout && snap.directBgReplace) {
+        args.push(true);
+      }
+      await callBridge('open_capture_addon', ...args);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'No se pudo abrir el Mini-Capturador flotante.');
     }
-  }, [defaultCaptureTarget]);
+  }, [defaultCaptureTarget, isDirectMode, snap.directPhotoIsPreCutout, snap.directBgReplace]);
 
   const handleToggleHotkey = useCallback(async () => {
     const next = !captureHotkey;
@@ -1814,7 +1942,11 @@ export default function StudioView({
   useEffect(() => {
     if (externalCaptureReq && externalCaptureReq.seq > externalCapSeqRef.current) {
       externalCapSeqRef.current = externalCaptureReq.seq;
-      void handleScreenCapture(externalCaptureReq.target, Boolean(externalCaptureReq.explicit));
+      void handleScreenCapture(
+        externalCaptureReq.target,
+        Boolean(externalCaptureReq.explicit),
+        externalCaptureReq.directBgReplace,
+      );
     }
   }, [externalCaptureReq, handleScreenCapture]);
 
@@ -1868,20 +2000,27 @@ export default function StudioView({
     setErrorMsg('');
     setBusy(true);
     try {
+      const payload =
+        isDirectMode && !snap.directPhotoIsPreCutout ? { ...composePayload, directBgReplace: true } : composePayload;
       const out = await callBridge<{ bgDataUrl: string; previewDataUrl: string } | null>(
         'pick_and_upload_custom_background',
-        composePayload,
+        payload,
       );
       if (!out) return;
       reqSeqRef.current += 1;
-      commitSnap((s) => ({ ...s, bgMode: 'custom' }));
+      if (activeExportVariant === 'dual') setDualPreviewSide('classic');
+      commitSnap((s) => ({
+        ...s,
+        bgMode: 'custom',
+        ...(s.step1Mode === 'direct_photo' && !s.directPhotoIsPreCutout ? { directBgReplace: true } : {}),
+      }));
       if (out.previewDataUrl) updatePreviewUrl(out.previewDataUrl);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'Fondo inválido (máx. 20 MB / 25 MP).');
     } finally {
       setBusy(false);
     }
-  }, [composePayload, commitSnap, updatePreviewUrl]);
+  }, [isDirectMode, snap.directPhotoIsPreCutout, composePayload, activeExportVariant, commitSnap, updatePreviewUrl]);
 
   const handleExtractBg = async () => {
     setErrorMsg('');
@@ -1912,13 +2051,20 @@ export default function StudioView({
         r.onerror = () => rej(new Error('No se pudo leer el fondo.'));
         r.readAsDataURL(file);
       });
+      const payload =
+        isDirectMode && !snap.directPhotoIsPreCutout ? { ...composePayload, directBgReplace: true } : composePayload;
       const out = await callBridge<{ bgDataUrl: string; previewDataUrl: string }>(
         'upload_custom_background',
         dataUrl,
-        composePayload,
+        payload,
       );
       reqSeqRef.current += 1;
-      commitSnap((s) => ({ ...s, bgMode: 'custom' }));
+      if (activeExportVariant === 'dual') setDualPreviewSide('classic');
+      commitSnap((s) => ({
+        ...s,
+        bgMode: 'custom',
+        ...(s.step1Mode === 'direct_photo' && !s.directPhotoIsPreCutout ? { directBgReplace: true } : {}),
+      }));
       if (out?.previewDataUrl) updatePreviewUrl(out.previewDataUrl);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'Fondo inválido.');
@@ -2012,12 +2158,6 @@ export default function StudioView({
     }
     if (exportTarget === 'creations' && hasUnsafeCreationChars) {
       setErrorMsg('El nombre para Nuestras creaciones no puede contener barras ni caracteres reservados.');
-      return;
-    }
-    if (isDirectMode && !snap.directPhotoIsPreCutout && activeExportVariant !== 'classic') {
-      setErrorMsg(
-        'En Foto Directa la imagen aún tiene fondo opaco. Pulsa «Recortar fondo para Pure (IA · 1 vez)» en el Paso 1 o exporta en Classic 260×310.',
-      );
       return;
     }
     let activeFpDir = effectiveFacepackDir;
@@ -2211,11 +2351,20 @@ export default function StudioView({
                   <button
                     type="button"
                     role="menuitem"
-                    onClick={() => void handleScreenCapture('direct_photo', true)}
+                    onClick={() => void handleScreenCapture('direct_photo', true, false)}
                     className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between gap-2"
                   >
                     <span>Foto Directa + Marco DF11</span>
-                    <span className="text-[10px] text-slate-400">0% IA</span>
+                    <span className="text-[10px] text-slate-400">Fondo orig. · 0% IA</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => void handleScreenCapture('direct_photo', true, true)}
+                    className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between gap-2 text-emerald-700 dark:text-emerald-400"
+                  >
+                    <span>Foto Directa · Capa Blanca DF11</span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400">Blanco · 0% IA</span>
                   </button>
                   <button
                     type="button"
@@ -2323,45 +2472,76 @@ export default function StudioView({
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-12 lg:grid-rows-[auto_minmax(0,1fr)] gap-3 lg:gap-x-3.5 lg:gap-y-2.5 lg:flex-1 lg:min-h-0">
           {/* Official 260x310 DF11 Canvas (Top-left on desktop, 1st in compressed stack) */}
-          <section className="lg:col-span-5 xl:col-span-4 lg:col-start-1 lg:row-start-1 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 flex flex-col items-center gap-2 shrink-0">
-            <div className="w-full flex items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
-              <div>
-                <span className="font-medium text-slate-900 dark:text-white">Lienzo Oficial DF11</span>
-                <span className="ml-2 tabular-nums font-mono text-[11px]">
-                  {effectivePreviewVariant === 'pure' ? '220 × 276 px · Pure' : '260 × 310 px'}
+          <section className="lg:col-span-5 xl:col-span-4 lg:col-start-1 lg:row-start-1 rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5 flex flex-col items-center gap-1.5 shrink-0">
+            <div className="w-full flex flex-wrap items-center justify-between gap-1.5 text-xs text-slate-600 dark:text-slate-400">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="font-medium text-slate-900 dark:text-white truncate">Lienzo Oficial DF11</span>
+                <span className="tabular-nums font-mono text-[11px] shrink-0">
+                  {effectivePreviewVariant === 'pure' ? '220×276' : '260×310'}
                 </span>
               </div>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  aria-label="Deshacer"
-                  title="Deshacer (Ctrl+Z)"
-                  disabled={history.past.length === 0}
-                  onClick={handleUndo}
-                  className="p-1.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-35 hover:bg-slate-200 dark:hover:bg-slate-700 transition"
+              <div className="flex items-center gap-1.5">
+                <div
+                  className="inline-flex items-center rounded-md bg-slate-100 dark:bg-slate-950 p-0.5 border border-slate-200/80 dark:border-slate-800"
+                  role="group"
+                  aria-label="Selector rápido de formato DF11 en lienzo"
                 >
-                  <Undo2 className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  aria-label="Rehacer"
-                  title="Rehacer (Ctrl+Y)"
-                  disabled={history.future.length === 0}
-                  onClick={handleRedo}
-                  className="p-1.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-35 hover:bg-slate-200 dark:hover:bg-slate-700 transition"
-                >
-                  <Redo2 className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  aria-label="Limpiar imagen editada"
-                  title="Limpiar imagen (Supr)"
-                  disabled={!cropStage && !(isDirectMode ? snap.directPhotoId : snap.headAssetId)}
-                  onClick={handleClearCanvas}
-                  className="p-1.5 rounded-md bg-slate-100 dark:bg-slate-800 text-rose-600 dark:text-rose-400 disabled:opacity-35 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                  {(
+                    [
+                      ['classic', 'Classic', 'Formato rápido Classic (260x310 con marco)'],
+                      ['pure', 'DF11 Pure', 'Formato rápido DF11 Pure (220x276 sin marco)'],
+                      ['dual', 'Dual', 'Formato rápido Dual (Classic y Pure a la vez)'],
+                    ] as const
+                  ).map(([vKey, vShort, vAria]) => (
+                    <button
+                      key={vKey}
+                      type="button"
+                      aria-label={vAria}
+                      aria-pressed={activeExportVariant === vKey}
+                      title={vAria}
+                      onClick={() => handleSelectExportVariant(vKey)}
+                      className={`px-1.5 py-0.5 rounded text-[11px] font-medium transition ${
+                        activeExportVariant === vKey
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                      }`}
+                    >
+                      {vShort}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    aria-label="Deshacer"
+                    title="Deshacer (Ctrl+Z)"
+                    disabled={history.past.length === 0}
+                    onClick={handleUndo}
+                    className="p-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-35 hover:bg-slate-200 dark:hover:bg-slate-700 transition"
+                  >
+                    <Undo2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Rehacer"
+                    title="Rehacer (Ctrl+Y)"
+                    disabled={history.future.length === 0}
+                    onClick={handleRedo}
+                    className="p-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-35 hover:bg-slate-200 dark:hover:bg-slate-700 transition"
+                  >
+                    <Redo2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Limpiar imagen editada"
+                    title="Limpiar imagen (Supr)"
+                    disabled={!cropStage && !(isDirectMode ? snap.directPhotoId : snap.headAssetId)}
+                    onClick={handleClearCanvas}
+                    className="p-1 rounded-md bg-slate-100 dark:bg-slate-800 text-rose-600 dark:text-rose-400 disabled:opacity-35 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -2377,7 +2557,7 @@ export default function StudioView({
                   setCaptureNotice('Imagen web remota bloqueada en modo offline: usa el botón Capturar para recortarla de tu navegador.');
                 }
               }}
-              className={`w-full rounded-lg p-2.5 flex flex-col items-center justify-center transition ${stageBgClass} border border-slate-200/80 dark:border-slate-800`}
+              className={`w-full rounded-lg p-2 flex flex-col items-center justify-center transition ${stageBgClass} border border-slate-200/80 dark:border-slate-800`}
             >
               <div
                 data-testid="df11-official-canvas"
@@ -2619,19 +2799,28 @@ export default function StudioView({
                     Quitar fondo
                   </label>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
                   <button
                     type="button"
                     disabled={busy}
                     onClick={() => void handleConfirmCropAndExtract()}
-                    className="flex-1 px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-medium inline-flex items-center justify-center gap-1.5"
+                    className="flex-1 px-2.5 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-medium inline-flex items-center justify-center gap-1"
                   >
                     <Crop className="w-3.5 h-3.5" /> Aplicar zona de corte
                   </button>
                   <button
                     type="button"
+                    disabled={busy}
+                    title="Enmarcar este recorte directamente en DF11 sin extraer capas ni usar IA (0% IA)"
+                    onClick={() => void handlePromoteStagedCropToDirectPhoto(false)}
+                    className="px-2 py-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 font-medium whitespace-nowrap transition"
+                  >
+                    Foto Directa (0% IA)
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setCropStage(null)}
-                    className="px-2.5 py-1.5 rounded-md bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+                    className="px-2 py-1.5 rounded-md bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
                   >
                     Cancelar
                   </button>
@@ -2762,13 +2951,24 @@ export default function StudioView({
                     }}
                   />
                   {isDirectMode ? (
-                    <button
-                      type="button"
-                      onClick={() => void handlePickDirectPhoto()}
-                      className="px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 hover:bg-emerald-500 text-white inline-flex items-center gap-1.5"
-                    >
-                      <ImagePlus className="w-3.5 h-3.5" /> Subir foto directa
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void handlePickDirectPhoto()}
+                        className="px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 hover:bg-emerald-500 text-white inline-flex items-center gap-1.5"
+                      >
+                        <ImagePlus className="w-3.5 h-3.5" /> Subir foto directa
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void handlePickFacepackForPure()}
+                        title="Cargar una ficha DF11 Classic 260×310 y convertirla al instante a DF11 Pure (0% IA)"
+                        className="px-2.5 py-1.5 text-xs font-medium rounded-md border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 disabled:opacity-45 inline-flex items-center gap-1.5 transition"
+                      >
+                        <Scissors className="w-3.5 h-3.5" /> Ficha FM → Pure
+                      </button>
+                    </>
                   ) : (
                     <>
                       <button
@@ -2871,19 +3071,101 @@ export default function StudioView({
                 </div>
               </div>
 
-              {needsDirectCutoutForPure && (
-                <div className="rounded-lg border border-amber-500/40 bg-amber-50/80 dark:bg-amber-950/30 px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <span className="text-amber-900 dark:text-amber-200">
-                    DF11 Pure exige fondo transparente (<code className="font-mono">Alfa = 0</code>). Foto Directa mantiene 0% IA hasta que lo autorices:
-                  </span>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void handleCutoutDirectPhotoForPure()}
-                    className="px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium inline-flex items-center gap-1.5 transition"
-                  >
-                    <Scissors className="w-3.5 h-3.5" /> Recortar fondo para Pure (IA · 1 vez)
-                  </button>
+              {isDirectMode && Boolean(snap.directPhotoId) && (activeExportVariant !== 'pure' || !snap.directPhotoIsPreCutout) && (
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20 px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  {activeExportVariant !== 'pure' ? (
+                    <div
+                      className="flex flex-wrap items-center gap-1"
+                      role="group"
+                      aria-label="Selector de fondo Classic en Foto Directa"
+                    >
+                      <span className="text-emerald-900 dark:text-emerald-200 font-medium mr-0.5">
+                        Fondo Classic:
+                      </span>
+                      {snap.directPhotoIsPreCutout ? (
+                        <>
+                          <button
+                            type="button"
+                            aria-pressed={snap.bgMode === 'white_df11'}
+                            onClick={() => {
+                              if (activeExportVariant === 'dual') setDualPreviewSide('classic');
+                              commitSnap((s) => ({ ...s, bgMode: 'white_df11', bgBlur: 0, directBgReplace: false }));
+                            }}
+                            className={segBtn(snap.bgMode === 'white_df11')}
+                          >
+                            Capa Blanca DF11
+                          </button>
+                          <button
+                            type="button"
+                            aria-pressed={snap.bgMode === 'transparent'}
+                            onClick={() => {
+                              if (activeExportVariant === 'dual') setDualPreviewSide('classic');
+                              commitSnap((s) => ({ ...s, bgMode: 'transparent', directBgReplace: false }));
+                            }}
+                            className={segBtn(snap.bgMode === 'transparent')}
+                          >
+                            Sin fondo (Alfa = 0)
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            aria-pressed={!snap.directBgReplace}
+                            title="Mantiene intacto el fondo original que ya viene en la captura o recorte"
+                            onClick={() => {
+                              if (activeExportVariant === 'dual') setDualPreviewSide('classic');
+                              commitSnap((s) => ({ ...s, directBgReplace: false }));
+                            }}
+                            className={segBtn(!snap.directBgReplace)}
+                          >
+                            Fondo original
+                          </button>
+                          <button
+                            type="button"
+                            aria-pressed={snap.directBgReplace && snap.bgMode === 'white_df11'}
+                            title="Limpia el contorno del jugador con 0% IA y aplica la Capa Blanca Oficial DF11"
+                            onClick={() => {
+                              if (activeExportVariant === 'dual') setDualPreviewSide('classic');
+                              commitSnap((s) => ({ ...s, directBgReplace: true, bgMode: 'white_df11', bgBlur: 0 }));
+                            }}
+                            className={segBtn(snap.directBgReplace && snap.bgMode === 'white_df11')}
+                          >
+                            Capa Blanca DF11 (0% IA)
+                          </button>
+                          {snap.directBgReplace && snap.bgMode !== 'white_df11' && (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-600/15 text-emerald-800 dark:text-emerald-300 text-[10px] font-medium">
+                              Fondo Paso 3 (0% IA)
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-emerald-900 dark:text-emerald-200 font-medium inline-flex items-center gap-1.5">
+                      <Scissors className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Contorno Pure (0% IA):
+                    </span>
+                  )}
+                  {!snap.directPhotoIsPreCutout && (activeExportVariant !== 'classic' || snap.directBgReplace) && (
+                    <div className="flex-1 min-w-[200px] max-w-[320px]">
+                      <PercentStepperControl
+                        sessionPrefix="pureTol"
+                        label="Tolerancia"
+                        sliderAriaLabel="Barra de tolerancia de contorno Pure (0% IA)"
+                        inputAriaLabel="Valor exacto de tolerancia Pure (%)"
+                        upAriaLabel="Subir tolerancia Pure"
+                        downAriaLabel="Bajar tolerancia Pure"
+                        titleHint="Ajusta la sensibilidad geodésica 0% IA frente a fondos claros o viñetas oscuras (50% óptimo)"
+                        value={snap.pureContourTolerance}
+                        minPct={0}
+                        maxPct={100}
+                        onChangeValue={(nextTol, skey) =>
+                          commitSessionSnap(skey, (s) => ({ ...s, pureContourTolerance: nextTol }))
+                        }
+                        onEndSession={endEditSession}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -2893,14 +3175,14 @@ export default function StudioView({
                   <div className="rounded-lg bg-slate-100 dark:bg-slate-950 px-2.5 py-1.5 space-y-1.5 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-medium text-slate-700 dark:text-slate-300 inline-flex items-center gap-1.5">
-                        <RefreshCw className="w-3.5 h-3.5 text-emerald-500" /> Ficha ya montada del Pack de Faces FM:
+                        <RefreshCw className="w-3.5 h-3.5 text-emerald-500" /> Ficha FM montada:
                       </span>
                       <div className="flex flex-wrap items-center gap-1.5">
                         <button
                           type="button"
                           disabled={busy}
                           onClick={() => void handlePickFacepackCard('swap_shirt')}
-                          className="px-2.5 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 font-medium transition"
+                          className="px-2 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 font-medium transition"
                         >
                           Cambiar camiseta a ficha FM
                         </button>
@@ -2908,9 +3190,18 @@ export default function StudioView({
                           type="button"
                           disabled={busy}
                           onClick={() => void handlePickFacepackCard('swap_face')}
-                          className="px-2.5 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-300 font-medium transition"
+                          className="px-2 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-emerald-500 text-slate-700 dark:text-slate-300 font-medium transition"
                         >
                           Cambiar cara (conservar su camiseta)
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handlePickFacepackForPure()}
+                          title="Desmezcla el bisel DF11 Classic 260×310 y limpia el contorno para DF11 Pure con 0% IA"
+                          className="px-2 py-1 rounded-md border border-emerald-500/40 bg-white dark:bg-slate-900 hover:border-emerald-500 text-emerald-700 dark:text-emerald-300 font-medium transition"
+                        >
+                          Ficha → Pure (0% IA)
                         </button>
                       </div>
                     </div>
@@ -3376,6 +3667,28 @@ export default function StudioView({
                       Aplica a Classic · Pure siempre Alfa = 0
                     </span>
                   )}
+                  {isDirectMode && Boolean(snap.directPhotoId) && !snap.directPhotoIsPreCutout && activeExportVariant !== 'pure' && (
+                    <label
+                      title="Limpia el contorno con 0% IA también en Classic para aplicarle la Capa Blanca DF11 o el fondo del Paso 3"
+                      className="inline-flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-300"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={snap.directBgReplace}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          if (activeExportVariant === 'dual') setDualPreviewSide('classic');
+                          commitSnap((s) => ({
+                            ...s,
+                            directBgReplace: checked,
+                            ...(checked && s.bgMode === 'transparent' ? { bgMode: 'white_df11', bgBlur: 0 } : {}),
+                          }));
+                        }}
+                        className="accent-emerald-600"
+                      />
+                      Sustituir fondo en Classic (0% IA)
+                    </label>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <input
@@ -3416,10 +3729,31 @@ export default function StudioView({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center text-xs">
                 <select
                   aria-label="Modo de fondo"
-                  value={snap.bgMode}
-                  onChange={(e) => commitSnap((s) => ({ ...s, bgMode: e.target.value as BgMode }))}
+                  value={
+                    isDirectMode && !snap.directPhotoIsPreCutout && !snap.directBgReplace
+                      ? '__keep_original__'
+                      : snap.bgMode
+                  }
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (activeExportVariant === 'dual') setDualPreviewSide('classic');
+                    if (val === '__keep_original__') {
+                      commitSnap((s) => ({ ...s, directBgReplace: false }));
+                      return;
+                    }
+                    commitSnap((s) => ({
+                      ...s,
+                      bgMode: val as BgMode,
+                      ...(s.step1Mode === 'direct_photo' && !s.directPhotoIsPreCutout
+                        ? { directBgReplace: true }
+                        : {}),
+                    }));
+                  }}
                   className="px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
                 >
+                  {isDirectMode && !snap.directPhotoIsPreCutout && (
+                    <option value="__keep_original__">Fondo original del recorte (sin sustituir)</option>
+                  )}
                   <option value="white_df11">Blanco Estudio DF11 (Oficial)</option>
                   <option value="transparent">Sin fondo (Transparente)</option>
                   <option value="pearl_studio">Gris Perla Estudio</option>
@@ -3435,7 +3769,10 @@ export default function StudioView({
                     min="0"
                     max="18"
                     step="0.5"
-                    disabled={snap.bgMode === 'transparent'}
+                    disabled={
+                      snap.bgMode === 'transparent' ||
+                      (isDirectMode && !snap.directPhotoIsPreCutout && !snap.directBgReplace)
+                    }
                     value={snap.bgBlur}
                     onPointerDown={() => {
                       bokehDragRef.current = true;
@@ -3501,6 +3838,7 @@ export default function StudioView({
                   <button
                     key={vKey}
                     type="button"
+                    aria-pressed={activeExportVariant === vKey}
                     title={vTitle}
                     onClick={() => handleSelectExportVariant(vKey)}
                     className={`px-2 py-1 rounded-md text-[11px] font-medium truncate transition ${

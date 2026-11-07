@@ -12,24 +12,24 @@ const SECTIONS: FAQSection[] = [
     items: [
       {
         id: 'df11-pure-dual-export',
-        question: '¿Cómo exporto en formato DF11 Pure (220 × 276 sin marco) o en modo Dual a dos carpetas independientes a la vez?',
+        question: '¿Dónde encuentro y cómo uso la exportación en DF11 Pure (220 × 276 sin marco) y el modo Dual a dos carpetas a la vez?',
         badge: 'Novedad v1.6',
-        tags: ['df11 pure', 'pure', 'dual', '220x276', '220 × 276', '260x310', 'sin marco', 'transparente', 'carpetas', 'ambas'],
+        tags: ['df11 pure', 'pure', 'dual', 'donde', 'encontrar', '220x276', '220 × 276', '260x310', 'sin marco', 'transparente', 'carpetas', 'ambas', 'sin ia', '0% ia', 'contorno'],
         bullets: [
-          'Tres modos en el Paso 4 (Classic, Pure y Dual): Elige «Classic 260×310» para la ficha tradicional con marco biselado, «Pure 220×276» para la silueta oficial sin marco y con fondo transparente, o «Dual (Ambas)» para generar las dos versiones a la vez de una sola pasada.',
-          'Carpetas independientes y conmutador de vista: En modo Dual dispones de botones separados para elegir la carpeta Classic y la carpeta Pure (tanto en «1. Nuestras creaciones» como en «2. Pack de Faces FM») y de los botones «Vista Classic | Vista Pure» bajo el lienzo para revisar ambos acabados antes de guardar.',
-          'Foto Directa con recorte autorizado en 1 clic y edición sin pérdida: Si usas «Foto Directa + Marco DF11» con una imagen de fondo opaco y eliges Pure o Dual, pulsa «Recortar fondo para Pure (IA · 1 vez)» en el Paso 1 conservando intacto tu encuadre; además, puedes abrir cualquier ficha DF11 Pure ya existente para cambiarle cara o camiseta manteniendo su escala 1:1 exacta.',
-          'Aviso si ambas carpetas están dentro de graphics/ de FM: Si en modo Dual apuntas las dos carpetas dentro de la carpeta activa graphics/ de Football Manager, verás un recordatorio porque el juego leería el mismo #ID por orden alfabético; guarda una fuera de graphics/ si prefieres alternar packs.',
+          'Dónde encontrar los botones (3 accesos directos): 1) Arriba del todo en la cabecera del «Lienzo Oficial DF11» verás el selector rápido «Classic | DF11 Pure | Dual»; 2) Justo debajo del lienzo, en el «Paso 4 · Marco Maestro DF11 y Exportación», tienes la fila «Formato DF11» («Classic 260×310 | Pure 220×276 | Dual (Ambas)»); y 3) En la pestaña «Sincronizador NG_Regens» dispones del mismo selector para lotes masivos.',
+          'Carpetas independientes y conmutador de vista: Al activar «Dual (Ambas)» aparecen dos selectores de carpeta separados —uno para tu carpeta Classic y otro para tu carpeta Pure— tanto en «1. Nuestras creaciones» como en «2. Pack de Faces FM», además de los botones «Vista Classic | Vista Pure» bajo el lienzo para revisar ambos acabados antes de exportar.',
+          'Limpieza de contorno 100% gratuita y 0% IA (ni siquiera la primera vez): Tanto en «Foto Directa + Marco DF11» como al pulsar «Ficha FM → Pure» o sincronizar regens sin equipación, un algoritmo óptico determinista limpia al instante el contorno del jugador (incluso con camisetas blancas o viñetas oscuras) sin usar inteligencia artificial. Si deseas afinarlo en fotos complejas, ajusta «Contorno Pure (0% IA)» (0%–100%).',
+          'Aviso si ambas carpetas cuelgan de graphics/ de FM: Si en modo Dual apuntas las dos carpetas dentro de la carpeta activa graphics/ de Football Manager, verás un recordatorio porque el juego carga el mismo #ID por orden alfabético; guarda una fuera de graphics/ si prefieres alternar packs.',
         ],
       },
       {
         id: 'screen-capture-hot',
         question: '¿Cómo funciona «Capturar» y el «Mini-Capturador flotante» para recortar la pantalla del PC sin tapar tu imagen ni borrar el #ID copiado?',
         badge: 'Novedad v1.5',
-        tags: ['capturar', 'mini-capturador', 'flotante', 'addon', 'recorte', 'pantalla', 'portapapeles', 'ctrl+shift+x', 'ctrl+v', 'drm', 'negro', 'png'],
+        tags: ['capturar', 'mini-capturador', 'flotante', 'addon', 'recorte', 'pantalla', 'portapapeles', 'ctrl+shift+x', 'ctrl+v', 'drm', 'negro', 'png', 'capa blanca', 'blanco df11', 'fondo original'],
         bullets: [
-          'Mini-Capturador flotante (pantalla despejada): Pulsa el icono de ventana flotante situado a la derecha de «Capturar» (o selecciona «Mini-Capturador flotante» en el menú ▾) para ocultar la app grande y dejar solo una pequeña barra flotante sobre tu escritorio con «Capturar», «Foto», «Cara», «Camiseta», «PNG» y el botón 📌 para encadenar varias capturas seguidas.',
-          'Cuatro destinos independientes y ocultación limpia sin tocar el portapapeles: Tanto desde la ventana completa como desde la barra flotante, la app desaparece por completo antes de tomar la captura para no salir jamás en tus recortes, conservando intacto el #ID de Football Manager que tengas copiado con Ctrl+C.',
+          'Mini-Capturador flotante con elección de fondo al instante: Pulsa el icono de ventana flotante situado a la derecha de «Capturar» (o selecciona «Mini-Capturador flotante» en el menú ▾) para ocultar la app grande y dejar solo una pequeña barra flotante sobre tu escritorio con «Capturar», «Foto» (mantiene el fondo original), «Blanco DF11» (aplica la Capa Blanca Oficial DF11 con 0% IA), «Cara», «Camiseta», «PNG» y el botón 📌 para encadenar capturas.',
+          'Menú Capturar ▾ y ocultación limpia sin tocar el portapapeles: En el menú desplegable de «Capturar ▾» puedes lanzar directamente «Foto Directa + Marco DF11» (fondo original) o «Foto Directa · Capa Blanca DF11» (0% IA). La app desaparece antes de tomar la captura y conserva intacto el #ID de Football Manager copiado con Ctrl+C.',
           'Proporción DF11 con Shift, atajo Ctrl+Shift+X y Ctrl+V seguro: Mantén Shift mientras arrastras para bloquear la proporción oficial 260 × 310 px, activa opcionalmente el atajo global Ctrl+Shift+X en el menú ▾ y usa Ctrl+V en cualquiera de las tres herramientas sin interferir cuando escribes en cuadros de texto.',
           'Vídeos en negro por protección del navegador: Si al recortar un vídeo pausado obtienes un recuadro negro, desactiva «Usar aceleración por hardware» en los ajustes de tu navegador.',
         ],
@@ -38,11 +38,11 @@ const SECTIONS: FAQSection[] = [
         id: 'direct-photo-df11',
         question: '¿Cómo creo una ficha rápida con Foto Directa + Marco DF11 (4 puntos cardinales y Zoom)?',
         badge: 'Novedad v1.4',
-        tags: ['foto directa', 'marco df11', 'puntos cardinales', 'norte', 'sur', 'este', 'oeste', 'zoom', 'ajustar a bordes', 'sin ia'],
+        tags: ['foto directa', 'marco df11', 'puntos cardinales', 'norte', 'sur', 'este', 'oeste', 'zoom', 'ajustar a bordes', 'sin ia', 'capa blanca', 'blanco df11', 'fondo original'],
         bullets: [
-          'Formato directo sin recortes ni IA: En el Paso 1 pulsa «Foto Directa + Marco DF11» y sube, arrastra o pega una foto para aplicarle al instante el marco biselado oficial de 260 × 310 px.',
+          'Formato directo sin recortes ni IA, con Fondo original o Capa Blanca DF11: En el Paso 1 pulsa «Foto Directa + Marco DF11» y sube, captura o pega cualquier foto. En la fila «Fondo Classic» puedes alternar con 1 clic entre «Fondo original» (conserva el fondo que trae tu recorte) y «Capa Blanca DF11 (0% IA)» (aplica el fondo blanco de estudio oficial DF11 limpiando el contorno sin IA), o elegir cualquier escenario en el Paso 3.',
           'Movimiento en los 4 puntos cardinales y Zoom con pivote central: Desplaza la imagen en los 4 puntos cardinales con los botones ↑ N, ↓ S, ← O, → E (o 0,0 para centrar), con el ratón o con las flechas del teclado, y aumenta o disminuye por Zoom (35%–300%) con rueda, barra, número exacto o flechas arriba/abajo.',
-          'Ajustar a bordes y alternancia libre: Activa «Ajustar a bordes» para impedir huecos vacíos en los márgenes al encuadrar fotos opacas y cambia cuando quieras a «Modo Capas (Cara + Camiseta)» sin perder ningún ajuste.',
+          'Ajustar a bordes, rescate desde Zona de corte y alternancia libre: Activa «Ajustar a bordes» para impedir huecos vacíos, usa «Foto Directa (0% IA)» si una captura entró en la Zona de corte y cambia cuando quieras a «Modo Capas (Cara + Camiseta)» sin perder ningún ajuste.',
         ],
       },
       {
@@ -72,7 +72,7 @@ const SECTIONS: FAQSection[] = [
         badge: 'Novedad v1.3',
         tags: ['facepack', 'pack', 'faces', 'ficha', 'renombrar', 'creaciones', 'png', 'jpg', 'config.xml'],
         bullets: [
-          'Editar ficha ya montada de un Facepack: En el Paso 1 usa «Cambiar camiseta a ficha FM» (conserva la cabeza del futbolista y le viste una prenda tuya) o «Cambiar cara (conservar su camiseta)» (aísla la equipación exacta que trae esa tarjeta para ponerle otra cara, pudiendo conmutar entre ambos modos o guardarla en plantillas).',
+          'Editar o convertir fichas ya montadas de un Facepack: En el Paso 1 usa «Cambiar camiseta a ficha FM» (conserva la cabeza del futbolista y le viste una prenda tuya), «Cambiar cara (conservar su camiseta)» (aísla la equipación de esa tarjeta para ponerle otra cara) o «Ficha → Pure (0% IA)» para desmezclar el bisel de una tarjeta Classic 260×310 y pasarla a DF11 Pure sin IA.',
           'Doble destino en el Paso 4: Elige «1. Nuestras creaciones» para guardar en tu carpeta personal sin necesidad de indicar el #ID oficial del futbolista (puedes dejar el cuadro vacío para nombre automático o escribir un nombre libre), o «2. Pack de Faces FM» para indicar la carpeta oficial de Football Manager y guardar el PNG con su #ID obligatorio actualizando config.xml sin pérdidas.',
         ],
       },
@@ -150,6 +150,17 @@ const SECTIONS: FAQSection[] = [
           'Xbox / Microsoft Store Game Pass: Ese parámetro no está soportado por SEGA; abre Ajustes de OneDrive -> Elegir carpetas y desmarca Sports Interactive.',
         ],
       },
+      {
+        id: 'architecture-health-nodes',
+        question: '¿Cómo reviso la Salud de la Arquitectura (GPU, modelos y base local) y la conexión entre nodos?',
+        badge: 'Diagnóstico',
+        tags: ['salud', 'nodos', 'arquitectura', 'tecnored', 'grafo', 'conexiones', 'gpu', 'directml', 'sqlite', 'acerca de'],
+        bullets: [
+          'Acceso desde Acerca de (icono ⓘ): Pulsa el icono de información «ⓘ» en la esquina superior derecha de la barra principal y haz clic en «Inspeccionar Salud de la Arquitectura».',
+          'Estado en tiempo real y recarga inmediata: En la cabecera del visor comprobarás si tu gráfica acelera las capas, el estado de los 3 modelos locales y el tiempo de respuesta del catálogo, pudiendo repetir la comprobación en cualquier momento con el botón de recarga 🔄.',
+          'Exploración de nodos y Rutas de Flujo: Haz clic sobre cualquier círculo del mapa, sobre los botones inferiores de cada componente o sobre las tarjetas de «Conexiones Directas» (← Origen / → Destino) para ver cómo se comunican, o cambia a «Rutas de Flujo» para seguir paso a paso cada función.',
+        ],
+      },
     ],
   },
 ];
@@ -157,7 +168,7 @@ const SECTIONS: FAQSection[] = [
 export default function FaqModal({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState('');
   const [activeSec, setActiveSec] = useState<string>('all');
-  const [openIds, setOpenIds] = useState<Record<string, boolean>>({ layers: true });
+  const [openIds, setOpenIds] = useState<Record<string, boolean>>({ 'df11-pure-dual-export': true, layers: true });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };

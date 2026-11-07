@@ -140,3 +140,95 @@ def test_fm_config_xml_preserves_multi_target_from_icons_and_shared_defaults(tmp
     assert '<record from="default" to="graphics/pictures/person/5001/portrait"/>' in text
     assert '<record from="default" to="graphics/pictures/person/5002/portrait"/>' in text
 
+
+def test_official_white_df11_photometric_gradient_and_pure_sleeve_closure() -> None:
+    from backend.core.compositor import _build_preset_bg, pad_pure_to_df11_canvas
+
+    bg = _build_preset_bg("white_df11")
+    assert bg.shape == (DF11_HEIGHT, DF11_WIDTH, 4)
+    # Strictly neutral achromatic studio background (R == G == B)
+    assert np.array_equal(bg[:, :, 0], bg[:, :, 1])
+    assert np.array_equal(bg[:, :, 1], bg[:, :, 2])
+    # Vertical studio gradient below top softbox border: crown (y=43) > mid-chest (y=155) > lower torso (y=260)
+    assert int(bg[43, 130, 0]) >= 253
+    assert int(bg[43, 130, 0]) > int(bg[155, 130, 0]) > int(bg[260, 130, 0])
+    # Top and lateral softbox perimeter falloff without corner double-darkening pinch
+    assert int(bg[22, 130, 0]) < int(bg[43, 130, 0])
+    assert int(bg[120, 22, 0]) == int(bg[120, 238, 0])
+    assert int(bg[120, 22, 0]) < int(bg[120, 130, 0])
+
+    # 220x276 Pure cutout placed onto Classic white_df11 closes both x=19 (1px) and x=240..241 (2px) sleeve columns
+    pure = np.zeros((276, 220, 4), dtype=np.uint8)
+    pure[200:276, :, :3] = [20, 32, 64]
+    pure[200:276, :, 3] = 255
+    pure[200:276, 0, 3] = 220
+    pure[200:276, -1, 3] = 220
+    stage = pad_pure_to_df11_canvas(Image.fromarray(pure, mode="RGBA"), unfeather_edges=True)
+    classic = np.asarray(render_df11_card(portrait_rgba=stage, bg_mode="white_df11"))
+    assert int(classic[245, 19, 2]) < 95
+    assert int(classic[245, 240, 2]) < 95
+    assert int(classic[245, 241, 2]) < 110
+
+
+def test_dark_capture_classic_white_df11_zero_ai_halo_and_stripe_integrity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PIL import ImageDraw
+    import backend.services.vision as vis_mod
+    from backend.services.studio_workflow import ModularWorkflowSession
+
+    def _forbid_onnx(*_a: object, **_kw: object) -> None:
+        raise AssertionError("Zero-AI violation: ONNX session pool must never be invoked for Classic Capa Blanca DF11!")
+
+    monkeypatch.setattr(vis_mod, "_run_session", _forbid_onnx)
+    monkeypatch.setattr(vis_mod, "_get_ort", _forbid_onnx)
+    monkeypatch.setattr(vis_mod, "ensure_model", _forbid_onnx)
+
+    # Synthetic 170x210 upscaled dark-screen capture (#0E1420) with half-white / half-black striped kit
+    cap = Image.new("RGBA", (170, 210), (14, 20, 32, 255))
+    draw = ImageDraw.Draw(cap)
+    draw.ellipse([54, 22, 116, 112], fill=(204, 158, 132, 255))
+    draw.rectangle([70, 102, 100, 145], fill=(194, 148, 122, 255))
+    draw.polygon([(0, 209), (0, 152), (62, 132), (85, 132), (85, 209)], fill=(244, 245, 247, 255))
+    draw.polygon([(85, 132), (108, 132), (169, 152), (169, 209), (85, 209)], fill=(22, 25, 31, 255))
+    buf = io.BytesIO()
+    cap.save(buf, format="PNG")
+
+    sess = ModularWorkflowSession(
+        templates_dir=tmp_path / "tpls",
+        extracted_faces_dir=tmp_path / "faces",
+        sample_faces_dir=tmp_path / "samples",
+        raw_archive_dir=tmp_path / "raw",
+        db_path=tmp_path / "state.sqlite3",
+    )
+    loaded = sess.load_direct_photo(buf.getvalue(), "Dark_Cap.png", extra_params={"directBgReplace": False})
+    did = loaded["directPhotoId"]
+    assert loaded["directBgReplace"] is False
+
+    # Option 1: Keep original dark capture background
+    card_orig = np.asarray(
+        sess.compose_step_card(
+            {"step1Mode": "direct_photo", "directPhotoId": did, "directBgReplace": False, "bgMode": "white_df11"}
+        )
+    )
+    assert float(card_orig[42, 42, :3].mean()) < 45.0
+
+    # Option 2: Apply Official DF11 White Layer (0% AI) -> bright background, zero dark moat on white shoulder, intact stripe seam
+    card_white, card_pure = sess.compose_step_dual_cards(
+        {
+            "step1Mode": "direct_photo",
+            "directPhotoId": did,
+            "directBgReplace": True,
+            "bgMode": "white_df11",
+            "enhanceQuality": 0.4,
+        }
+    )
+    cw_arr = np.asarray(card_white)
+    cp_arr = np.asarray(card_pure)
+    assert float(cw_arr[42, 42, :3].mean()) > 235.0
+    # Left white shoulder exterior & boundary must stay bright (no black Lanczos/dark-UI moat!)
+    assert float(cw_arr[195:235, 32:65, :3].min(axis=-1).mean()) > 218.0
+    # Central white-to-black stripe seam in Pure must remain 100% opaque (zero color-line holes!)
+    assert int(cp_arr[215:265, 102:118, 3].min()) == 255
+
+

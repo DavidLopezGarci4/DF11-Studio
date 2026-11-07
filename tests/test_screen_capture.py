@@ -326,10 +326,107 @@ def test_floating_capture_addon_lifecycle_hides_main_app_and_routes_payload(tmp_
     consumed_face = bridge.consume_addon_capture()
     assert consumed_face is not None and consumed_face["target"] == "raw_face"
 
-    # 5. Closing add-on with Alt+F4 while running cancels disposal and restores main; app shutdown destroys add-on cleanly
+    # 5. Closing add-on with Alt+F4 while running cancels disposal (pywebview Event.set() -> should_cancel=True when handler returns False)
+    #    and restores main; app shutdown returns True (should_cancel=False) and destroys add-on cleanly without leaving zombie processes.
+    from webview.event import Event as WebviewEvent
+
+    closing_evt = WebviewEvent(addon_win, should_lock=True)
+    closing_evt += bridge._on_addon_closing
+
     bridge.open_capture_addon("direct_photo", "light")
-    assert bridge._on_addon_closing() is True
+    should_cancel_while_running = closing_evt.set()
+    assert should_cancel_while_running is True
     assert addon_win.destroyed is False and addon_win.visible is False and main_win.visible is True
 
     bridge._shutdown_windows()
+    assert bridge._on_addon_closing() is True
     assert addon_win.destroyed is True
+
+
+def test_capture_classic_white_layer_addon_and_staged_crop_promotion_zero_ai(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import backend.core.screen_capture as sc_mod
+    import backend.services.head_neck as hn_mod
+    import backend.services.studio_workflow as sw_mod
+    import backend.services.vision as vis_mod
+    from backend.bridge import StudioBridge
+
+    class _TrackedWin:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.visible = name == "main"
+            self.js_calls: list[str] = []
+
+        def hide(self) -> None:
+            self.visible = False
+
+        def show(self) -> None:
+            self.visible = True
+
+        def restore(self) -> None:
+            self.visible = True
+
+        def destroy(self) -> None:
+            self.visible = False
+
+        def evaluate_js(self, script: str) -> None:
+            self.js_calls.append(script)
+
+    main_win = _TrackedWin("main")
+    addon_win = _TrackedWin("addon")
+    bridge = StudioBridge(
+        vault_dir=tmp_path / "vault",
+        export_dir=tmp_path / "exports",
+        db_path=tmp_path / "state.sqlite3",
+    )
+    bridge._attach_window(main_win)
+    bridge._attach_addon_window(addon_win)
+
+    cap_im = Image.new("RGBA", (220, 260), (18, 24, 38, 255))
+    arr = np.asarray(cap_im).copy()
+    arr[35:255, 55:165] = (212, 168, 142, 255)
+    png_bytes = _encode_png(Image.fromarray(arr, mode="RGBA"))
+
+    monkeypatch.setattr(
+        sc_mod,
+        "capture_screen_png",
+        lambda *_a, **_kw: sc_mod.ScreenCaptureResult(
+            png_bytes=png_bytes, width=220, height=260, drm_black_warning=False, low_res_warning=False
+        ),
+    )
+
+    # 1. Add-on capture with Blanco DF11 (direct_bg_replace=True) runs 0% AI and echoes directBgReplace + bgMode
+    def _forbid_onnx(*_a: object, **_kw: object) -> None:
+        raise AssertionError("ONNX forbidden on Blanco DF11 capture")
+
+    monkeypatch.setattr(vis_mod, "_run_session", _forbid_onnx)
+    monkeypatch.setattr(vis_mod, "_get_ort", _forbid_onnx)
+    monkeypatch.setattr(vis_mod, "ensure_model", _forbid_onnx)
+    opened = bridge.open_capture_addon("direct_photo", "dark", True)
+    assert opened == {"addonOpen": True, "target": "direct_photo"}
+    assert any("true" in s for s in addon_win.js_calls)
+
+    res = bridge.capture_from_addon("direct_photo", True, True)
+    assert res["cancelled"] is False
+    # Restoring before consumption re-notifies main window so pending Blanco DF11 capture is never lost
+    main_win.js_calls.clear()
+    bridge.restore_from_capture_addon()
+    assert any("df11:addon-capture" in s for s in main_win.js_calls)
+
+    consumed = bridge.consume_addon_capture()
+    assert consumed is not None
+    assert consumed["directBgReplace"] is True
+    assert consumed["bgMode"] == "white_df11"
+
+    # 2. Promoting a staged crop from Modo Capas rescues raw bytes to Foto Directa with 0% AI
+    monkeypatch.setattr(sw_mod, "suggest_safe_crop_viewport", lambda *_a, **_kw: hn_mod.CropViewport(1.0, 0.0, 0.0))
+    b64 = "data:image/png;base64," + __import__("base64").b64encode(png_bytes).decode("ascii")
+    staged = bridge.load_raw_face_source(b64, "29184012.png")
+    assert staged["width"] == 220
+    promoted = bridge.promote_staged_crop_to_direct_photo({"directBgReplace": True, "bgMode": "transparent"})
+    assert promoted["directPhotoId"].startswith("direct-")
+    assert promoted["detectedUid"] == "29184012"
+    assert promoted["directBgReplace"] is True
+    assert promoted["bgMode"] == "white_df11"
+

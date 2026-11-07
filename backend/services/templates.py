@@ -104,16 +104,9 @@ def _needs_shirt_sanitization(im_rgba: Image.Image) -> bool:
 
 
 def _has_df11_outer_ring(im_rgba: Image.Image) -> bool:
-    if im_rgba.size != (DF11_WIDTH, DF11_HEIGHT):
-        return False
-    a = np.asarray(im_rgba.convert("RGBA"), dtype=np.uint8)[:, :, 3]
-    if int(a[0, :].max()) > 0 or int(a[-1, :].max()) > 0 or int(a[:, 0].max()) > 0 or int(a[:, -1].max()) > 0:
-        return False
-    return (
-        0 < int(a[:, 2:18].max()) <= 125
-        and 0 < int(a[:, 243:258].max()) <= 125
-        and int(a[180:285, 30:230].max()) > 240
-    )
+    from backend.core.compositor import has_df11_outer_ring
+
+    return has_df11_outer_ring(im_rgba)
 
 
 def _sanitize_viewport(zoom: float = 1.0, pan_x: float = 0.0, pan_y: float = 0.0) -> tuple[float, float, float]:

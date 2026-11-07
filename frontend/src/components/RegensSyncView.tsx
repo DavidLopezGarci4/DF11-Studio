@@ -306,7 +306,12 @@ export default function RegensSyncView({
                 </button>
               ))}
             </div>
-            <label className="inline-flex items-center gap-2"><input type="checkbox" checked={applyKits} onChange={(e) => { const v = e.target.checked; setApplyKits(v); if (liveWatch) void handleToggleLiveWatch(true, v, harmonize); }} className="accent-emerald-600" /> Equipación real de club (P_clothes = 0)</label>
+            <label
+              title="Desmárcalo para sincronizar Classic, Pure o Dual con algoritmo óptico 100% 0% IA (8 hilos CPU, sin cargar modelos ONNX)"
+              className="inline-flex items-center gap-2"
+            >
+              <input type="checkbox" checked={applyKits} onChange={(e) => { const v = e.target.checked; setApplyKits(v); if (liveWatch) void handleToggleLiveWatch(true, v, harmonize); }} className="accent-emerald-600" /> Equipación real de club (desmarcado = 0% IA)
+            </label>
             <label className="inline-flex items-center gap-2"><input type="checkbox" checked={harmonize} onChange={(e) => { const v = e.target.checked; setHarmonize(v); if (liveWatch) void handleToggleLiveWatch(true, applyKits, v); }} className="accent-emerald-600" /> Armonizar luz DF11 (OKLab)</label>
             <button
               type="button"

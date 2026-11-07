@@ -239,11 +239,12 @@ def test_ng_regens_sync_materializes_missing_pure_on_classic_to_dual_transition(
     assert r5.processed == 0 and r5.skipped == 2
 
 
-def test_dual_export_2phase_rollback_and_direct_photo_explicit_cutout(
+def test_dual_export_2phase_rollback_and_direct_photo_zero_ai_pure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import backend.core.fm_config as fm_mod
     import backend.services.vision as vision_mod
+    from PIL import ImageDraw
 
     classic_exp = tmp_path / "Exports" / "Classic"
     pure_exp = tmp_path / "Exports" / "Pure"
@@ -257,38 +258,37 @@ def test_dual_export_2phase_rollback_and_direct_photo_explicit_cutout(
         db_path=tmp_path / "state.sqlite3",
     )
 
-    # 1. Opaque Direct Photo loaded while previewVariant='pure' must NOT crash on load,
-    #    must block Pure export until explicit cutout, and succeed after 1-click cutout_direct_photo_for_pure!
+    def _forbid_ai(*_args: object, **_kwargs: object) -> Image.Image:
+        raise AssertionError("BiRefNet / AI must NEVER be invoked for DF11 Pure or Dual Direct Photo!")
+
+    monkeypatch.setattr(vision_mod, "remove_background_birefnet", _forbid_ai)
+
+    # 1. Opaque Direct Photo loaded while previewVariant='pure' immediately renders 220x276 Pure & exports with 0% AI!
+    portrait = Image.new("RGB", (260, 310), (242, 244, 248))
+    dr = ImageDraw.Draw(portrait)
+    dr.ellipse([90, 40, 170, 155], fill=(195, 148, 122))
+    dr.polygon([(26, 309), (44, 205), (216, 205), (234, 309)], fill=(165, 28, 42))
     opaque_buf = io.BytesIO()
-    Image.new("RGB", (240, 280), (65, 120, 195)).save(opaque_buf, format="JPEG", quality=92)
+    portrait.save(opaque_buf, format="JPEG", quality=92)
     opaque_url = "data:image/jpeg;base64," + base64.b64encode(opaque_buf.getvalue()).decode("ascii")
 
     loaded_op = bridge.load_direct_photo_source(opaque_url, "Foto_Opaca.jpg", params={"previewVariant": "pure"})
     assert loaded_op["isPreCutout"] is False
     did = loaded_op["directPhotoId"]
+    init_prev = Image.open(io.BytesIO(base64.b64decode(loaded_op["previewDataUrl"].split(",", 1)[1]))).convert("RGBA")
+    assert init_prev.size == (220, 276)
+    assert int(np.asarray(init_prev)[:28, :16, 3].max()) == 0
 
-    with pytest.raises(ValueError, match="Recortar fondo"):
-        bridge.export_modular_card(
-            {
-                "step1Mode": "direct_photo",
-                "directPhotoId": did,
-                "uid": "900100",
-                "exportVariant": "pure",
-            }
-        )
-
-    def _fake_biref(im: Image.Image) -> Image.Image:
-        out = im.convert("RGBA").copy()
-        alpha = Image.new("L", out.size, 0)
-        alpha.paste(255, (40, 30, 200, 270))
-        out.putalpha(alpha)
-        return out
-
-    monkeypatch.setattr(vision_mod, "remove_background_birefnet", _fake_biref)
-    cut_res = bridge.cutout_direct_photo_for_pure(did, params={"previewVariant": "pure"})
-    assert cut_res["isPreCutout"] is True
-    cut_prev = Image.open(io.BytesIO(base64.b64decode(cut_res["previewDataUrl"].split(",", 1)[1])))
-    assert cut_prev.size == (220, 276)
+    exp_pure = bridge.export_modular_card(
+        {
+            "step1Mode": "direct_photo",
+            "directPhotoId": did,
+            "uid": "900100",
+            "exportVariant": "pure",
+        }
+    )
+    assert (pure_exp / "900100.png").is_file()
+    assert exp_pure["exportVariant"] == "pure"
 
     # 2. Simulate disk failure on the 2nd safe_ntfs_replace during Dual export:
     #    newly created Classic file MUST be rolled back; pre-existing Classic file MUST be preserved!

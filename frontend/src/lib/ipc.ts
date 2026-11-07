@@ -150,10 +150,15 @@ export interface DirectPhotoResponse {
   fileName?: string;
   label: string;
   detectedUid?: string;
+  directory?: string;
+  facepackDir?: string;
+  fmFacepackCollision?: boolean;
   width: number;
   height: number;
   isPreCutout: boolean;
   clampPan: boolean;
+  directBgReplace?: boolean;
+  bgMode?: string;
   autoFit: { scale: number; offsetX: number; offsetY: number; neckFill: number };
   previewDataUrl: string;
 }
@@ -257,6 +262,7 @@ export async function callBridge<T>(method: string, ...args: unknown[]): Promise
       method === 'open_capture_addon' ||
       method === 'capture_from_addon' ||
       method === 'cutout_direct_photo_for_pure' ||
+      method === 'promote_staged_crop_to_direct_photo' ||
       method.startsWith('extract_face_'))
   ) {
     throw new Error('Ejecuta DF11FaceStudio.exe para procesar imágenes con el motor nativo.');

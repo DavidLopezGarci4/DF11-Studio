@@ -11,6 +11,7 @@ from PIL import Image, ImageFilter, ImageOps
 
 from backend.core.dsp import (
     FitMode,
+    clean_pure_contour_zero_ai,
     compute_effective_scale,
     enhance_df11_pure_optics,
     resample_linear_subpixel_rgba,
@@ -76,8 +77,14 @@ def _build_preset_bg(mode: str) -> np.ndarray:
     if mode == "transparent":
         return out
     if mode == "white_df11":
-        lum = np.clip(253.0 - 11.0 * r2, 236.0, 254.0)
-        rgb = np.stack([lum, lum, np.clip(lum + 1.0, 0, 255)], axis=2)
+        v_grad = 255.0 - 0.115 * np.clip(yy - 30.0, 0.0, 262.0)
+        dx = np.minimum(np.maximum(xx - 19.0, 0.0), np.maximum(241.0 - xx, 0.0))
+        dy = np.minimum(np.maximum(yy - 17.0, 0.0), np.maximum(292.0 - yy, 0.0))
+        sx = np.clip(1.0 - dx / 28.0, 0.0, 1.0) ** 2
+        sy = np.clip(1.0 - dy / 26.0, 0.0, 1.0) ** 2
+        s_edge = sx + sy - sx * sy
+        lum = np.clip(v_grad - 17.5 * s_edge, 206.0, 255.0)
+        rgb = np.stack([lum, lum, lum], axis=2)
     elif mode == "pearl_studio":
         rgb = np.stack([245.0 - 18.0 * r2, 247.0 - 16.0 * r2, 251.0 - 12.0 * r2], axis=2)
     elif mode == "stadium_bokeh":
@@ -182,6 +189,103 @@ def is_df11_pure_size(size: tuple[int, int]) -> bool:
     return size == (DF11_PURE_WIDTH, DF11_PURE_HEIGHT)
 
 
+def has_df11_outer_ring(im_rgba: Image.Image) -> bool:
+    """Return True if image is a 260x310 DF11 Classic card with transparent outer margin and frame AA ring."""
+    if im_rgba.size != (DF11_WIDTH, DF11_HEIGHT):
+        return False
+    a = np.asarray(im_rgba if im_rgba.mode == "RGBA" else im_rgba.convert("RGBA"), dtype=np.uint8)[:, :, 3]
+    if int(a[0, :].max()) > 0 or int(a[-1, :].max()) > 0 or int(a[:, 0].max()) > 0 or int(a[:, -1].max()) > 0:
+        return False
+    return (
+        0 < int(a[:, 2:18].max()) <= 125
+        and 0 < int(a[:, 243:258].max()) <= 125
+        and int(a[180:285, 30:230].max()) > 240
+    )
+
+
+@lru_cache(maxsize=1)
+def _df11_win_dead_ring_lookup() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Precompute nearest valid interior pixel indices for outer mask<8 dead ring inside [16:294, 18:242]."""
+    mask_im, _ov_im = load_df11_assets()
+    m_win = np.asarray(mask_im, dtype=np.uint8)[16:294, 18:242]
+    dead = m_win < 8
+    valid = m_win >= 245
+    eroded = np.zeros_like(valid)
+    eroded[1:-1, 1:-1] = (
+        valid[1:-1, 1:-1] & valid[:-2, 1:-1] & valid[2:, 1:-1] & valid[1:-1, :-2] & valid[1:-1, 2:]
+    )
+    boundary = valid & (~eroded)
+    by, bx = np.nonzero(boundary)
+    dy, dx = np.nonzero(dead)
+    d2 = (dy[:, None] - by[None, :]) ** 2 + (dx[:, None] - bx[None, :]) ** 2
+    nearest = np.argmin(d2, axis=1)
+    return dy, dx, by[nearest], bx[nearest]
+
+
+def unmix_df11_classic_bevel_rgba(card_260x310: Image.Image) -> tuple[Image.Image, bool]:
+    """Invert df11_frame_overlay + df11_inner_mask inside [16:294, 18:242] (224x278) in premultiplied RGBA space.
+
+    - Leaves clear_win (a_ov == 0 and m == 255) 100% bit-exact (diff == 0).
+    - Recovers true un-darkened RGB under the 3D frame bevel shadow (max error <= 1/255).
+    - Strips the ghost bevel ring from transparent Classic cards so Pure exports stay strictly Alpha == 0.
+    """
+    rgba = card_260x310 if card_260x310.mode == "RGBA" else card_260x310.convert("RGBA")
+    crop_arr = np.asarray(rgba.crop((18, 16, 242, 294)), dtype=np.uint8).copy()
+    if not has_df11_outer_ring(rgba):
+        is_pre = bool(float(np.mean(crop_arr[18:276, 20:222, 3] < 250)) >= 0.02)
+        return Image.fromarray(crop_arr, mode="RGBA"), is_pre
+
+    mask_im, ov_im = load_df11_assets()
+    m_win = np.asarray(mask_im, dtype=np.uint8)[16:294, 18:242]
+    ov_win = np.asarray(ov_im, dtype=np.uint8)[16:294, 18:242]
+
+    a_card = crop_arr[:, :, 3:4].astype(np.float32) * np.float32(1.0 / 255.0)
+    a_ov = ov_win[:, :, 3:4].astype(np.float32) * np.float32(1.0 / 255.0)
+    m_f = m_win[:, :, None].astype(np.float32) * np.float32(1.0 / 255.0)
+
+    # Unmix strictly where m >= 8 and frame overlay actually modified pixels (a_ov > 0 or m < 255)
+    needs_unmix = (m_win >= 8) & ((ov_win[:, :, 3] > 0) | (m_win < 255))
+    if np.any(needs_unmix):
+        c_card = crop_arr[:, :, :3].astype(np.float32)
+        c_ov = ov_win[:, :, :3].astype(np.float32)
+        diff_a = a_card - a_ov
+        a_orig = np.where(
+            a_card >= np.float32(0.995),
+            np.float32(1.0),
+            np.clip(diff_a / np.maximum(m_f * (np.float32(1.0) - a_ov), np.float32(0.03)), 0.0, 1.0),
+        )
+        # Zero out ghost frame bevel pixels where underlying card was empty transparent
+        a_orig = np.where(a_orig < np.float32(0.025), np.float32(0.0), a_orig)
+        c_clean = np.clip(
+            (c_card * a_card - c_ov * a_ov) / np.maximum(diff_a, np.float32(0.03)),
+            0.0,
+            255.0,
+        )
+        c_clean = np.where(a_orig > 0.0, c_clean, 0.0)
+
+        crop_arr[:, :, :3] = np.where(
+            needs_unmix[:, :, None],
+            np.round(c_clean).astype(np.uint8),
+            crop_arr[:, :, :3],
+        )
+        crop_arr[:, :, 3:4] = np.where(
+            needs_unmix[:, :, None],
+            np.round(a_orig * 255.0).astype(np.uint8),
+            crop_arr[:, :, 3:4],
+        )
+
+    interior_a = crop_arr[18:276, 20:222, 3]
+    is_precut = bool(float(np.mean(interior_a < 250)) >= 0.02)
+    if not is_precut:
+        dy, dx, ny, nx = _df11_win_dead_ring_lookup()
+        crop_arr[dy, dx, :3] = crop_arr[ny, nx, :3]
+        crop_arr[:, :, 3] = 255
+    else:
+        dead = m_win < 8
+        crop_arr[dead] = 0
+    return Image.fromarray(crop_arr, mode="RGBA"), is_precut
+
+
 @lru_cache(maxsize=1)
 def _build_pure_perimeter_feather() -> np.ndarray:
     """Symmetric 1px perimeter alpha feather matching shipped DF11 Pure FM27 megapacks (~220/255 edges, ~190/255 corners)."""
@@ -216,7 +320,7 @@ def pad_pure_to_df11_canvas(pure_rgba: Image.Image, unfeather_edges: bool = Fals
         return im
     stage = Image.new("RGBA", (DF11_WIDTH, DF11_HEIGHT), (0, 0, 0, 0))
     stage.paste(im, (PURE_CROP_X0, PURE_CROP_Y0))
-    # Extend 1px outer sleeve columns into x=19 and x=240 when unfeathering for Classic inner window [19..241]
+    # Extend outer sleeve columns into x=19 and x=240..241 when unfeathering for Classic inner window [19..241]
     if unfeather_edges:
         st_arr = np.asarray(stage, dtype=np.uint8).copy()
         left_sleeve = st_arr[PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X0, 3] >= 245
@@ -226,44 +330,54 @@ def pad_pure_to_df11_canvas(pure_rgba: Image.Image, unfeather_edges: bool = Fals
             ][left_sleeve]
         right_sleeve = st_arr[PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X1 - 1, 3] >= 245
         if np.any(right_sleeve):
-            st_arr[PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X1][right_sleeve] = st_arr[
-                PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X1 - 1
-            ][right_sleeve]
+            right_px = st_arr[PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X1 - 1][right_sleeve]
+            st_arr[PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X1][right_sleeve] = right_px
+            st_arr[PURE_CROP_Y0:PURE_CROP_Y1, PURE_CROP_X1 + 1][right_sleeve] = right_px
         return Image.fromarray(st_arr, mode="RGBA")
     return stage
 
 
 def _heal_pure_bottom_corners(crop_arr: np.ndarray) -> np.ndarray:
-    """Heal 6x6 bottom-corner bites and bevel darkening baked into legacy tshirt_templates by df11_inner_mask."""
+    """Heal 6x6 bottom-corner bites and bevel darkening in legacy tshirt_templates using per-column vertical medians."""
     out = crop_arr
-    # Bottom-left 7x7 corner patch: y in [269..275], x in [0..6]
-    if float(out[261:268, 1:5, 3].mean()) > 235.0 and (int(out[275, 0, 3]) < 245 or int(out[275, 1, 3]) < 250):
-        ref_l = np.median(out[262:268, 5:11, :3].reshape(-1, 3).astype(np.float32), axis=0)
-        ref_lum_l = float(ref_l.mean())
-        for x in range(7):
-            if int(out[264, min(x, 6), 3]) > 220 or int(out[264, 1, 3]) > 235:
-                col_rgb = out[269:276, x, :3].astype(np.float32)
-                col_a = out[269:276, x, 3]
-                darkened = (col_a < 250) | (col_rgb.mean(axis=-1) < ref_lum_l * 0.78)
-                out[269:276, x, :3] = np.where(darkened[:, None], np.round(ref_l).astype(np.uint8), out[269:276, x, :3])
-                out[269:276, x, 3] = 255
+    # Bottom-left corner triangle (275 - y) + x <= 5: y in [270..275], x in [0..5]
+    if float(out[261:267, 1:5, 3].mean()) > 235.0 and (int(out[275, 0, 3]) < 245 or int(out[275, 1, 3]) < 250):
+        for x in range(6):
+            if int(out[264, x, 3]) > 220 or int(out[264, 1, 3]) > 235:
+                col_ref = np.median(out[261:267, x, :3].astype(np.float32), axis=0)
+                col_ref_lum = float(col_ref.mean())
+                y_start = 270 + x
+                col_rgb = out[y_start:276, x, :3].astype(np.float32)
+                col_a = out[y_start:276, x, 3]
+                darkened = (col_a < 250) | (col_rgb.mean(axis=-1) < col_ref_lum * 0.78)
+                out[y_start:276, x, :3] = np.where(
+                    darkened[:, None],
+                    np.round(col_ref).astype(np.uint8),
+                    out[y_start:276, x, :3],
+                )
+                out[y_start:276, x, 3] = 255
 
-    # Bottom-right 7x7 corner patch: y in [269..275], x in [213..219]
-    if float(out[261:268, 215:219, 3].mean()) > 235.0 and (int(out[275, 219, 3]) < 245 or int(out[275, 218, 3]) < 250):
-        ref_r = np.median(out[262:268, 209:215, :3].reshape(-1, 3).astype(np.float32), axis=0)
-        ref_lum_r = float(ref_r.mean())
-        for x in range(213, 220):
+    # Bottom-right corner triangle (275 - y) + (219 - x) <= 5: y in [270..275], x in [214..219]
+    if float(out[261:267, 215:219, 3].mean()) > 235.0 and (int(out[275, 219, 3]) < 245 or int(out[275, 218, 3]) < 250):
+        for x in range(214, 220):
             if int(out[264, x, 3]) > 220 or int(out[264, 218, 3]) > 235:
-                col_rgb = out[269:276, x, :3].astype(np.float32)
-                col_a = out[269:276, x, 3]
-                darkened = (col_a < 250) | (col_rgb.mean(axis=-1) < ref_lum_r * 0.78)
-                out[269:276, x, :3] = np.where(darkened[:, None], np.round(ref_r).astype(np.uint8), out[269:276, x, :3])
-                out[269:276, x, 3] = 255
+                col_ref = np.median(out[261:267, x, :3].astype(np.float32), axis=0)
+                col_ref_lum = float(col_ref.mean())
+                y_start = 270 + (219 - x)
+                col_rgb = out[y_start:276, x, :3].astype(np.float32)
+                col_a = out[y_start:276, x, 3]
+                darkened = (col_a < 250) | (col_rgb.mean(axis=-1) < col_ref_lum * 0.78)
+                out[y_start:276, x, :3] = np.where(
+                    darkened[:, None],
+                    np.round(col_ref).astype(np.uint8),
+                    out[y_start:276, x, :3],
+                )
+                out[y_start:276, x, 3] = 255
 
     # Restore y=275 interior row from df11_inner_mask's Alpha=252 up to 255 before perimeter feathering
-    mid_solid = (out[273, 7:213, 3] == 255) & (out[275, 7:213, 3] >= 230)
+    mid_solid = (out[273, 6:214, 3] == 255) & (out[275, 6:214, 3] >= 230)
     if np.any(mid_solid):
-        out[275, 7:213, 3] = np.where(mid_solid, 255, out[275, 7:213, 3])
+        out[275, 6:214, 3] = np.where(mid_solid, 255, out[275, 6:214, 3])
     return out
 
 
@@ -271,6 +385,8 @@ def render_df11_pure_card(
     subject_260x310: Image.Image | None,
     enhance_quality: float = 0.0,
     upscale_hint: float = 1.0,
+    ensure_zero_ai_alpha: bool = False,
+    pure_tolerance: float = 0.5,
 ) -> Image.Image:
     """Render an official 220x276 RGBA DF11 Pure card (Alpha=0 background, 0% frame, 1px perimeter feather)."""
     if subject_260x310 is None:
@@ -278,9 +394,17 @@ def render_df11_pure_card(
     im = subject_260x310 if subject_260x310.mode == "RGBA" else subject_260x310.convert("RGBA")
     if im.size == (DF11_PURE_WIDTH, DF11_PURE_HEIGHT):
         im = pad_pure_to_df11_canvas(im, unfeather_edges=True)
+    elif im.size == (DF11_WIDTH, DF11_HEIGHT) and has_df11_outer_ring(im):
+        unmixed_win, is_pre = unmix_df11_classic_bevel_rgba(im)
+        stage = Image.new("RGBA", (DF11_WIDTH, DF11_HEIGHT), (0, 0, 0, 0))
+        stage.paste(unmixed_win, (18, 16))
+        im = stage if is_pre else clean_pure_contour_zero_ai(stage, tolerance=pure_tolerance)
     elif im.size != (DF11_WIDTH, DF11_HEIGHT):
         placed = _place_portrait(im, (0.0, 0.0), 1.0, fit_mode="contain", clamp_to_inner=False)
         im = Image.fromarray(placed, mode="RGBA")
+
+    if ensure_zero_ai_alpha:
+        im = clean_pure_contour_zero_ai(im, tolerance=pure_tolerance)
 
     arr_260 = np.asarray(im, dtype=np.uint8)
     if float(enhance_quality) > 1e-3:

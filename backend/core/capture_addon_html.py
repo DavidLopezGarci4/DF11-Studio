@@ -1,4 +1,4 @@
-"""Self-contained frameless HTML/CSS/JS for the always-on-top DF11 Floating Capture Add-on (464x52 px)."""
+"""Self-contained frameless HTML/CSS/JS for the always-on-top DF11 Floating Capture Add-on (536x52 px)."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ CAPTURE_ADDON_HTML = """<!doctype html>
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 6px;
+    gap: 5px;
     padding: 6px 8px;
     border: 1px solid var(--border);
     background: var(--bg);
@@ -52,7 +52,7 @@ CAPTURE_ADDON_HTML = """<!doctype html>
   .drag-grip {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
     padding: 6px 5px;
     border-radius: 6px;
     color: var(--muted);
@@ -70,7 +70,7 @@ CAPTURE_ADDON_HTML = """<!doctype html>
     color: #ffffff;
     font-size: 12px;
     font-weight: 600;
-    padding: 7px 11px;
+    padding: 7px 10px;
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -96,9 +96,10 @@ CAPTURE_ADDON_HTML = """<!doctype html>
     color: var(--muted);
     font-size: 11px;
     font-weight: 600;
-    padding: 4px 7px;
+    padding: 4px 6px;
     border-radius: 5px;
     cursor: pointer;
+    white-space: nowrap;
     transition: all 120ms ease;
   }
   .seg button:hover { color: var(--text); }
@@ -142,7 +143,8 @@ CAPTURE_ADDON_HTML = """<!doctype html>
     </button>
 
     <div class="seg" role="group" aria-label="Destino del recorte">
-      <button type="button" data-target="direct_photo" class="active" title="Foto Directa + Marco DF11 (0% IA)">Foto</button>
+      <button type="button" data-target="direct_photo" data-bg="orig" class="active" title="Foto Directa · Mantener fondo original del recorte (0% IA)">Foto</button>
+      <button type="button" data-target="direct_photo" data-bg="white" title="Foto Directa · Aplicar Capa Blanca Oficial DF11 (0% IA)">Blanco DF11</button>
       <button type="button" data-target="raw_face" title="Recortar Cara (Extractor)">Cara</button>
       <button type="button" data-target="raw_shirt" title="Extraer Camiseta (2× SSAA)">Camiseta</button>
       <button type="button" data-target="save_png" title="Guardar recorte como PNG">PNG</button>
@@ -159,7 +161,7 @@ CAPTURE_ADDON_HTML = """<!doctype html>
 
   <script>
     (function () {
-      var state = { target: 'direct_photo', pinned: false, busy: false };
+      var state = { target: 'direct_photo', directBgReplace: false, pinned: false, busy: false };
       var capBtn = document.getElementById('capBtn');
       var capLabel = document.getElementById('capLabel');
       var pinBtn = document.getElementById('pinBtn');
@@ -168,7 +170,15 @@ CAPTURE_ADDON_HTML = """<!doctype html>
 
       function syncUI() {
         targetBtns.forEach(function (btn) {
-          btn.classList.toggle('active', btn.getAttribute('data-target') === state.target);
+          var btnTarget = btn.getAttribute('data-target');
+          var btnBg = btn.getAttribute('data-bg');
+          var isActive = false;
+          if (btnTarget === 'direct_photo' && state.target === 'direct_photo') {
+            isActive = btnBg === 'white' ? Boolean(state.directBgReplace) : !state.directBgReplace;
+          } else {
+            isActive = btnTarget === state.target;
+          }
+          btn.classList.toggle('active', isActive);
         });
         pinBtn.classList.toggle('pinned', state.pinned);
         capBtn.disabled = state.busy;
@@ -177,6 +187,10 @@ CAPTURE_ADDON_HTML = """<!doctype html>
       targetBtns.forEach(function (btn) {
         btn.addEventListener('click', function () {
           state.target = btn.getAttribute('data-target') || 'direct_photo';
+          var btnBg = btn.getAttribute('data-bg');
+          if (state.target === 'direct_photo' && btnBg) {
+            state.directBgReplace = btnBg === 'white';
+          }
           syncUI();
         });
       });
@@ -192,7 +206,11 @@ CAPTURE_ADDON_HTML = """<!doctype html>
         capLabel.textContent = '…';
         syncUI();
         try {
-          var res = await window.pywebview.api.capture_from_addon(state.target, state.pinned);
+          var res = await window.pywebview.api.capture_from_addon(
+            state.target,
+            state.pinned,
+            state.target === 'direct_photo' ? Boolean(state.directBgReplace) : null
+          );
           if (res && !res.cancelled) {
             capLabel.textContent = '✓ Listo';
             setTimeout(function () { capLabel.textContent = 'Capturar'; }, 1100);
@@ -221,8 +239,9 @@ CAPTURE_ADDON_HTML = """<!doctype html>
         }
       });
 
-      window.__df11SetAddonState = function (target, theme) {
+      window.__df11SetAddonState = function (target, theme, directBgReplace) {
         if (target) state.target = target;
+        if (typeof directBgReplace === 'boolean') state.directBgReplace = directBgReplace;
         document.documentElement.classList.toggle('dark', theme !== 'light');
         syncUI();
       };

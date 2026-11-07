@@ -199,10 +199,12 @@ class StudioBridge:
         self._addon_window = addon_win
 
     def _on_addon_closing(self) -> bool:
+        # In pywebview Event.set(), returning False cancels window closing (args.Cancel = True),
+        # whereas returning True allows the native Form to close and dispose cleanly.
         if self._shutting_down:
-            return False
+            return True
         self.restore_from_capture_addon()
-        return True
+        return False
 
     def _shutdown_windows(self) -> None:
         self._shutting_down = True
@@ -218,11 +220,17 @@ class StudioBridge:
             except Exception:
                 pass
             self._watcher = None
-        if self._addon_window is not None and hasattr(self._addon_window, "destroy"):
+        if self._addon_window is not None:
             try:
-                self._addon_window.destroy()
+                if hasattr(self._addon_window, "events") and hasattr(self._addon_window.events, "closing"):
+                    self._addon_window.events.closing -= self._on_addon_closing
             except Exception:
                 pass
+            if hasattr(self._addon_window, "destroy"):
+                try:
+                    self._addon_window.destroy()
+                except Exception:
+                    pass
             self._addon_window = None
 
     def _require_approved(self, folder: Path) -> Path:
@@ -503,25 +511,43 @@ class StudioBridge:
         pat = str(p.get("customPattern") or base.pattern)
         return KitSpec(base.club_id, base.name, pat, pri, sec, sec, "custom", base.crest_path)
 
-    def _compose_legacy_subject(self, p: dict[str, Any], require_cutout: bool = False) -> Any:
-        import numpy as np
+    def _compose_legacy_subject(self, p: dict[str, Any]) -> Any:
         from PIL import Image
         from backend.core.compositor import _place_portrait
-        from backend.core.dsp import enhance_df11_pure_optics
-        from backend.services.kits import dress_or_frame_portrait
+        from backend.core.dsp import enhance_df11_pure_optics, resample_linear_subpixel_rgba
 
-        cut = self._ensure_cutout(bool(p.get("removeBg", True)) or require_cutout, bool(p.get("harmonize", True)))
+        remove_bg = bool(p.get("removeBg", True))
+        harmonize = bool(p.get("harmonize", True))
+        cut = self._ensure_cutout(remove_bg, harmonize)
         if cut is None:
             return None
         kmode, cid = p.get("kitMode", "original"), str(p.get("clubId", "1736"))
+        ox, oy = float(p.get("offsetX", 0.0)), float(p.get("offsetY", 0.0))
+        scale = float(p.get("scale", 1.0))
+        enh = float(p.get("enhanceQuality", 0.0))
+
+        # 100% Zero-AI fast lane when removeBg is False and kitMode is 'original' (never calls YuNet / Selfie-Seg!)
+        if not remove_bg and kmode == "original":
+            fit_m = "contain" if self._raw_is_precut else "cover"
+            placed = resample_linear_subpixel_rgba(
+                cut,
+                zoom=scale,
+                pan_x=ox,
+                pan_y=oy,
+                fit_mode=fit_m,
+                clamp_to_inner=not self._raw_is_precut,
+            )
+            if enh > 1e-3:
+                placed = enhance_df11_pure_optics(placed, amount=enh, upscale_hint=max(1.0, scale))
+            return Image.fromarray(placed, mode="RGBA")
+
+        from backend.services.kits import dress_or_frame_portrait
+
         kit = self._resolve_studio_kit(cid, p) if kmode != "original" else None
         dkey = (id(cut), kmode, kit.club_id if kit else "", kit.pattern if kit else "", kit.primary if kit else "", kit.secondary if kit else "", kit.collar if kit else "")
         if self._dressed_key != dkey or self._dressed_img is None:
             self._dressed_img = dress_or_frame_portrait(cut, kit_mode=kmode, kit_spec=kit)
             self._dressed_key = dkey
-        ox, oy = float(p.get("offsetX", 0.0)), float(p.get("offsetY", 0.0))
-        scale = float(p.get("scale", 1.0))
-        enh = float(p.get("enhanceQuality", 0.0))
         placed = _place_portrait(self._dressed_img, (ox, oy), scale)
         if enh > 1e-3:
             placed = enhance_df11_pure_optics(placed, amount=enh, upscale_hint=max(1.0, scale))
@@ -529,13 +555,29 @@ class StudioBridge:
 
     def _compose(self, p: dict[str, Any], variant: str | None = None) -> Any:
         from backend.core.compositor import render_df11_card, render_df11_pure_card
+        from backend.core.dsp import clean_pure_contour_zero_ai
 
         eff_var = "pure" if str(variant or p.get("previewVariant") or "classic").strip().lower() == "pure" else "classic"
-        subj = self._compose_legacy_subject(p, require_cutout=(eff_var == "pure"))
+        subj = self._compose_legacy_subject(p)
+        is_pre = bool(self._raw_is_precut or p.get("removeBg", True))
+        replace_bg = bool(p.get("directBgReplace", False)) and not is_pre
+        pure_subj = (
+            clean_pure_contour_zero_ai(
+                subj,
+                pan_x=float(p.get("offsetX", 0.0)),
+                pan_y=float(p.get("offsetY", 0.0)),
+                scale=float(p.get("scale", 1.0)),
+                tolerance=float(p.get("pureContourTolerance", 0.5)),
+                is_known_precut=is_pre,
+            )
+            if (subj is not None and (eff_var == "pure" or replace_bg))
+            else None
+        )
         if eff_var == "pure":
-            return render_df11_pure_card(subj)
+            return render_df11_pure_card(pure_subj)
+        c_subj = pure_subj if (replace_bg and pure_subj is not None) else subj
         return render_df11_card(
-            portrait_rgba=subj,
+            portrait_rgba=c_subj,
             portrait_offset=(0.0, 0.0),
             portrait_scale=1.0,
             bg_mode=p.get("bgMode", "white_df11"),
@@ -546,10 +588,26 @@ class StudioBridge:
 
     def _compose_dual(self, p: dict[str, Any]) -> tuple[Any, Any]:
         from backend.core.compositor import render_df11_card, render_df11_pure_card
+        from backend.core.dsp import clean_pure_contour_zero_ai
 
-        subj = self._compose_legacy_subject(p, require_cutout=True)
+        subj = self._compose_legacy_subject(p)
+        is_pre = bool(self._raw_is_precut or p.get("removeBg", True))
+        replace_bg = bool(p.get("directBgReplace", False)) and not is_pre
+        pure_subj = (
+            clean_pure_contour_zero_ai(
+                subj,
+                pan_x=float(p.get("offsetX", 0.0)),
+                pan_y=float(p.get("offsetY", 0.0)),
+                scale=float(p.get("scale", 1.0)),
+                tolerance=float(p.get("pureContourTolerance", 0.5)),
+                is_known_precut=is_pre,
+            )
+            if subj is not None
+            else None
+        )
+        c_subj = pure_subj if (replace_bg and pure_subj is not None) else subj
         classic_im = render_df11_card(
-            portrait_rgba=subj,
+            portrait_rgba=c_subj,
             portrait_offset=(0.0, 0.0),
             portrait_scale=1.0,
             bg_mode=p.get("bgMode", "white_df11"),
@@ -557,7 +615,7 @@ class StudioBridge:
             bg_blur=float(p.get("bgBlur", 0.0)),
             enhance_quality=0.0,
         )
-        return classic_im, render_df11_pure_card(subj)
+        return classic_im, render_df11_pure_card(pure_subj)
 
     def upload_studio_image(
         self, data_url: str, remove_bg: bool = True, harmonize: bool = True, extract_bg: bool = False, params: dict[str, Any] | None = None
@@ -619,6 +677,8 @@ class StudioBridge:
 
         self._custom_bg_img = load_guarded_image(_decode_b64(data_url)).image
         merged = {**(params or {}), "bgMode": "custom"}
+        if str(merged.get("step1Mode", "")).strip().lower() == "direct_photo" and "directBgReplace" not in (params or {}):
+            merged["directBgReplace"] = True
         card = self._mod().compose_step_card(merged, custom_bg=self._custom_bg_img) if merged.get("modular") else self._compose(merged)
         return {"bgDataUrl": _to_data_url(self._custom_bg_img), "previewDataUrl": _to_data_url(card)}
 
@@ -1059,7 +1119,12 @@ class StudioBridge:
             return {"cancelled": True}
         return self._route_captured_png(res, tgt, params=params, dialog_win=self._window)
 
-    def open_capture_addon(self, default_target: str = "direct_photo", theme: str = "dark") -> dict[str, Any]:
+    def open_capture_addon(
+        self,
+        default_target: str = "direct_photo",
+        theme: str = "dark",
+        direct_bg_replace: bool | None = None,
+    ) -> dict[str, Any]:
         tgt = str(default_target or "direct_photo").strip().lower()
         if tgt not in ("direct_photo", "raw_face", "raw_shirt", "save_png"):
             tgt = "direct_photo"
@@ -1068,8 +1133,9 @@ class StudioBridge:
             return {"addonOpen": False, "target": tgt}
         if hasattr(self._addon_window, "evaluate_js"):
             try:
+                bg_arg = f", {json.dumps(bool(direct_bg_replace))}" if direct_bg_replace is not None else ""
                 self._addon_window.evaluate_js(
-                    f"window.__df11SetAddonState && window.__df11SetAddonState({json.dumps(tgt)}, {json.dumps(thm)})"
+                    f"window.__df11SetAddonState && window.__df11SetAddonState({json.dumps(tgt)}, {json.dumps(thm)}{bg_arg})"
                 )
             except Exception:
                 pass
@@ -1096,11 +1162,18 @@ class StudioBridge:
                     self._window.show()
                 if hasattr(self._window, "restore"):
                     self._window.restore()
+                if self._pending_addon_capture is not None and hasattr(self._window, "evaluate_js"):
+                    self._window.evaluate_js("window.dispatchEvent(new CustomEvent('df11:addon-capture'))")
             except Exception:
                 pass
         return {"addonOpen": False}
 
-    def capture_from_addon(self, target: str = "direct_photo", keep_pinned: bool = False) -> dict[str, Any]:
+    def capture_from_addon(
+        self,
+        target: str = "direct_photo",
+        keep_pinned: bool = False,
+        direct_bg_replace: bool | None = None,
+    ) -> dict[str, Any]:
         import backend.core.screen_capture as sc_mod
 
         tgt = str(target or "direct_photo").strip().lower()
@@ -1141,7 +1214,15 @@ class StudioBridge:
                         pass
             return out
 
-        out = self._route_captured_png(res, tgt)
+        addon_params: dict[str, Any] | None = None
+        if tgt == "direct_photo" and direct_bg_replace is not None:
+            use_white = bool(direct_bg_replace)
+            addon_params = {
+                "directBgReplace": use_white,
+                **({"bgMode": "white_df11", "bgBlur": 0.0} if use_white else {}),
+            }
+
+        out = self._route_captured_png(res, tgt, params=addon_params)
         self._pending_addon_capture = out
         if self._window is not None and hasattr(self._window, "evaluate_js"):
             try:
@@ -1230,6 +1311,12 @@ class StudioBridge:
     ) -> dict[str, Any]:
         return self._mod().cutout_direct_photo_for_pure(
             direct_photo_id=str(direct_photo_id or ""),
+            extra_params=params,
+            custom_bg=self._custom_bg_img,
+        )
+
+    def promote_staged_crop_to_direct_photo(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._mod().promote_staged_crop_to_direct_photo(
             extra_params=params,
             custom_bg=self._custom_bg_img,
         )
@@ -1378,6 +1465,50 @@ class StudioBridge:
         )
         return {**out, "facepackDir": str(self._facepack_dir) if self._facepack_dir else ""}
 
+    def pick_facepack_card_for_pure(self, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        """Pick an existing FM Facepack card (260x310 Classic or Pure) and convert to DF11 Pure with 0% AI."""
+        chosen = self._pick_image_file(
+            "last_facepack_dir",
+            fallback_dir=self._facepack_dir or self._export_dir,
+            sync_last_image=False,
+        )
+        if chosen is None:
+            return None
+        parent_dir = chosen.parent.resolve()
+        if not _paths_overlap(parent_dir, self._vault_dir) and (
+            self._facepack_pure_dir is None or not _paths_overlap(parent_dir, self._facepack_pure_dir)
+        ):
+            self._facepack_dir = parent_dir
+            self._approved_dirs.add(parent_dir)
+            self._set_pref("last_facepack_dir", str(parent_dir))
+        out = self._mod().load_facepack_card_for_pure(
+            _read_guarded_file(chosen),
+            file_name=chosen.name,
+            extra_params=params,
+            custom_bg=self._custom_bg_img,
+        )
+        return {
+            **out,
+            "directory": str(parent_dir),
+            "facepackDir": str(self._facepack_dir) if self._facepack_dir else "",
+            "fmFacepackCollision": _share_fm_graphics_ancestor(self._facepack_dir, self._facepack_pure_dir),
+        }
+
+    def load_facepack_card_for_pure(
+        self, data_url: str, file_name: str = "", params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        out = self._mod().load_facepack_card_for_pure(
+            _decode_b64(data_url),
+            file_name=file_name,
+            extra_params=params,
+            custom_bg=self._custom_bg_img,
+        )
+        return {
+            **out,
+            "facepackDir": str(self._facepack_dir) if self._facepack_dir else "",
+            "fmFacepackCollision": _share_fm_graphics_ancestor(self._facepack_dir, self._facepack_pure_dir),
+        }
+
     def switch_facepack_remix_mode(
         self, remix_mode: str, active_template_id: str = "", params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -1475,18 +1606,54 @@ class StudioBridge:
         )
 
     def probe_architecture_health(self) -> dict[str, Any]:
-        try:
-            import sqlite3
-            import onnxruntime as ort
+        import sqlite3
 
-            t0 = time.perf_counter()
+        sqlite_ok = False
+        sqlite_ms = 0.0
+        t0 = time.perf_counter()
+        try:
             if self._db_path.is_file():
-                conn = sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True, timeout=2.0)
+                uri = f"{self._db_path.resolve().as_uri()}?mode=ro"
+                conn = sqlite3.connect(uri, uri=True, timeout=2.0)
                 try:
                     conn.execute("SELECT 1").fetchone()
+                    sqlite_ok = True
                 finally:
                     conn.close()
-            p = ort.get_available_providers()
-            return {"dmlActive": "DmlExecutionProvider" in p, "providers": p, "sqliteLatencyMs": round((time.perf_counter() - t0) * 1000.0, 2)}
+            else:
+                from backend.services.kits import init_state_db
+
+                with init_state_db(self._db_path) as conn:
+                    conn.execute("SELECT 1").fetchone()
+                    sqlite_ok = True
+            sqlite_ms = round((time.perf_counter() - t0) * 1000.0, 2)
         except Exception:
-            return {"dmlActive": False, "providers": ["CPUExecutionProvider"], "sqliteLatencyMs": 0.0}
+            sqlite_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+
+        providers: list[str] = ["CPUExecutionProvider"]
+        dml_active = False
+        try:
+            import onnxruntime as ort
+
+            providers = list(ort.get_available_providers())
+            dml_active = "DmlExecutionProvider" in providers
+        except Exception:
+            pass
+
+        m_dir = get_models_dir()
+        model_files = (
+            "face_detection_yunet_2023mar.onnx",
+            "selfie_multiclass_256x256.onnx",
+            "birefnet-general-lite.onnx",
+        )
+        models_found = sum(1 for f in model_files if (m_dir / f).is_file())
+        return {
+            "dmlActive": dml_active,
+            "providers": providers,
+            "sqliteOk": sqlite_ok,
+            "sqliteLatencyMs": sqlite_ms,
+            "modelsReady": models_found == len(model_files),
+            "modelsCount": models_found,
+            "bridgeReady": True,
+            "exportVariant": self._export_variant,
+        }

@@ -1636,17 +1636,20 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
             previewDataUrl: ONE_PX_PNG,
           };
         },
-        cutout_direct_photo_for_pure: async (...args: unknown[]) => {
-          calls.push({ fn: 'cutout_direct_photo_for_pure', args });
+        pick_facepack_card_for_pure: async (...args: unknown[]) => {
+          calls.push({ fn: 'pick_facepack_card_for_pure', args });
           return {
-            directPhotoId: 'direct-opaque-1',
-            fileName: 'Retrato_Opaco.jpg',
-            label: 'Retrato_Opaco',
-            width: 800,
-            height: 600,
-            isPreCutout: true,
-            clampPan: false,
-            autoFit: { scale: 1.48, offsetX: 0, offsetY: 0 },
+            directPhotoId: 'direct-fp-pure-1',
+            fileName: '1915386672.png',
+            label: '1915386672',
+            detectedUid: '1915386672',
+            facepackDir: 'D:\\FM27\\graphics\\DF11_Classic',
+            fmFacepackCollision: false,
+            width: 224,
+            height: 278,
+            isPreCutout: false,
+            clampPan: true,
+            autoFit: { scale: 1.0, offsetX: 0, offsetY: 0 },
             previewDataUrl: ONE_PX_PNG,
           };
         },
@@ -1686,8 +1689,11 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       expect(await screen.findByAltText('Previsualización DF11 260x310')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^JPG$/i })).toBeInTheDocument();
 
-      // 1. Switch to Pure 220x276: hides JPG, renders 220x276 inset inside 260x310 stage, requests pure preview
-      fireEvent.click(screen.getByRole('button', { name: /Pure 220×276/i }));
+      // 1. Switch to Pure 220x276 via eye-level Canvas quick-selector: syncs Paso 4, hides JPG, renders 220x276 inset
+      const canvasPureBtn = screen.getByRole('button', { name: /Formato rápido DF11 Pure \(220x276 sin marco\)/i });
+      fireEvent.click(canvasPureBtn);
+      expect(canvasPureBtn).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('button', { name: /Pure 220×276/i })).toHaveAttribute('aria-pressed', 'true');
       expect(screen.queryByRole('button', { name: /^JPG$/i })).not.toBeInTheDocument();
       expect(screen.getByText(/Pure: Alfa = 0 \(sin fondo\)/i)).toBeInTheDocument();
       const pureImg = await screen.findByAltText('Previsualización DF11 Pure 220x276');
@@ -1702,8 +1708,9 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
         ).toBe(true),
       );
 
-      // 2. Switch to Dual (Ambas): exposes Vista Classic | Vista Pure toggle and independent folder pickers
+      // 2. Switch to Dual (Ambas): syncs Canvas quick-selector, exposes Vista Classic | Vista Pure toggle and independent folder pickers
       fireEvent.click(screen.getByRole('button', { name: /Dual \(Ambas\)/i }));
+      expect(screen.getByRole('button', { name: /Formato rápido Dual \(Classic y Pure a la vez\)/i })).toHaveAttribute('aria-pressed', 'true');
       expect(screen.getByText(/Aplica a Classic · Pure siempre Alfa = 0/i)).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: /Vista Classic/i }));
       expect(await screen.findByAltText('Previsualización DF11 260x310')).toBeInTheDocument();
@@ -1735,7 +1742,7 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
         ),
       ).toBeInTheDocument();
 
-      // 3. Direct Photo opaque in Pure mode: 0% implicit AI on load, explicit 1-click cached cutout enables Pure export
+      // 3. Direct Photo opaque in Pure mode: 100% Zero-AI contour cleaning on load, tolerance control, and direct export without AI
       fireEvent.click(screen.getByRole('button', { name: /1\. Nuestras creaciones/i }));
       fireEvent.click(screen.getByRole('button', { name: /Pure 220×276/i }));
       fireEvent.change(screen.getByLabelText(/ID Football Manager/i), { target: { value: '' } });
@@ -1743,24 +1750,148 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       fireEvent.click(screen.getByRole('button', { name: /Subir foto directa/i }));
 
       expect(await screen.findByText(/Activa: Retrato_Opaco/i)).toBeInTheDocument();
-      expect(screen.getByAltText('Previsualización DF11 260x310')).toBeInTheDocument();
-      expect(calls.filter((c) => c.fn === 'cutout_direct_photo_for_pure')).toHaveLength(0);
-
-      const cutoutBtn = screen.getByRole('button', { name: /Recortar fondo para Pure \(IA · 1 vez\)/i });
-      expect(cutoutBtn).toBeInTheDocument();
-
-      fireEvent.click(screen.getByRole('button', { name: /Exportar DF11 Pure/i }));
-      expect(await screen.findByText(/En Foto Directa la imagen aún tiene fondo opaco/i)).toBeInTheDocument();
-      expect(calls.filter((c) => c.fn === 'export_modular_card')).toHaveLength(1);
-
-      fireEvent.click(cutoutBtn);
-      await waitFor(() => expect(calls.filter((c) => c.fn === 'cutout_direct_photo_for_pure')).toHaveLength(1));
       expect(await screen.findByAltText('Previsualización DF11 Pure 220x276')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /Recortar fondo para Pure \(IA · 1 vez\)/i })).not.toBeInTheDocument();
+      expect(calls.filter((c) => c.fn === 'cutout_direct_photo_for_pure')).toHaveLength(0);
+      expect(screen.queryByRole('button', { name: /Recortar fondo para Pure/i })).not.toBeInTheDocument();
+
+      const tolInput = screen.getByLabelText(/Valor exacto de tolerancia Pure \(%\)/i);
+      expect(tolInput).toHaveValue('50');
+      fireEvent.change(tolInput, { target: { value: '64' } });
+      fireEvent.blur(tolInput);
 
       fireEvent.click(screen.getByRole('button', { name: /Exportar DF11 Pure/i }));
       await waitFor(() => expect(calls.filter((c) => c.fn === 'export_modular_card')).toHaveLength(2));
+      expect(calls.filter((c) => c.fn === 'export_modular_card')[1]?.args[0]).toMatchObject({
+        step1Mode: 'direct_photo',
+        directPhotoId: 'direct-opaque-1',
+        exportVariant: 'pure',
+        pureContourTolerance: 0.64,
+      });
       expect(await screen.findByText(/Guardado Pure: D:\\DF11Studio\\Exports\\000_DF11_Pure_Override\\Retrato_Opaco\.png/i)).toBeInTheDocument();
+
+      // 4. 1-click FM Facepack card -> Pure (0% AI bevel unmix + UID detection)
+      fireEvent.click(screen.getByRole('button', { name: /Ficha FM → Pure/i }));
+      await waitFor(() => expect(calls.filter((c) => c.fn === 'pick_facepack_card_for_pure')).toHaveLength(1));
+      expect(await screen.findByText(/convertida a DF11 Pure \(0% IA/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/ID Football Manager/i)).toHaveValue('1915386672');
+    } finally {
+      delete window.pywebview;
+    }
+  });
+
+  it('toggles Classic Fondo original vs Capa Blanca DF11 (0% IA), fixes Paso 3 select no-op, and rescues cropStage', async () => {
+    const calls: Array<{ fn: string; args: unknown[] }> = [];
+    window.pywebview = {
+      api: {
+        list_shirt_templates: async () => [],
+        list_saved_faces: async () => [],
+        capture_screen_region: async (...args: unknown[]) => {
+          calls.push({ fn: 'capture_screen_region', args });
+          return {
+            cancelled: false,
+            target: 'direct_photo',
+            directPhotoId: 'direct-cap-white-1',
+            fileName: 'Captura_Web_Oscura.png',
+            label: 'Captura_Web_Oscura',
+            width: 240,
+            height: 290,
+            isPreCutout: false,
+            clampPan: true,
+            autoFit: { scale: 1.0, offsetX: 0, offsetY: 0, neckFill: 1.0 },
+            previewDataUrl: ONE_PX_PNG,
+          };
+        },
+        load_raw_face_source: async (...args: unknown[]) => {
+          calls.push({ fn: 'load_raw_face_source', args });
+          return {
+            rawDataUrl: ONE_PX_PNG,
+            width: 260,
+            height: 310,
+            isPreCutout: false,
+            crownSrcY: 28,
+            suggestedViewport: { zoom: 1, panX: 0, panY: 0 },
+            fileName: 'Recorte_En_Zona.png',
+          };
+        },
+        promote_staged_crop_to_direct_photo: async (...args: unknown[]) => {
+          calls.push({ fn: 'promote_staged_crop_to_direct_photo', args });
+          return {
+            directPhotoId: 'direct-rescued-1',
+            fileName: 'Recorte_En_Zona.png',
+            label: 'Recorte_En_Zona',
+            width: 260,
+            height: 310,
+            isPreCutout: false,
+            clampPan: true,
+            directBgReplace: false,
+            bgMode: 'white_df11',
+            autoFit: { scale: 1.0, offsetX: 0, offsetY: 0, neckFill: 1.0 },
+            previewDataUrl: ONE_PX_PNG,
+          };
+        },
+        render_modular_preview: async (...args: unknown[]) => {
+          calls.push({ fn: 'render_modular_preview', args });
+          return { previewDataUrl: `${ONE_PX_PNG}#${calls.length}` };
+        },
+      },
+    };
+
+    try {
+      render(<StudioView clubs={CLUBS} exportDir="D:\\DF11Studio\\Exports" onExportDirChange={() => {}} initialJump={null} />);
+
+      // 1. Capture directly via 'Foto Directa · Capa Blanca DF11' hydrates directBgReplace=true even if mock omits it
+      fireEvent.click(screen.getByRole('button', { name: /Opciones de captura de pantalla/i }));
+      fireEvent.click(screen.getByRole('menuitem', { name: /Foto Directa · Capa Blanca DF11/i }));
+      expect(await screen.findByText(/Activa: Captura_Web_Oscura/i)).toBeInTheDocument();
+      expect(calls.find((c) => c.fn === 'capture_screen_region')?.args[1]).toMatchObject({
+        step1Mode: 'direct_photo',
+        directBgReplace: true,
+        bgMode: 'white_df11',
+      });
+
+      const whiteBtn = screen.getByRole('button', { name: /^Capa Blanca DF11 \(0% IA\)$/i });
+      const origBtn = screen.getByRole('button', { name: /^Fondo original$/i });
+      const bgSelect = screen.getByLabelText(/Modo de fondo/i) as HTMLSelectElement;
+      expect(whiteBtn).toHaveAttribute('aria-pressed', 'true');
+      expect(bgSelect.value).toBe('white_df11');
+
+      // 2. Switch to 'Fondo original' -> Paso 3 select switches to '__keep_original__', avoiding silent no-op when re-selecting white_df11!
+      fireEvent.click(origBtn);
+      expect(origBtn).toHaveAttribute('aria-pressed', 'true');
+      expect(bgSelect.value).toBe('__keep_original__');
+      await waitFor(() =>
+        expect(
+          calls.some(
+            (c) =>
+              c.fn === 'render_modular_preview' &&
+              (c.args[0] as Record<string, unknown>)?.directBgReplace === false,
+          ),
+        ).toBe(true),
+      );
+
+      fireEvent.change(bgSelect, { target: { value: 'white_df11' } });
+      expect(whiteBtn).toHaveAttribute('aria-pressed', 'true');
+      await waitFor(() =>
+        expect(
+          calls.some(
+            (c) =>
+              c.fn === 'render_modular_preview' &&
+              (c.args[0] as Record<string, unknown>)?.directBgReplace === true &&
+              (c.args[0] as Record<string, unknown>)?.bgMode === 'white_df11',
+          ),
+        ).toBe(true),
+      );
+
+      // 3. Rescue a staged crop from Modo Capas to Foto Directa (0% IA) in 1 click
+      fireEvent.click(screen.getByRole('button', { name: /Modo Capas \(Cara \+ Camiseta\)/i }));
+      const fakeFile = new File([new Uint8Array([137, 80, 78, 71])], 'Recorte_En_Zona.png', { type: 'image/png' });
+      fireEvent.paste(window, {
+        clipboardData: { items: [{ type: 'image/png', getAsFile: () => fakeFile }] },
+      });
+      const rescueBtn = await screen.findByRole('button', { name: /Foto Directa \(0% IA\)/i });
+      fireEvent.click(rescueBtn);
+      expect(await screen.findByText(/Activa: Recorte_En_Zona/i)).toBeInTheDocument();
+      expect(calls.filter((c) => c.fn === 'promote_staged_crop_to_direct_photo')).toHaveLength(1);
     } finally {
       delete window.pywebview;
     }

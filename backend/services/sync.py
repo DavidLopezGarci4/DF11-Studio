@@ -16,7 +16,25 @@ from pathlib import Path
 
 from defusedxml import ElementTree as SafeET
 
-from backend.core.compositor import BgMode, CardVariant, export_df11_bytes, render_df11_card, render_df11_pure_card
+from PIL import Image
+
+from backend.core.compositor import (
+    BgMode,
+    CardVariant,
+    export_df11_bytes,
+    has_df11_outer_ring,
+    is_df11_pure_size,
+    render_df11_card,
+    render_df11_pure_card,
+    unfeather_pure_perimeter_rgba,
+    unmix_df11_classic_bevel_rgba,
+)
+from backend.core.dsp import (
+    clean_pure_contour_zero_ai,
+    harmonize_oklab_pure_optics,
+    is_genuinely_precut_window,
+    resample_linear_subpixel_rgba,
+)
 from backend.core.fm_config import safe_ntfs_replace, upsert_fm_config_xml, validate_fm_uid
 from backend.core.image_guard import load_guarded_image
 from backend.core.paths import get_default_vault_dir
@@ -28,7 +46,6 @@ from backend.services.kits import (
     normalize_save_id,
     resolve_club_kit,
 )
-from backend.services.vision import harmonize_df11_studio_grade, remove_background_birefnet
 
 _PORTRAIT_TO_RE = re.compile(r"graphics/pictures/person/((?:r-)?[0-9]{1,12})/portrait", re.IGNORECASE)
 _UID_TOKEN_RE = re.compile(r"\b((?:r-)?[0-9]{4,12})\b")
@@ -337,22 +354,57 @@ def _process_single_regen(
         fit = HeadFitParams(scale=auto_fit.scale, offset_x=auto_fit.offset_x, offset_y=auto_fit.offset_y, neck_fill=1.0, harmonize=harmonize)
         subject_rgba = compose_modular_subject_rgba(head_asset=head_asset, shirt_rgba=shirt_im, collar=collar, fit=fit)
     else:
-        cutout = guarded.image if guarded.is_pre_cutout else remove_background_birefnet(guarded.image)
+        raw_im = guarded.image
+        if has_df11_outer_ring(raw_im):
+            prep_im, is_precut = unmix_df11_classic_bevel_rgba(raw_im)
+        elif is_df11_pure_size(raw_im.size):
+            p_alpha = raw_im.convert("RGBA").getchannel("A")
+            import numpy as np
+
+            p_arr = np.asarray(p_alpha, dtype=np.uint8)
+            if is_genuinely_precut_window(p_arr):
+                unfeathered = unfeather_pure_perimeter_rgba(raw_im)
+                win = Image.new("RGBA", (224, 278), (0, 0, 0, 0))
+                win.paste(unfeathered, (2, 1))
+                prep_im, is_precut = win, True
+            else:
+                prep_im, is_precut = raw_im, False
+        else:
+            import numpy as np
+
+            a_arr = np.asarray(raw_im.convert("RGBA"), dtype=np.uint8)[:, :, 3]
+            prep_im = raw_im
+            is_precut = bool(guarded.is_pre_cutout and is_genuinely_precut_window(a_arr))
+
+        framed_arr = resample_linear_subpixel_rgba(
+            prep_im,
+            zoom=1.0,
+            pan_x=0.0,
+            pan_y=0.0,
+            fit_mode="contain" if is_precut else "cover",
+            clamp_to_inner=not is_precut,
+        )
+        framed_im = Image.fromarray(framed_arr, mode="RGBA")
         if harmonize:
-            cutout = harmonize_df11_studio_grade(cutout)
-        kit = resolve_club_kit(club_id, db_path=db_path) if use_kit and club_id else None
-        subject_rgba = dress_or_frame_portrait(cutout, kit_mode="club" if use_kit else "original", kit_spec=kit)
+            framed_im = harmonize_oklab_pure_optics(framed_im)
+        cutout_im = framed_im if is_precut else clean_pure_contour_zero_ai(framed_im, is_known_precut=False)
+        if use_kit and club_id:
+            kit = resolve_club_kit(club_id, db_path=db_path)
+            subject_rgba = dress_or_frame_portrait(cutout_im, kit_mode="club", kit_spec=kit)
+            subject_rgba = clean_pure_contour_zero_ai(subject_rgba)
+        else:
+            subject_rgba = cutout_im
 
     c_sig_out = prev_c_sig
     p_sig_out = prev_p_sig
     if need_classic:
         classic_card = render_df11_card(portrait_rgba=subject_rgba, bg_mode=bg_mode)
         _atomic_write_png(out_dir, uid, export_df11_bytes(classic_card, fmt="png", compress_level=4))
-        c_sig_out = f"{club_id or ''}:{int(apply_club_kits)}:{int(harmonize)}:{bg_mode}{tpl_sig}"
+        c_sig_out = f"v2_p0ai:{club_id or ''}:{int(apply_club_kits)}:{int(harmonize)}:{bg_mode}{tpl_sig}"
     if need_pure and pure_out_dir is not None:
         pure_card = render_df11_pure_card(subject_rgba)
         _atomic_write_png(pure_out_dir, uid, export_df11_bytes(pure_card, fmt="png", compress_level=4))
-        p_sig_out = f"{club_id or ''}:{int(apply_club_kits)}:{int(harmonize)}:pure{tpl_sig}"
+        p_sig_out = f"v2_p0ai:{club_id or ''}:{int(apply_club_kits)}:{int(harmonize)}:pure{tpl_sig}"
 
     packed_sig = f"c={c_sig_out}||p={p_sig_out}" if p_sig_out else c_sig_out
     return (uid, st.st_mtime_ns, st.st_size, packed_sig)
@@ -365,7 +417,6 @@ def sync_ng_regens_batch(
     pure_out_dir: Path | None = None, variant: CardVariant = "classic",
 ) -> SyncResult:
     from backend.core.paths import get_tshirt_templates_dir
-    from backend.services.templates import sync_tshirt_templates_dir
 
     eff_variant: CardVariant = variant if variant in ("classic", "pure", "dual") else "classic"
     want_classic = eff_variant in ("classic", "dual")
@@ -383,6 +434,8 @@ def sync_ng_regens_batch(
     entries = scan_ng_regens_vault(vault_dir)
     tpl_root = (templates_dir or get_tshirt_templates_dir()).resolve()
     if apply_club_kits and tpl_root.is_dir() and any(tpl_root.iterdir()):
+        from backend.services.templates import sync_tshirt_templates_dir
+
         sync_tshirt_templates_dir(tpl_dir=tpl_root, db_path=db_path)
     with init_state_db(db_path) as conn:
         prev_manifest = {r[0]: (r[1], r[2], r[3]) for r in conn.execute("SELECT uid, mtime_ns, size, sig FROM regen_manifest")}
@@ -414,8 +467,8 @@ def sync_ng_regens_batch(
         if ctpl is not None and not ctpl[0].is_file():
             ctpl = None
         tpl_sig = f":tpl={ctpl[2][:10]}" if ctpl is not None else ""
-        target_c_sig = f"{cid or ''}:{int(apply_club_kits)}:{int(harmonize)}:{bg_mode}{tpl_sig}"
-        target_p_sig = f"{cid or ''}:{int(apply_club_kits)}:{int(harmonize)}:pure{tpl_sig}"
+        target_c_sig = f"v2_p0ai:{cid or ''}:{int(apply_club_kits)}:{int(harmonize)}:{bg_mode}{tpl_sig}"
+        target_p_sig = f"v2_p0ai:{cid or ''}:{int(apply_club_kits)}:{int(harmonize)}:pure{tpl_sig}"
         prev_row = prev_manifest.get(uid)
         if prev_row is not None and prev_row[0] == st.st_mtime_ns and prev_row[1] == st.st_size:
             prev_c, prev_p = _parse_manifest_sigs(prev_row[2])

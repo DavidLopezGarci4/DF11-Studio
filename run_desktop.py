@@ -4,10 +4,70 @@ from __future__ import annotations
 
 import ctypes
 import os
+import signal
 import sys
+import threading
+import time
 from pathlib import Path
 
 WINDOW_TITLE = "DF11 Face Studio — FM27 & NG_Regens"
+ADDON_WINDOW_TITLE = "DF11 Mini-Capturador"
+
+
+def _is_webview_lock_held(profile_dir: Path) -> bool:
+    lock_path = profile_dir / "EBWebView" / "lockfile"
+    if not lock_path.exists():
+        return False
+    try:
+        with open(lock_path, "rb"):
+            return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _cleanup_stale_instance(profile_dir: Path) -> None:
+    """Close or evict any lingering previous DF11 Face Studio instance so WebView2 & state stay fresh."""
+    if sys.platform != "win32":
+        return
+    try:
+        user32 = ctypes.windll.user32
+        wm_close = 0x0010
+        my_pid = os.getpid()
+        stale_pids: set[int] = set()
+
+        for title in (WINDOW_TITLE, ADDON_WINDOW_TITLE):
+            hwnd = int(user32.FindWindowW(None, title) or 0)
+            if hwnd > 0:
+                pid_val = ctypes.c_ulong(0)
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_val))
+                if pid_val.value and int(pid_val.value) != my_pid:
+                    stale_pids.add(int(pid_val.value))
+                user32.PostMessageW(hwnd, wm_close, 0, 0)
+
+        if not stale_pids:
+            return
+
+        deadline = time.perf_counter() + 0.55
+        while time.perf_counter() < deadline:
+            if not _is_webview_lock_held(profile_dir) and all(
+                int(user32.FindWindowW(None, t) or 0) == 0 for t in (WINDOW_TITLE, ADDON_WINDOW_TITLE)
+            ):
+                return
+            time.sleep(0.05)
+
+        for pid in stale_pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+
+        deadline2 = time.perf_counter() + 1.2
+        while time.perf_counter() < deadline2 and _is_webview_lock_held(profile_dir):
+            time.sleep(0.05)
+    except Exception:
+        pass
 
 
 def _bind_win32_app_identity_and_icon(ico_path: Path) -> None:
@@ -41,6 +101,7 @@ def main() -> None:
 
     profile_dir = get_webview_profile_dir()
     profile_dir.mkdir(parents=True, exist_ok=True)
+    _cleanup_stale_instance(profile_dir)
     os.environ.setdefault("WEBVIEW2_USER_DATA_FOLDER", str(profile_dir))
 
     import webview
@@ -60,14 +121,14 @@ def main() -> None:
     addon_x = 120
     if sys.platform == "win32":
         try:
-            addon_x = max(40, int(ctypes.windll.user32.GetSystemMetrics(0)) - 492)
+            addon_x = max(24, int(ctypes.windll.user32.GetSystemMetrics(0)) - 560)
         except Exception:
             addon_x = 120
     addon_win = webview.create_window(
-        title="DF11 Mini-Capturador",
+        title=ADDON_WINDOW_TITLE,
         html=CAPTURE_ADDON_HTML,
         js_api=bridge,
-        width=464,
+        width=536,
         height=52,
         min_size=(340, 48),
         x=addon_x,
@@ -83,7 +144,14 @@ def main() -> None:
     bridge._attach_window(win)
     bridge._attach_addon_window(addon_win)
     addon_win.events.closing += bridge._on_addon_closing
-    win.events.closed += bridge._shutdown_windows
+
+    def _on_main_window_closed() -> None:
+        bridge._shutdown_windows()
+        exit_timer = threading.Timer(0.8, os._exit, args=(0,))
+        exit_timer.daemon = True
+        exit_timer.start()
+
+    win.events.closed += _on_main_window_closed
     ico_path = ASSETS_DIR / "icons" / "app.ico"
     win.events.shown += lambda: _bind_win32_app_identity_and_icon(ico_path)
     webview.start(

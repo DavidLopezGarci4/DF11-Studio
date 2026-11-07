@@ -1,5 +1,5 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronDown, FolderSync, HelpCircle, Info, Layers, Moon, Scissors, Shirt, Sun } from 'lucide-react';
+import { Component, ReactNode, Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronDown, FolderSync, HelpCircle, Info, Layers, Moon, RefreshCw, Scissors, Shirt, Sun } from 'lucide-react';
 import AboutModal from './components/AboutModal';
 import FaqModal from './components/FaqModal';
 import RegensSyncView from './components/RegensSyncView';
@@ -7,6 +7,54 @@ import StudioView, { StudioJumpPayload, ToolTab } from './components/StudioView'
 import { BootstrapState, CaptureTarget, ClubSeed, ExportVariant, StorageHealth, callBridge } from './lib/ipc';
 
 const AppArchitectureGraph = lazy(() => import('./components/AppArchitectureGraph'));
+
+class GraphErrorBoundary extends Component<
+  { onClose: () => void; children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  render() {
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <div
+        onClick={(e) => {
+          if (e.target === e.currentTarget) this.props.onClose();
+        }}
+        className="fixed inset-0 z-50 bg-slate-950/70 flex items-center justify-center p-4"
+        role="dialog"
+        aria-modal="true"
+      >
+        <div className="w-full max-w-md rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-3 text-xs text-slate-800 dark:text-slate-200 shadow-xl">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+            Actualización detectada en el módulo de Arquitectura
+          </h2>
+          <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
+            La aplicación se ha actualizado en disco mientras esta ventana estaba abierta. Recarga la vista para cargar el nuevo visor de salud y topología de nodos.
+          </p>
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={this.props.onClose}
+              className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+            >
+              Cerrar
+            </button>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium inline-flex items-center gap-1.5"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Recargar ahora
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
 
 export default function App() {
   const hadStoredTheme = useRef(localStorage.getItem('df11_theme') !== null);
@@ -30,6 +78,7 @@ export default function App() {
   const [studioJump, setStudioJump] = useState<StudioJumpPayload | null>(null);
   const [captureHotkey, setCaptureHotkey] = useState(false);
   const [captureTargetHint, setCaptureTargetHint] = useState<CaptureTarget>('direct_photo');
+  const [captureBgReplaceHint, setCaptureBgReplaceHint] = useState(false);
   const [capMenuOpen, setCapMenuOpen] = useState(false);
   const capMenuRef = useRef<HTMLDivElement>(null);
   const capSeqRef = useRef(0);
@@ -37,6 +86,7 @@ export default function App() {
     seq: number;
     target?: CaptureTarget;
     explicit?: boolean;
+    directBgReplace?: boolean;
   } | null>(null);
 
   useEffect(() => {
@@ -81,18 +131,22 @@ export default function App() {
     return () => window.removeEventListener('pywebviewready', loadBootstrap);
   }, [loadBootstrap]);
 
-  const triggerGlobalCapture = useCallback((target?: CaptureTarget, explicit = false) => {
+  const triggerGlobalCapture = useCallback((target?: CaptureTarget, explicit = false, directBgReplace?: boolean) => {
     setCapMenuOpen(false);
     setTab('studio');
     const nextSeq = ++capSeqRef.current;
-    setExternalCaptureReq({ seq: nextSeq, target, explicit });
+    setExternalCaptureReq({ seq: nextSeq, target, explicit, directBgReplace });
   }, []);
 
   const handleOpenCaptureAddon = useCallback(() => {
     setCapMenuOpen(false);
     const effTarget: CaptureTarget = tab === 'studio' ? captureTargetHint : 'direct_photo';
-    void callBridge('open_capture_addon', effTarget, dark ? 'dark' : 'light').catch(() => {});
-  }, [tab, captureTargetHint, dark]);
+    const args: unknown[] = [effTarget, dark ? 'dark' : 'light'];
+    if (effTarget === 'direct_photo' && tab === 'studio' && captureBgReplaceHint) {
+      args.push(true);
+    }
+    void callBridge('open_capture_addon', ...args).catch(() => {});
+  }, [tab, captureTargetHint, captureBgReplaceHint, dark]);
 
   useEffect(() => {
     const onAddonCapture = () => {
@@ -251,11 +305,20 @@ export default function App() {
                   <button
                     type="button"
                     role="menuitem"
-                    onClick={() => triggerGlobalCapture('direct_photo', true)}
+                    onClick={() => triggerGlobalCapture('direct_photo', true, false)}
                     className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-between"
                   >
                     <span>Foto Directa + Marco DF11</span>
-                    <span className="text-[10px] text-slate-400 dark:text-slate-500">0% IA</span>
+                    <span className="text-[10px] text-slate-400 dark:text-slate-500">Fondo orig. · 0% IA</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => triggerGlobalCapture('direct_photo', true, true)}
+                    className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between text-emerald-700 dark:text-emerald-400"
+                  >
+                    <span>Foto Directa · Capa Blanca DF11</span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400">Blanco · 0% IA</span>
                   </button>
                   <button
                     type="button"
@@ -353,6 +416,7 @@ export default function App() {
             initialHotkeyEnabled={captureHotkey}
             externalCaptureReq={externalCaptureReq}
             onCaptureTargetHintChange={setCaptureTargetHint}
+            onCaptureBgReplaceHintChange={setCaptureBgReplaceHint}
           />
         ) : (
           <RegensSyncView
@@ -383,9 +447,19 @@ export default function App() {
       </main>
       {modal === 'faq' && <FaqModal onClose={() => setModal(null)} />}
       {modal === 'about' && <AboutModal onClose={() => setModal(null)} onOpenGraph={() => setModal('graph')} />}
-      <Suspense fallback={null}>
-        {modal === 'graph' && <AppArchitectureGraph onClose={() => setModal(null)} />}
-      </Suspense>
+      {modal === 'graph' && (
+        <GraphErrorBoundary onClose={() => setModal(null)}>
+          <Suspense
+            fallback={
+              <div className="fixed inset-0 z-50 bg-slate-950/70 flex items-center justify-center p-4 text-xs text-white">
+                Cargando Topología TecnoRed y Salud del Sistema…
+              </div>
+            }
+          >
+            <AppArchitectureGraph onClose={() => setModal(null)} />
+          </Suspense>
+        </GraphErrorBoundary>
+      )}
     </div>
   );
 }

@@ -1,125 +1,137 @@
 {
   "appName": "DF11 Face Studio",
   "version": "1.6.0",
-  "category": "Estudio Fotográfico Modular & Sincronizador DF11 Classic / Pure / Dual para Football Manager",
-  "description": "Arquitectura de escritorio 100% local en cabina única sin scroll exterior: interfaz React 19 sobre WebView2 conectada sin puertos de red a un motor Python 3.12 con formatos DF11 Classic (260×310), DF11 Pure (220×276) y exportación Dual simultánea, captura PerMonitorV2 cero-portapapeles, óptica pura WGIF/OKLab sin IA, inferencia GPU DirectML opcional por capas y persistencia atómica NTFS/SQLite v4.",
+  "category": "Estudio Modular & Sincronizador DF11 Classic / Pure / Dual",
+  "description": "Arquitectura local sin scroll exterior: interfaz React 19 sobre WebView2 conectada a Python 3.12 con formatos DF11 Classic (260×310), DF11 Pure (220×276) y Dual, captura PerMonitorV2, óptica WGIF/OKLab sin IA, GPU DirectML y SQLite v4.",
   "nodes": [
     {
       "id": "desktop_shell", "label": "pywebview 6.2 + WebView2", "version": "6.2.1",
-      "role": "Contenedor Nativo de Escritorio sin Puertos HTTP", "category": "desktop_apps", "color": "#3b82f6", "icon": "Monitor", "healthType": "native_bridge",
-      "computationalModel": "Ventana nativa Win32/Edge WebView2 con canal IPC en proceso (window.pywebview.api) y aislamiento bidireccional de capacidades de carpeta.",
-      "whyChosen": "Arranca en menos de 0.5 s reutilizando el motor WebView2 de Windows 11 sin empaquetar Chromium ni exponer puertos localhost.",
-      "useCases": ["Diálogos nativos con protección de solo lectura para NG_Regens", "Aislamiento de perfil en unidad D:\\ sin ensuciar C:\\ ni OneDrive"]
+      "role": "Contenedor Nativo de Escritorio", "category": "desktop_apps", "color": "#3b82f6", "icon": "Monitor", "healthType": "native_bridge",
+      "computationalModel": "Ventana Win32/WebView2 con canal IPC en proceso (window.pywebview.api) y aislamiento de carpetas.",
+      "whyChosen": "Arranca en < 0.5 s reutilizando Edge WebView2 de Windows 11 sin empaquetar Chromium.",
+      "useCases": ["Diálogos nativos con lectura segura para NG_Regens", "Perfil aislado en unidad D:\\ sin tocar OneDrive"]
     },
     {
       "id": "ui_runtime", "label": "React 19 + Vite 6", "version": "19.0.0",
-      "role": "Estudio Modular, Foto Directa N/S/E/O y Sincronizador", "category": "local_web_apps", "color": "#f59e0b", "icon": "Atom", "healthType": "runtime",
-      "computationalModel": "Árbol declarativo Fiber con encuadre por ratón, pad cardinal N/S/E/O, zoom pivotado y carga diferida (React.lazy) del grafo TecnoRed.",
-      "whyChosen": "Garantiza arrastre fluido sin parpadeos, historial Undo/Redo coalescido y cero coste de arranque en modales secundarios.",
-      "useCases": ["Paso 1 en Modo Capas o Foto Directa + Marco DF11 con pad ↑N ↓S ←O →E", "Paso 2 Plantilla/Staff, remix FM y Paso 4 con Calidad óptica y guardado dual"]
+      "role": "Estudio Modular, Foto Directa y Sincronizador", "category": "local_web_apps", "color": "#f59e0b", "icon": "Atom", "healthType": "runtime",
+      "computationalModel": "Árbol declarativo Fiber con encuadre cardinal N/S/E/O, zoom pivotado y carga diferida (React.lazy) TecnoRed.",
+      "whyChosen": "Garantiza arrastre fluido, historial Undo/Redo coalescido y cero coste de arranque en modales.",
+      "useCases": ["Paso 1 en Modo Capas o Foto Directa con pad ↑N ↓S ←O →E", "Paso 2 Plantilla/Staff, remix FM y Paso 4 Classic/Pure/Dual"]
     },
     {
-      "id": "ipc_bridge", "label": "StudioBridge + ScreenClip Worker", "version": "1.6.0",
-      "role": "Orquestador IPC, Exportación Dual Atómica, Captura PerMonitorV2 y Watcher 650 ms", "category": "server_web_apps", "color": "#8b5cf6", "icon": "Workflow", "healthType": "native_bridge",
-      "computationalModel": "Fachada síncrona/asíncrona con guardado Dual 2-phase commit, recorte físico 1:1 por stdout sin tocar el portapapeles, ThreadPoolExecutor(8) y observador de 650 ms.",
-      "whyChosen": "Permite recortar cualquier región multimonitor sin sobrescribir el #UID copiado en Football Manager y exportar Classic + Pure a la vez sin archivos huérfanos.",
-      "useCases": ["Captura en caliente hacia Foto Directa, Cara, Camiseta o PNG independiente", "Exportación Dual simultánea en carpetas independientes y sincronización NG_Regens"]
+      "id": "ipc_bridge", "label": "StudioBridge + ScreenClip", "version": "1.6.0",
+      "role": "Orquestador IPC, Guardado Dual Atómico y Captura", "category": "server_web_apps", "color": "#8b5cf6", "icon": "Workflow", "healthType": "native_bridge",
+      "computationalModel": "Fachada IPC con guardado Dual 2-phase commit, recorte PerMonitorV2 cero-portapapeles y observador de 650 ms.",
+      "whyChosen": "Recorta regiones multimonitor sin borrar el #UID copiado y exporta Classic + Pure sin archivos huérfanos.",
+      "useCases": ["Captura en caliente hacia Foto Directa, Cara, Camiseta o PNG", "Exportación Dual en carpetas separadas y sincronización NG_Regens"]
     },
     {
       "id": "onnx_dml", "label": "ONNX Runtime DirectML", "version": "1.24.4",
-      "role": "Inferencia GPU Local para Modo Capas (BiRefNet, Selfie, YuNet)", "category": "ai_machine_learning", "color": "#f97316", "icon": "Cpu", "healthType": "hardware",
-      "computationalModel": "Ejecución bajo demanda de grafos FP16/FP32 sobre DirectX 12 (AMD/NVIDIA/Intel) exclusivamente en flujos de extracción modular.",
-      "whyChosen": "Ofrece recorte de cabello y aislamiento textil 2× SSAA gratis en local cuando se trabaja por capas.",
-      "useCases": ["Extracción limpia de cabeza/cuello y desmontaje de fichas DF11", "Extracción 2× SSAA de camisetas Plantilla y prendas Staff reales"]
+      "role": "Inferencia GPU Local (BiRefNet, Selfie, YuNet)", "category": "ai_machine_learning", "color": "#f97316", "icon": "Cpu", "healthType": "hardware",
+      "computationalModel": "Ejecución bajo demanda FP16/FP32 sobre DirectX 12 exclusivamente al recortar capas o fondos.",
+      "whyChosen": "Ofrece recorte de cabello y aislamiento textil 2× SSAA gratis y 100% local.",
+      "useCases": ["Extracción limpia de cabeza/cuello y desmontaje DF11", "Extracción 2× SSAA de camisetas Plantilla y Staff"]
     },
     {
       "id": "compositor_engine", "label": "Pillow 13 + Compositor DF11", "version": "13.0.0",
-      "role": "Compositor DF11 Classic (260×310) & DF11 Pure (220×276)", "category": "graphics_multimedia", "color": "#ec4899", "icon": "Layers", "healthType": "static",
-      "computationalModel": "Álgebra RGBA premultiplicada, encuadre directo cover/contain y doble sumidero exacto Classic (con marco) y Pure (220×276 sin marco, Alfa = 0).",
-      "whyChosen": "Clava tanto el bisel oficial DF11 Classic como la silueta transparente DF11 Pure a partir de una única composición sin duplicar trabajo.",
-      "useCases": ["Exportación Classic 260×310, Pure 220×276 o Dual (ambas a la vez)", "Reimportación 1:1 sin pérdida de fichas Classic y Pure"]
+      "role": "Compositor DF11 Classic (260×310) & Pure (220×276)", "category": "graphics_multimedia", "color": "#ec4899", "icon": "Layers", "healthType": "static",
+      "computationalModel": "Álgebra RGBA premultiplicada y doble sumidero Classic (con bisel) y Pure (220×276 sin marco, Alfa = 0).",
+      "whyChosen": "Clava tanto el marco DF11 Classic como la silueta transparente DF11 Pure desde una sola composición.",
+      "useCases": ["Exportación Classic 260×310, Pure 220×276 o Dual simultánea", "Reimportación 1:1 sin pérdida de fichas Classic y Pure"]
     },
     {
-      "id": "dsp_pure_optics", "label": "Óptica Pura WGIF + OKLab", "version": "1.6.0",
-      "role": "Motor DSP 100% Offline (0% IA): Luz Lineal, Deblocking y WGIF", "category": "graphics_multimedia", "color": "#10b981", "icon": "Layers", "healthType": "static",
-      "computationalModel": "Filtro guiado ponderado WGIF O(1) en espacio perceptual OKLab, remuestreo Lanczos/Bicubic en luz lineal y deblocking JPEG 8×8.",
-      "whyChosen": "Maximiza la nitidez real de ojos, pelo y escudos en ~4 ms sin alucinaciones de IA ni dependencias pesadas.",
-      "useCases": ["Mejora de Calidad óptica final (0–100%) con protección de piel y equipaciones", "Armonización luminosa OKLab y remuestreo subpíxel libre de aliasing"]
+      "id": "dsp_pure_optics", "label": "Óptica Pura WGIF + Geodésica", "version": "1.6.0",
+      "role": "Motor DSP 100% Offline (0% IA): Contorno Pure, WGIF y OKLab", "category": "graphics_multimedia", "color": "#10b981", "icon": "Layers", "healthType": "static",
+      "computationalModel": "Geodésica 8D + domo WLS + filtro guiado WGIF O(1) en OKLab y desmezclado algebraico sin IA.",
+      "whyChosen": "Limpia el contorno DF11 Pure y realza ojos, pelo y escudos sin usar IA ni modelos ONNX.",
+      "useCases": ["Limpieza de contorno DF11 Pure (0% IA) y Ficha Classic → Pure", "Calidad óptica final (0–100%) y luz OKLab sin halos"]
     },
     {
       "id": "local_storage", "label": "SQLite v4 WAL + NTFS XML", "version": "ACID WAL",
-      "role": "Catálogo Plantilla/Staff, Perfiles de Partida y Fusión de config.xml", "category": "local_persistence", "color": "#06b6d4", "icon": "Database", "healthType": "storage",
-      "computationalModel": "Base SQLite v4 en modo WAL (save_profiles + save_squad_roster) junto a reemplazo atómico NTFS con preservación de mapeos portrait/icon y defusedxml.",
-      "whyChosen": "Aísla plantillas y asignaciones de club por partida de FM y actualiza carpetas de creaciones o Megapacks sin corromper config.xml.",
-      "useCases": ["Catálogo multi-temporada por #ID de club con categorías Plantilla y Staff", "Exportación directa a Nuestras creaciones o al Pack de Faces de FM"]
+      "role": "Catálogo Plantilla/Staff y Fusión de config.xml", "category": "local_persistence", "color": "#06b6d4", "icon": "Database", "healthType": "storage",
+      "computationalModel": "Base SQLite v4 WAL junto a reemplazo atómico NTFS con preservación de portrait/icon y defusedxml.",
+      "whyChosen": "Aísla plantillas por partida FM y actualiza carpetas de creaciones o Megapacks sin corromper XML.",
+      "useCases": ["Catálogo multi-temporada por #ID de club (Plantilla / Staff)", "Guardado atómico en creaciones o Pack de Faces FM"]
     }
   ],
   "links": [
-    { "source": "desktop_shell", "target": "ui_runtime", "relation": "hospeda_vista", "type": "jerarquia", "protocol": "Edge WebView2 Host", "description": "Monta la aplicación compilada y gestiona el ciclo de vida nativo en Windows." },
-    { "source": "ui_runtime", "target": "ipc_bridge", "relation": "invoca_acciones", "type": "jerarquia", "protocol": "pywebview js_api IPC", "description": "Envía encuadres N/S/E/O, parámetros de capas, calidad óptica y órdenes de exportación." },
-    { "source": "desktop_shell", "target": "ipc_bridge", "relation": "autoriza_rutas", "type": "transversal", "protocol": "Capability Path Set", "description": "Autoriza carpetas de creaciones y facepacks bloqueando cualquier escritura sobre NG_Regens." },
-    { "source": "ipc_bridge", "target": "onnx_dml", "relation": "ejecuta_inferencia", "type": "jerarquia", "protocol": "DirectML Tensor Session", "description": "Solicita recorte BiRefNet, pose YuNet o segmentación textil 2× SSAA solo en Modo Capas." },
-    { "source": "ipc_bridge", "target": "compositor_engine", "relation": "compone_ficha", "type": "jerarquia", "protocol": "In-Memory RGBA Buffers", "description": "Orquesta Foto Directa o montaje por capas con fondo DF11 y marco maestro 260×310." },
-    { "source": "onnx_dml", "target": "compositor_engine", "relation": "entrega_mascaras", "type": "transversal", "protocol": "Alpha & Class Logits", "description": "Transfiere máscaras de piel, pelo y prenda para engarce limpio sin cuellos antiguos." },
-    { "source": "compositor_engine", "target": "dsp_pure_optics", "relation": "refina_optica", "type": "jerarquia", "protocol": "Linear-Light & OKLab DSP", "description": "Aplica remuestreo subpíxel lineal, deblocking 8×8 y filtro guiado WGIF sin IA." },
-    { "source": "ipc_bridge", "target": "local_storage", "relation": "persiste_lote", "type": "jerarquia", "protocol": "SQLite WAL + safe_ntfs_replace", "description": "Persiste plantillas Plantilla/Staff y fusiona UID.png + config.xml de forma atómica." }
+    { "source": "desktop_shell", "target": "ui_runtime", "relation": "hospeda_vista", "type": "jerarquia", "protocol": "Edge WebView2 Host", "description": "Monta la interfaz compilada y gestiona la ventana nativa." },
+    { "source": "ui_runtime", "target": "ipc_bridge", "relation": "invoca_acciones", "type": "jerarquia", "protocol": "pywebview js_api IPC", "description": "Envía encuadres, capas, calidad óptica y órdenes Classic/Pure/Dual." },
+    { "source": "desktop_shell", "target": "ipc_bridge", "relation": "autoriza_rutas", "type": "transversal", "protocol": "Capability Path Set", "description": "Autoriza carpetas de salida bloqueando escrituras en NG_Regens." },
+    { "source": "ipc_bridge", "target": "onnx_dml", "relation": "ejecuta_inferencia", "type": "jerarquia", "protocol": "DirectML Tensor Session", "description": "Solicita recorte BiRefNet, YuNet o segmentación 2× SSAA bajo demanda." },
+    { "source": "ipc_bridge", "target": "compositor_engine", "relation": "compone_ficha", "type": "jerarquia", "protocol": "RGBA Buffers", "description": "Orquesta Foto Directa o capas hacia salidas Classic (260×310) y Pure (220×276)." },
+    { "source": "onnx_dml", "target": "compositor_engine", "relation": "entrega_mascaras", "type": "transversal", "protocol": "Alpha & Class Logits", "description": "Transfiere máscaras de piel, pelo y prenda sin cuellos antiguos." },
+    { "source": "compositor_engine", "target": "dsp_pure_optics", "relation": "refina_optica", "type": "jerarquia", "protocol": "Linear-Light & OKLab", "description": "Aplica deblocking 8×8 y filtro guiado WGIF sin IA." },
+    { "source": "ipc_bridge", "target": "local_storage", "relation": "persiste_lote", "type": "jerarquia", "protocol": "SQLite WAL + NTFS", "description": "Guarda plantillas y fusiona PNGs + config.xml de forma atómica." }
   ],
   "flows": [
     {
-      "id": "studio_4step_modular", "title": "🖼️ Montaje Modular en 4 Pasos (Cara → Equipación → Fondo → Export)", "category": "graphics_multimedia",
-      "summary": "Construye fichas DF11 oficiales de 260×310 px combinando retratos, plantillas reales Plantilla/Staff y calidad óptica.",
-      "explanation": "Une encuadre preciso por ratón/teclado, engrosamiento real del cuello en OKLab, realce WGIF y guardado dual.",
+      "id": "df11_pure_dual_sink", "title": "💎 Formato DF11 Pure (220×276) y Exportación Dual", "category": "graphics_multimedia",
+      "summary": "Genera la silueta DF11 Pure sin marco (Alfa = 0) o guarda Classic + Pure a la vez en carpetas separadas.",
+      "explanation": "Compone el sujeto una sola vez y deriva Classic (260×310) y Pure (220×276) con guardado atómico en 2 fases.",
       "steps": [
-        { "nodeId": "ui_runtime", "role": "1. Ajusta posición (ratón, N/S/E/O o ←↑↓→) y steppers de Zoom, Cuello y Calidad óptica" },
-        { "nodeId": "ipc_bridge", "role": "2. Valida capacidades de ruta, UID de FM y coordina la sesión modular" },
-        { "nodeId": "onnx_dml", "role": "3. Extrae cabeza/cuello y plantillas reales 2× SSAA en GPU DirectML" },
-        { "nodeId": "compositor_engine", "role": "4. Engarza cuello progresivo (0–150%), fondo DF11 y marco con Alpha = 0" },
-        { "nodeId": "dsp_pure_optics", "role": "5. Refina micro-contraste y limpieza cromática WGIF en OKLab (0% IA)" },
-        { "nodeId": "local_storage", "role": "6. Guarda en Nuestras creaciones o renombra <UID>.png en el Pack de Faces FM" }
+        { "nodeId": "ui_runtime", "role": "Elige Classic, DF11 Pure o Dual en el Lienzo o Paso 4 y sus carpetas" },
+        { "nodeId": "ipc_bridge", "role": "Valida carpetas independientes y avisa si ambas cuelgan de graphics/" },
+        { "nodeId": "dsp_pure_optics", "role": "Aplica realce óptico WGIF en OKLab una única vez sobre el sujeto" },
+        { "nodeId": "compositor_engine", "role": "Deriva Classic (260×310 con marco) y Pure (220×276 transparente)" },
+        { "nodeId": "local_storage", "role": "Escribe ambos PNGs en 2 fases (.tmp → NTFS) y sincroniza config.xml" }
       ]
     },
     {
-      "id": "direct_photo_pure_optics", "title": "📷 Foto Directa + Marco DF11 y Calidad Óptica (0% IA)", "category": "graphics_multimedia",
-      "summary": "Enmarca directamente cualquier foto con el bisel oficial DF11, movimiento cardinal N/S/E/O, zoom y mejora óptica offline.",
-      "explanation": "Vía directa 100% determinista que prescinde por completo de redes neuronales manteniendo nitidez subpíxel en luz lineal.",
+      "id": "studio_4step_modular", "title": "🖼️ Montaje Modular en 4 Pasos (Cara → Equipación → Fondo → Export)", "category": "graphics_multimedia",
+      "summary": "Construye fichas DF11 combinando retratos, plantillas reales Plantilla/Staff y calidad óptica.",
+      "explanation": "Une encuadre preciso, engrosamiento real del cuello en OKLab, realce WGIF y guardado Classic/Pure/Dual.",
       "steps": [
-        { "nodeId": "ui_runtime", "role": "1. Carga la foto en Paso 1, mueve en N/S/E/O y ajusta Zoom con pivote central" },
-        { "nodeId": "ipc_bridge", "role": "2. Cachea el fotograma original y despacha el encuadre sin cargar ONNX" },
-        { "nodeId": "dsp_pure_optics", "role": "3. Ejecuta deblocking JPEG 8×8, remuestreo en luz lineal y realce WGIF OKLab" },
-        { "nodeId": "compositor_engine", "role": "4. Superpone el marco biselado DF11 y garantiza el anillo exterior Alpha = 0" },
-        { "nodeId": "local_storage", "role": "5. Exporta PNG 32-bit o JPG y sincroniza config.xml de forma atómica" }
+        { "nodeId": "ui_runtime", "role": "Ajusta posición, Zoom, Cuello y Calidad óptica" },
+        { "nodeId": "ipc_bridge", "role": "Valida rutas, #UID y coordina la sesión modular" },
+        { "nodeId": "onnx_dml", "role": "Extrae cabeza/cuello y plantillas 2× SSAA en GPU DirectML" },
+        { "nodeId": "compositor_engine", "role": "Engarza cuello progresivo, camiseta y salida Classic o Pure" },
+        { "nodeId": "dsp_pure_optics", "role": "Refina micro-contraste WGIF en OKLab (0% IA)" },
+        { "nodeId": "local_storage", "role": "Guarda en Nuestras creaciones o en el Pack de Faces FM" }
+      ]
+    },
+    {
+      "id": "direct_photo_pure_optics", "title": "📷 Foto Directa + Marco DF11 / Capa Blanca y Pure (0% IA)", "category": "graphics_multimedia",
+      "summary": "Conserva el fondo del recorte o aplica la Capa Blanca DF11 y contorno Pure con 0% IA.",
+      "explanation": "Geodésica OKLab + proyección Color-Line y fondo blanco DF11 calibrado sin redes neuronales.",
+      "steps": [
+        { "nodeId": "ui_runtime", "role": "Alterna Fondo original | Capa Blanca DF11 (0% IA) y Tolerancia Pure" },
+        { "nodeId": "ipc_bridge", "role": "Cachea el fotograma original y el contorno 0% IA sin invocar ONNX" },
+        { "nodeId": "dsp_pure_optics", "role": "Ejecuta contorno geodésico + WGIF OKLab y desmezcla bisel Classic" },
+        { "nodeId": "compositor_engine", "role": "Deriva marco DF11 Classic (260×310) y/o silueta Pure (220×276)" },
+        { "nodeId": "local_storage", "role": "Exporta PNG/JPG y actualiza config.xml de forma atómica" }
       ]
     },
     {
       "id": "facepack_card_remix", "title": "🔄 Remix Bidireccional de Fichas del Pack de Faces FM", "category": "ai_machine_learning",
-      "summary": "Toma cualquier ficha DF11 ya montada de un facepack para cambiarle la camiseta o cambiarle la cara conservando su equipación.",
-      "explanation": "Desmonta el bisel DF11 exterior, separa cabeza/cuello de la prenda original y detecta automáticamente el #UID del futbolista.",
+      "summary": "Abre cualquier ficha Classic o Pure existente para cambiarle camiseta o cara sin perder escala.",
+      "explanation": "Desmonta fichas Classic (260×310) o reimporta fichas Pure (220×276) 1:1 detectando el #UID automáticamente.",
       "steps": [
-        { "nodeId": "ui_runtime", "role": "1. Carga la ficha del facepack y permite alternar Usar su cara / Usar su camiseta" },
-        { "nodeId": "onnx_dml", "role": "2. Desmonta el fondo DF11 y aísla la cabeza o la camiseta original 2× SSAA" },
-        { "nodeId": "compositor_engine", "role": "3. Re-engarza la nueva combinación con puente de cuello OKLab y marco DF11" },
-        { "nodeId": "local_storage", "role": "4. Actualiza <UID>.png y config.xml conservando intactos iconos y resto del pack" }
+        { "nodeId": "ui_runtime", "role": "Carga la ficha y alterna Usar su cara / Usar su camiseta" },
+        { "nodeId": "onnx_dml", "role": "Aísla cabeza o camiseta original 2× SSAA en GPU" },
+        { "nodeId": "compositor_engine", "role": "Re-engarza la nueva combinación hacia Classic, Pure o Dual" },
+        { "nodeId": "local_storage", "role": "Actualiza <UID>.png y config.xml conservando el resto del pack" }
       ]
     },
     {
       "id": "ng_regens_hotsync", "title": "⚡ Sincronización Masiva NG_Regens & FM27 en Caliente", "category": "local_persistence",
-      "summary": "Detecta caras nuevas de NG_Regens y genera la carpeta prioritaria 000_DF11_Regens_Override vistiendo la camiseta titular del club.",
-      "explanation": "Filtra estrictamente las plantillas ★ Titular activa de categoría Plantilla y protege el disco frente a OneDrive.",
+      "summary": "Convierte caras nuevas de NG_Regens en Classic, Pure o Dual vistiendo la camiseta titular del club.",
+      "explanation": "Lee la bóveda sin tocarla y genera carpetas override separadas para Classic y Pure con su config.xml.",
       "steps": [
-        { "nodeId": "ui_runtime", "role": "1. Configura rutas, verifica el Centinela OneDrive y activa vigilancia" },
-        { "nodeId": "ipc_bridge", "role": "2. Espera 650 ms de calma, verifica Shrink Guard (50%) y reparte en 8 hilos" },
-        { "nodeId": "compositor_engine", "role": "3. Viste la plantilla titular de jugador de cada #ID de club y marco DF11" },
-        { "nodeId": "local_storage", "role": "4. Conmuta PNGs y config.xml de golpe mediante reemplazo atómico NTFS" }
+        { "nodeId": "ui_runtime", "role": "Elige modo Classic, Pure o Dual y activa vigilancia" },
+        { "nodeId": "ipc_bridge", "role": "Espera 650 ms, valida Shrink Guard (50%) y reparte en 8 hilos" },
+        { "nodeId": "compositor_engine", "role": "Viste la plantilla ★ Titular de cada #ID de club" },
+        { "nodeId": "local_storage", "role": "Escribe PNGs y config.xml mediante reemplazo atómico NTFS" }
       ]
     },
     {
       "id": "hot_screen_capture", "title": "✂️ Captura de Pantalla en Caliente Cero-Portapapeles", "category": "desktop_apps",
-      "summary": "Recorta cualquier región multimonitor 1:1 hacia Foto Directa, Cara, Camiseta o PNG sin sobrescribir el #UID copiado.",
-      "explanation": "Oculta temporalmente la ventana, captura en PerMonitorV2 por memoria sin temporales y auto-encuadra torsos sin cabeza.",
+      "summary": "Recorta pantalla o Mini-Capturador hacia Foto Directa, Cara, Camiseta o PNG sin borrar el #UID copiado.",
+      "explanation": "Oculta la app antes de capturar en PerMonitorV2 por memoria sin tocar el portapapeles de Windows.",
       "steps": [
-        { "nodeId": "desktop_shell", "role": "1. Oculta el host WebView2 140 ms y restaura el foco tras el recorte" },
-        { "nodeId": "ipc_bridge", "role": "2. Lanza ScreenClip Worker PerMonitorV2 por stdout sin tocar el portapapeles" },
-        { "nodeId": "ui_runtime", "role": "3. Enruta de forma independiente a Foto Directa, Cara, Camiseta o Guardar PNG" }
+        { "nodeId": "desktop_shell", "role": "Oculta la ventana o el Mini-Capturador y restaura al terminar" },
+        { "nodeId": "ipc_bridge", "role": "Captura 1:1 por stdout sin tocar el portapapeles" },
+        { "nodeId": "ui_runtime", "role": "Enruta a Foto Directa, Cara, Camiseta o Guardar PNG" }
       ]
     }
   ]

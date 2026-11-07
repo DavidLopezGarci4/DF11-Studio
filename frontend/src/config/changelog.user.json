@@ -1,21 +1,21 @@
 {
   "currentVersion": "1.6.0",
   "buildNumber": 10600,
-  "lastUpdated": "2026-11-06",
+  "lastUpdated": "2026-11-07",
   "appName": "DF11 Face Studio",
-  "appDescription": "Estudio en una sola vista con formatos DF11 Classic (260 × 310), DF11 Pure (220 × 276 sin marco) y exportación Dual simultánea, captura en caliente, foto directa, extractores y sincronizador para Football Manager.",
+  "appDescription": "Estudio en una sola vista con formatos DF11 Classic (260 × 310), DF11 Pure (220 × 276 sin marco, contorno 0% IA) y exportación Dual simultánea, captura en caliente, foto directa, extractores y sincronizador para Football Manager.",
   "privacyPolicy": "Tus fotos y partidas nunca salen de tu PC: procesamiento 100% local, privado y sin suscripciones ni claves API.",
   "versions": [
     {
       "version": "1.6.0",
       "build": 10600,
-      "date": "2026-11-06",
-      "title": "Nuevo Formato Oficial DF11 Pure Sin Marco (220 × 276), Exportación Dual en Carpetas Independientes y Sincronización Dual de Regens",
+      "date": "2026-11-07",
+      "title": "Formato Oficial DF11 Pure (220 × 276) con Limpieza de Contorno 0% IA, Exportación Dual en Carpetas Independientes y Visor de Salud Renovado",
       "highlights": [
-        "💎 **Formato oficial DF11 Pure sin marco (220 × 276 píxeles):** Ahora puedes previsualizar y guardar tus fichas también en el modelo DF11 Pure de silueta limpia sobre fondo transparente y sin marco exterior, listo para las apariencias modernas de Football Manager.",
-        "📂 **Modo Dual para guardar ambas versiones a la vez:** Con un solo clic en «Dual (Ambas)» generas simultáneamente tu ficha Classic con marco y tu ficha Pure sin marco, enviando cada versión a la carpeta independiente que tú elijas y alternando en vivo entre «Vista Classic» y «Vista Pure».",
-        "📷 **Recorte bajo petición en Foto Directa y edición exacta de fichas Pure:** Si cargas una foto con fondo en Foto Directa, dispones de un botón claro de un solo clic para recortar el fondo cuando quieras crear una versión Pure, y puedes abrir fichas Pure ya existentes sin que pierdan tamaño ni nitidez.",
-        "⚡ **Sincronizador NG_Regens compatible con Classic, Pure y Dual:** Convierte miles de caras nuevas de tus regens en formato Classic, Pure o en ambos a la vez hacia carpetas separadas, con aviso preventivo si ambas cuelgan al mismo tiempo de la carpeta gráfica del juego."
+        "💎 **Selector directo Classic | DF11 Pure | Dual en el Lienzo y en el Paso 4:** Elige al instante entre «Classic» (260 × 310 con marco), «DF11 Pure» (220 × 276 sin marco y con fondo transparente) o «Dual» tanto arriba en la cabecera del Lienzo Oficial DF11 como justo debajo en el Paso 4.",
+        "📂 **Guardado Dual en carpetas independientes y doble vista previa:** Con un solo clic en «Dual (Ambas)» generas a la vez tu ficha Classic y tu ficha Pure enviando cada versión a la carpeta separada que elijas, y puedes alternar en vivo entre «Vista Classic» y «Vista Pure».",
+        "✨ **Capa Blanca Oficial DF11 o Fondo Original en capturas y contorno Pure 0% IA:** En capturas de pantalla, Mini-Capturador, fotos directas y tarjetas Classic puedes alternar al instante entre mantener el fondo original del recorte o aplicar la Capa Blanca Oficial DF11 (y exportar a DF11 Pure o Dual) mediante un algoritmo gratuito 100% sin IA.",
+        "🩺 **Salud de la Arquitectura, conexión de nodos y arranque limpio:** El visor interactivo desde «Acerca de» muestra en vivo el estado de tu tarjeta gráfica, modelos, catálogo y las conexiones de entrada/salida entre nodos, cerrando además cualquier sesión anterior bloqueada al abrir la app."
       ]
     },
     {
