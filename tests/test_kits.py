@@ -96,7 +96,16 @@ def test_v4_save_profiles_and_isolated_multi_save_squad_roster(tmp_path: Path) -
     db_file = tmp_path / "multi_save.sqlite3"
     with init_state_db(db_file) as conn:
         u_ver = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        assert u_ver == 4
+        assert u_ver == 5
+        conn.execute(
+            "INSERT INTO shirt_templates (template_id, filename, display_name, club_id, sha256, mtime_ns, size, collar_json, is_active_for_club, category) "
+            "VALUES ('Rayo_GK_26', 'Rayo_GK_26.png', 'Rayo Portero', '1744', 'abc', 1, 1, '{}', 1, 'goalkeeper')"
+        )
+
+    # Re-opening DB preserves 'goalkeeper' category without resetting to 'player'
+    with init_state_db(db_file) as conn:
+        row = conn.execute("SELECT category FROM shirt_templates WHERE template_id = 'Rayo_GK_26'").fetchone()
+        assert row == ("goalkeeper",)
 
     assert get_active_save_id(db_file) == "default"
     profiles = list_save_profiles(db_file)

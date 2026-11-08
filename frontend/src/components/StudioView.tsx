@@ -18,7 +18,6 @@ import {
   Scissors,
   Search,
   Shirt,
-  Sparkles,
   Trash2,
   Undo2,
   Upload,
@@ -44,6 +43,7 @@ import {
   TemplateCategory,
   callBridge,
   isTextEntryTarget,
+  normalizeCategory,
   resolveDroppedImageTransfer,
 } from '../lib/ipc';
 
@@ -85,6 +85,22 @@ interface Props {
 }
 
 const UID_RE = /^(?:r-)?[0-9]{1,12}$/;
+
+function parseSeasonSortValue(season?: string): number {
+  const m = /(20\d{2}|\d{2})\s*[-/]\s*(20\d{2}|\d{2})/.exec(season || '');
+  if (m) {
+    const y1 = m[1].length === 2 ? 2000 + Number(m[1]) : Number(m[1]);
+    return y1;
+  }
+  const mSingle = /(20\d{2})/.exec(season || '');
+  return mSingle ? Number(mSingle[1]) : 0;
+}
+
+function compactSeason(season?: string): string {
+  const raw = (season || '').trim();
+  const m = /^(?:20)?(\d{2})\s*[-/]\s*(?:20)?(\d{2})$/.exec(raw);
+  return m ? `${m[1]}/${m[2]}` : raw;
+}
 
 function resolveNextClubName(
   prevCid: string,
@@ -424,7 +440,7 @@ export default function StudioView({
     },
     [onToolTabChange],
   );
-  const [activeStep, setActiveStep] = useState<1 | 2 | 3 | 4>(1);
+  const [activeStep, setActiveStep] = useState<1 | 2 | 3>(1);
   const [step2Category, setStep2Category] = useState<TemplateCategory>('player');
   const [extractorInitCategory, setExtractorInitCategory] = useState<TemplateCategory>('player');
 
@@ -432,6 +448,9 @@ export default function StudioView({
   const templatesRef = useRef<ShirtTemplateInfo[]>([]);
   const allowInitialAutoSelectRef = useRef(!initialJump);
   const [faces, setFaces] = useState<SavedFaceInfo[]>([]);
+  const [activeSavedFaceId, setActiveSavedFaceId] = useState('');
+  const [confirmDeleteFaceId, setConfirmDeleteFaceId] = useState<string | null>(null);
+  const [confirmDeleteStep2Tid, setConfirmDeleteStep2Tid] = useState<string | null>(null);
 
   const faceToolCacheRef = useRef<FaceToolPersistedState | null>(null);
   const shirtToolCacheRef = useRef<ShirtHistoryState | null>(null);
@@ -493,8 +512,6 @@ export default function StudioView({
   const [savedMsg, setSavedMsg] = useState('');
   const [showGuides, setShowGuides] = useState(true);
   const [stageSkin, setStageSkin] = useState<'fm_dark' | 'fm_light' | 'checker'>('fm_dark');
-  const [hasExtractedBg, setHasExtractedBg] = useState(false);
-  const [canExtractBg, setCanExtractBg] = useState(false);
 
   // Inline template rename/category/club/season/delete state in Paso 2
   const [tplNameDraft, setTplNameDraft] = useState('');
@@ -590,12 +607,10 @@ export default function StudioView({
     mode?: 'crop' | 'modular' | 'direct';
     baseSnap?: LayerSnapshot;
   } | null>(null);
-  const bokehDragRef = useRef(false);
   const arrowBurstTsRef = useRef(0);
   const reqSeqRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const directFileInputRef = useRef<HTMLInputElement>(null);
-  const bgInputRef = useRef<HTMLInputElement>(null);
   const facepackInputRef = useRef<HTMLInputElement>(null);
   const pendingRemixModeRef = useRef<'swap_shirt' | 'swap_face' | 'to_pure'>('swap_shirt');
 
@@ -697,7 +712,7 @@ export default function StudioView({
       reqSeqRef.current += 1;
       updatePreviewUrl('');
     }
-    setCanExtractBg(false);
+    setActiveSavedFaceId('');
     commitSnap((s) => ({
       ...s,
       headAssetId: '',
@@ -715,41 +730,50 @@ export default function StudioView({
       setTemplates(nextTemplates);
       onTemplatesCountChange?.(nextTemplates.length);
       setConfirmDeleteTpl(false);
-    const shouldSeedInitialPlayer = allowInitialAutoSelectRef.current;
-    if (nextTemplates.length > 0) {
-      allowInitialAutoSelectRef.current = false;
-    }
-    setHistory((h) => {
-      const validIds = new Set(nextTemplates.map((t) => t.templateId));
-      const firstPlayer = nextTemplates.find((t) => (t.category ?? 'player') === 'player');
-      const firstStaff = nextTemplates.find((t) => t.category === 'staff');
-      let changed = false;
-      const fixDeletedSnap = (sn: LayerSnapshot): LayerSnapshot => {
-        if (!sn.templateId || sn.templateId.startsWith('adhoc:') || validIds.has(sn.templateId)) {
-          return sn;
-        }
-        const prevCat = prevTemplates.find((t) => t.templateId === sn.templateId)?.category ?? 'player';
-        const replacementTid = prevCat === 'staff' ? (firstStaff?.templateId ?? '') : (firstPlayer?.templateId ?? '');
-        if (sn.templateId === replacementTid) return sn;
-        changed = true;
-        return { ...sn, templateId: replacementTid };
-      };
-      let nextPresent = fixDeletedSnap(h.present);
-      if (
-        shouldSeedInitialPlayer &&
-        !nextPresent.templateId &&
-        !nextPresent.headAssetId &&
-        h.past.length === 0 &&
-        firstPlayer
-      ) {
-        changed = true;
-        nextPresent = { ...nextPresent, templateId: firstPlayer.templateId };
+      setConfirmDeleteStep2Tid(null);
+      const shouldSeedInitialPlayer = allowInitialAutoSelectRef.current;
+      if (nextTemplates.length > 0) {
+        allowInitialAutoSelectRef.current = false;
       }
-      const nextPast = h.past.map(fixDeletedSnap);
-      const nextFuture = h.future.map(fixDeletedSnap);
-      return changed ? { ...h, past: nextPast, present: nextPresent, future: nextFuture } : h;
-    });
-  }, [onTemplatesCountChange]);
+      setHistory((h) => {
+        const validIds = new Set(nextTemplates.map((t) => t.templateId));
+        const firstPlayer = nextTemplates.find((t) => normalizeCategory(t.category) === 'player');
+        const firstGk = nextTemplates.find((t) => normalizeCategory(t.category) === 'goalkeeper');
+        const firstStaff = nextTemplates.find((t) => normalizeCategory(t.category) === 'staff');
+        let changed = false;
+        const fixDeletedSnap = (sn: LayerSnapshot): LayerSnapshot => {
+          if (!sn.templateId || sn.templateId.startsWith('adhoc:') || validIds.has(sn.templateId)) {
+            return sn;
+          }
+          const prevCat = normalizeCategory(prevTemplates.find((t) => t.templateId === sn.templateId)?.category);
+          const replacementTid =
+            prevCat === 'staff'
+              ? (firstStaff?.templateId ?? '')
+              : prevCat === 'goalkeeper'
+              ? (firstGk?.templateId ?? firstPlayer?.templateId ?? '')
+              : (firstPlayer?.templateId ?? '');
+          if (sn.templateId === replacementTid) return sn;
+          changed = true;
+          return { ...sn, templateId: replacementTid };
+        };
+        let nextPresent = fixDeletedSnap(h.present);
+        if (
+          shouldSeedInitialPlayer &&
+          !nextPresent.templateId &&
+          !nextPresent.headAssetId &&
+          h.past.length === 0 &&
+          firstPlayer
+        ) {
+          changed = true;
+          nextPresent = { ...nextPresent, templateId: firstPlayer.templateId };
+        }
+        const nextPast = h.past.map(fixDeletedSnap);
+        const nextFuture = h.future.map(fixDeletedSnap);
+        return changed ? { ...h, past: nextPast, present: nextPresent, future: nextFuture } : h;
+      });
+    },
+    [onTemplatesCountChange],
+  );
 
   const loadInitialCatalogs = useCallback(() => {
     void callBridge<ShirtTemplateInfo[]>('list_shirt_templates')
@@ -776,7 +800,7 @@ export default function StudioView({
     if (snap.templateId.startsWith('adhoc:')) return;
     const active = templates.find((t) => t.templateId === snap.templateId);
     setTplNameDraft(active?.displayName ?? '');
-    setTplCategoryDraft(active?.category === 'staff' ? 'staff' : 'player');
+    setTplCategoryDraft(normalizeCategory(active?.category));
     setTplClubDraft(active?.clubId ?? '');
     setTplClubNameDraft(active?.clubName || (active?.clubId ? clubs[active.clubId]?.name ?? '' : ''));
     setTplSeasonDraft(active?.season ?? '');
@@ -790,12 +814,12 @@ export default function StudioView({
     allowInitialAutoSelectRef.current = false;
     setLoadedFacepackCard(null);
     setLatestAdhocShirtId('');
+    setActiveSavedFaceId('');
     setToolTab('composer');
     setActiveStep(1);
     setCropStage(null);
     setUid(initialJump.uid);
     updatePreviewUrl(initialJump.previewDataUrl);
-    setCanExtractBg(!initialJump.isPreCutout);
     const jumpClubId = (initialJump.clubId ?? '').replace(/[^0-9]/g, '').slice(0, 12);
     const matchedTpl = initialJump.matchedTemplateId
       ? templatesRef.current.find((t) => t.templateId === initialJump.matchedTemplateId) ?? {
@@ -804,10 +828,10 @@ export default function StudioView({
         }
       : jumpClubId
       ? templates.find(
-          (t) => t.clubId === jumpClubId && (t.category ?? 'player') === 'player' && t.isActiveForClub !== false,
-        ) || templates.find((t) => t.clubId === jumpClubId && (t.category ?? 'player') === 'player')
+          (t) => t.clubId === jumpClubId && normalizeCategory(t.category) === 'player' && t.isActiveForClub !== false,
+        ) || templates.find((t) => t.clubId === jumpClubId && normalizeCategory(t.category) === 'player')
       : undefined;
-    setStep2Category(matchedTpl?.category === 'staff' ? 'staff' : 'player');
+    setStep2Category(normalizeCategory(matchedTpl?.category));
     commitSnap((s) => ({
       ...s,
       step1Mode: 'modular',
@@ -918,15 +942,16 @@ export default function StudioView({
           : hasExplicitBgReplace
           ? Boolean(res.directBgReplace)
           : s.directBgReplace;
-        let nextBgMode: BgMode =
-          typeof res.bgMode === 'string' && VALID_BG_MODES.has(res.bgMode as BgMode)
-            ? (res.bgMode as BgMode)
-            : s.bgMode;
+        let nextBgMode: BgMode = isPrecut
+          ? 'white_df11'
+          : typeof res.bgMode === 'string' && VALID_BG_MODES.has(res.bgMode as BgMode)
+          ? (res.bgMode as BgMode)
+          : s.bgMode;
         if (nextDirectBgReplace && !isPrecut && nextBgMode === 'transparent') {
           nextBgMode = 'white_df11';
         }
         const nextBgBlur =
-          hasExplicitBgReplace && nextDirectBgReplace && nextBgMode === 'white_df11' ? 0 : s.bgBlur;
+          isPrecut || (hasExplicitBgReplace && nextDirectBgReplace && nextBgMode === 'white_df11') ? 0 : s.bgBlur;
         return {
           ...s,
           step1Mode: 'direct_photo',
@@ -1119,7 +1144,6 @@ export default function StudioView({
     setActiveStep(1);
     setCropStage(staged);
     setCropVp(staged.suggestedViewport);
-    setCanExtractBg(!staged.isPreCutout);
     setErrorMsg('');
     setSavedMsg('');
   }, []);
@@ -1181,8 +1205,8 @@ export default function StudioView({
           {},
         );
         if (out?.previewDataUrl) {
+          setActiveSavedFaceId('');
           updatePreviewUrl(out.previewDataUrl, 'legacy-jump');
-          setCanExtractBg(!out.isPreCutout);
           commitSnap((s) => ({ ...s, step1Mode: 'modular', headAssetId: 'legacy-jump', faceLabel: 'Retrato' }));
         }
       } catch (e) {
@@ -1216,6 +1240,7 @@ export default function StudioView({
       reqSeqRef.current += 1;
       setActiveStep(1);
       setCropStage(null);
+      setActiveSavedFaceId('');
       if (res.previewDataUrl) updatePreviewUrl(res.previewDataUrl);
       commitSnap((s) => ({
         ...s,
@@ -1276,6 +1301,7 @@ export default function StudioView({
       setToolTab('composer');
       setActiveStep(1);
       setCropStage(null);
+      setConfirmDeleteFaceId(null);
       try {
         const res = await callBridge<{
           headAssetId: string;
@@ -1285,7 +1311,7 @@ export default function StudioView({
           previewDataUrl: string;
         }>('load_saved_face', faceId, snap.templateId, { ...composePayload, step1Mode: 'modular' });
         reqSeqRef.current += 1;
-        setCanExtractBg(!res.isPreCutout);
+        setActiveSavedFaceId(faceId);
         if (res.previewDataUrl) updatePreviewUrl(res.previewDataUrl);
         commitSnap((s) => ({
           ...s,
@@ -1303,8 +1329,81 @@ export default function StudioView({
         setBusy(false);
       }
     },
-    [snap.templateId, composePayload, commitSnap, updatePreviewUrl],
+    [snap.templateId, composePayload, commitSnap, setToolTab, updatePreviewUrl],
   );
+
+  const handleDeleteSavedFace = useCallback(
+    async (faceId: string) => {
+      if (busy) return;
+      setBusy(true);
+      setErrorMsg('');
+      try {
+        const res = await callBridge<{ deletedFaceId: string; faces: SavedFaceInfo[] }>('delete_saved_face', faceId);
+        if (Array.isArray(res?.faces)) {
+          setFaces(res.faces);
+        } else {
+          setFaces((prev) => prev.filter((f) => f.faceId !== faceId));
+        }
+        setConfirmDeleteFaceId(null);
+        if (activeSavedFaceId === faceId) {
+          setActiveSavedFaceId('');
+          if (!snap.templateId) {
+            reqSeqRef.current += 1;
+            updatePreviewUrl('');
+          }
+          commitSnap((s) => ({
+            ...s,
+            headAssetId: '',
+            faceLabel: '',
+            scale: 1.0,
+            offsetX: 0,
+            offsetY: 0,
+          }));
+        }
+        setSavedMsg(`Cara eliminada: ${res?.deletedFaceId ?? faceId}`);
+      } catch (e) {
+        setErrorMsg(e instanceof Error ? e.message : 'No se pudo eliminar la cara guardada.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, activeSavedFaceId, snap.templateId, commitSnap, updatePreviewUrl],
+  );
+
+  const handleClearSampleFaces = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    setErrorMsg('');
+    try {
+      const res = await callBridge<{ deletedCount: number; faces: SavedFaceInfo[] }>('clear_sample_faces');
+      if (Array.isArray(res?.faces)) {
+        setFaces(res.faces);
+      } else {
+        setFaces((prev) => prev.filter((f) => f.kind !== 'sample'));
+      }
+      setConfirmDeleteFaceId(null);
+      if (activeSavedFaceId.startsWith('smp:')) {
+        setActiveSavedFaceId('');
+        if (!snap.templateId) {
+          reqSeqRef.current += 1;
+          updatePreviewUrl('');
+        }
+        commitSnap((s) => ({
+          ...s,
+          headAssetId: '',
+          faceLabel: '',
+          scale: 1.0,
+          offsetX: 0,
+          offsetY: 0,
+        }));
+      }
+      setSavedMsg(`Caras de prueba eliminadas (${res?.deletedCount ?? 0}).`);
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'No se pudieron limpiar las caras de prueba.');
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, activeSavedFaceId, snap.templateId, commitSnap, updatePreviewUrl]);
 
   const applyFacepackRemixResult = useCallback(
     (res: FacepackRemixResponse, isSameCardSwitch: boolean) => {
@@ -1355,13 +1454,13 @@ export default function StudioView({
         setLatestAdhocShirtId('');
       }
       setActiveStep(1);
-      setCanExtractBg(!res.isPreCutout);
+      setActiveSavedFaceId('');
       if (res.previewDataUrl) updatePreviewUrl(res.previewDataUrl);
       const fallbackPrevTid = snap.templateId.startsWith('adhoc:') ? '' : snap.templateId;
       const nextTid = res.templateId !== undefined ? res.templateId : fallbackPrevTid;
       const foundTpl = templatesRef.current.find((t) => t.templateId === nextTid);
       if (foundTpl) {
-        setStep2Category((foundTpl.category ?? 'player') === 'staff' ? 'staff' : 'player');
+        setStep2Category(normalizeCategory(foundTpl.category));
       }
       commitSnap((s) => ({
         ...s,
@@ -1473,7 +1572,7 @@ export default function StudioView({
       setErrorMsg('');
       try {
         const targetTpl = snap.templateId.startsWith('adhoc:')
-          ? (templatesRef.current.find((t) => (t.category ?? 'player') === step2Category)?.templateId ?? '')
+          ? (templatesRef.current.find((t) => normalizeCategory(t.category) === step2Category)?.templateId ?? '')
           : snap.templateId;
         const res = await callBridge<FacepackRemixResponse>(
           'switch_facepack_remix_mode',
@@ -1519,7 +1618,8 @@ export default function StudioView({
       if (res?.savedTemplateId) {
         setLatestAdhocShirtId('');
         commitSnap((s) => ({ ...s, templateId: res.savedTemplateId }));
-        setSavedMsg(`Camiseta guardada en plantillas (${step2Category === 'staff' ? 'Staff' : 'Plantilla'}): ${res.savedTemplateId}.png`);
+        const catLabel = step2Category === 'staff' ? 'Staff' : step2Category === 'goalkeeper' ? 'Portero' : 'Campo';
+        setSavedMsg(`Camiseta guardada en plantillas (${catLabel}): ${res.savedTemplateId}.png`);
       }
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'No se pudo guardar la camiseta en tshirt_templates.');
@@ -1534,7 +1634,7 @@ export default function StudioView({
       setErrorMsg('');
       const meta = templatesRef.current.find((t) => t.templateId === templateId);
       if (meta) {
-        setStep2Category((meta.category ?? 'player') === 'staff' ? 'staff' : 'player');
+        setStep2Category(normalizeCategory(meta.category));
       }
       if (snap.headAssetId && snap.headAssetId !== 'legacy-jump') {
         try {
@@ -1560,7 +1660,7 @@ export default function StudioView({
       }
       commitSnap((s) => ({ ...s, step1Mode: 'modular', wearMode: 'template', templateId }));
     },
-    [snap.headAssetId, commitSnap],
+    [snap.headAssetId, commitSnap, setToolTab],
   );
 
   const sortedClubs = useMemo(
@@ -1570,19 +1670,29 @@ export default function StudioView({
 
   const filteredStep2Templates = useMemo(() => {
     const q = step2Search.trim().toLowerCase().replace(/^#/, '');
-    return templates.filter((t) => {
-      const cat = t.category ?? 'player';
-      if (cat !== step2Category) return false;
-      if (!q) return true;
-      const cName = (t.clubName || (t.clubId ? clubs[t.clubId]?.name ?? '' : '')).toLowerCase();
-      return (
-        t.displayName.toLowerCase().includes(q) ||
-        t.templateId.toLowerCase().includes(q) ||
-        t.clubId.toLowerCase().includes(q) ||
-        cName.includes(q) ||
-        (t.season || '').toLowerCase().includes(q)
-      );
-    });
+    return templates
+      .filter((t) => {
+        const cat = normalizeCategory(t.category);
+        if (cat !== step2Category) return false;
+        if (!q) return true;
+        const cName = (t.clubName || (t.clubId ? clubs[t.clubId]?.name ?? '' : '')).toLowerCase();
+        return (
+          t.displayName.toLowerCase().includes(q) ||
+          t.templateId.toLowerCase().includes(q) ||
+          t.clubId.toLowerCase().includes(q) ||
+          cName.includes(q) ||
+          (t.season || '').toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const actA = Boolean(a.clubId) && a.isActiveForClub !== false ? 1 : 0;
+        const actB = Boolean(b.clubId) && b.isActiveForClub !== false ? 1 : 0;
+        if (actA !== actB) return actB - actA;
+        const sA = parseSeasonSortValue(a.season);
+        const sB = parseSeasonSortValue(b.season);
+        if (sA !== sB) return sB - sA;
+        return a.displayName.localeCompare(b.displayName, 'es');
+      });
   }, [templates, step2Category, step2Search, clubs]);
 
   const handleSaveTemplateMeta = async () => {
@@ -1613,24 +1723,32 @@ export default function StudioView({
     }
   };
 
+  const handleDeleteTemplateById = useCallback(
+    async (targetTid: string) => {
+      if (!targetTid || targetTid.startsWith('adhoc:') || busy) return;
+      setBusy(true);
+      setErrorMsg('');
+      try {
+        const res = await callBridge<{ deletedTemplateId: string; templates: ShirtTemplateInfo[] }>(
+          'delete_shirt_template',
+          targetTid,
+        );
+        if (Array.isArray(res?.templates)) handleTemplatesUpdated(res.templates);
+        setConfirmDeleteTpl(false);
+        setConfirmDeleteStep2Tid(null);
+        setSavedMsg(`Plantilla eliminada: ${res?.deletedTemplateId ?? targetTid}`);
+      } catch (e) {
+        setErrorMsg(e instanceof Error ? e.message : 'No se pudo eliminar la plantilla.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, handleTemplatesUpdated],
+  );
+
   const handleDeleteCurrentTemplate = async () => {
     if (!snap.templateId || snap.templateId.startsWith('adhoc:') || busy) return;
-    const targetTid = snap.templateId;
-    setBusy(true);
-    setErrorMsg('');
-    try {
-      const res = await callBridge<{ deletedTemplateId: string; templates: ShirtTemplateInfo[] }>(
-        'delete_shirt_template',
-        targetTid,
-      );
-      if (Array.isArray(res?.templates)) handleTemplatesUpdated(res.templates);
-      setConfirmDeleteTpl(false);
-      setSavedMsg(`Plantilla eliminada: ${res?.deletedTemplateId ?? targetTid}`);
-    } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'No se pudo eliminar la plantilla.');
-    } finally {
-      setBusy(false);
-    }
+    await handleDeleteTemplateById(snap.templateId);
   };
 
   // Keyboard shortcuts: Paso 1 directional arrows, Ctrl+Z (Undo), Ctrl+Y / Ctrl+Shift+Z (Redo), Delete/Suprimir, Enter (Apply Crop)
@@ -1781,7 +1899,7 @@ export default function StudioView({
         notices.push('Posible bloqueo DRM (pantalla en negro): desactiva la aceleración por hardware del navegador.');
       }
       if (res.lowResWarning) {
-        notices.push('Recorte pequeño (< 150 px): puedes subir Calidad óptica (WGIF) en el Paso 4.');
+        notices.push('Recorte pequeño (< 150 px): puedes subir Calidad óptica (WGIF) en el Paso 3.');
       }
       if (effTarget === 'save_png' && 'savedPath' in res && res.savedPath) {
         notices.push(`Recorte guardado: ${res.savedPath}`);
@@ -1944,87 +2062,6 @@ export default function StudioView({
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
   }, [toolTab, busy, isDirectMode, handleDirectFileBlob, handleFileBlob]);
-
-  const handlePickCustomBg = useCallback(async () => {
-    if (!window.pywebview?.api?.pick_and_upload_custom_background) {
-      bgInputRef.current?.click();
-      return;
-    }
-    setErrorMsg('');
-    setBusy(true);
-    try {
-      const payload =
-        isDirectMode && !snap.directPhotoIsPreCutout ? { ...composePayload, directBgReplace: true } : composePayload;
-      const out = await callBridge<{ bgDataUrl: string; previewDataUrl: string } | null>(
-        'pick_and_upload_custom_background',
-        payload,
-      );
-      if (!out) return;
-      reqSeqRef.current += 1;
-      if (activeExportVariant === 'dual') setDualPreviewSide('classic');
-      commitSnap((s) => ({
-        ...s,
-        bgMode: 'custom',
-        ...(s.step1Mode === 'direct_photo' && !s.directPhotoIsPreCutout ? { directBgReplace: true } : {}),
-      }));
-      if (out.previewDataUrl) updatePreviewUrl(out.previewDataUrl);
-    } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'Fondo inválido (máx. 20 MB / 25 MP).');
-    } finally {
-      setBusy(false);
-    }
-  }, [isDirectMode, snap.directPhotoIsPreCutout, composePayload, activeExportVariant, commitSnap, updatePreviewUrl]);
-
-  const handleExtractBg = async () => {
-    setErrorMsg('');
-    setBusy(true);
-    try {
-      const res = await callBridge<{ cleanBgDataUrl: string; previewDataUrl: string }>('extract_studio_background', {
-        ...composePayload,
-        bgMode: 'custom',
-      });
-      reqSeqRef.current += 1;
-      setHasExtractedBg(true);
-      commitSnap((s) => ({ ...s, bgMode: 'custom' }));
-      if (res?.previewDataUrl) updatePreviewUrl(res.previewDataUrl);
-    } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'Sube primero una foto con fondo para extraerlo.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleCustomBgUpload = async (file: File) => {
-    setErrorMsg('');
-    setBusy(true);
-    try {
-      const dataUrl = await new Promise<string>((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(String(r.result));
-        r.onerror = () => rej(new Error('No se pudo leer el fondo.'));
-        r.readAsDataURL(file);
-      });
-      const payload =
-        isDirectMode && !snap.directPhotoIsPreCutout ? { ...composePayload, directBgReplace: true } : composePayload;
-      const out = await callBridge<{ bgDataUrl: string; previewDataUrl: string }>(
-        'upload_custom_background',
-        dataUrl,
-        payload,
-      );
-      reqSeqRef.current += 1;
-      if (activeExportVariant === 'dual') setDualPreviewSide('classic');
-      commitSnap((s) => ({
-        ...s,
-        bgMode: 'custom',
-        ...(s.step1Mode === 'direct_photo' && !s.directPhotoIsPreCutout ? { directBgReplace: true } : {}),
-      }));
-      if (out?.previewDataUrl) updatePreviewUrl(out.previewDataUrl);
-    } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'Fondo inválido.');
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const handleChooseCreationsFolder = async (): Promise<string> => {
     try {
@@ -2366,11 +2403,13 @@ export default function StudioView({
           incomingStage={incomingFaceStage}
           onCaptureScreen={(target) => void handleScreenCapture(target, true)}
           onFacesUpdated={setFaces}
+          onDeleteSavedFace={handleDeleteSavedFace}
+          onClearSampleFaces={handleClearSampleFaces}
           onUseExtractedFace={(payload) => {
             setToolTab('composer');
             setActiveStep(1);
             setCropStage(null);
-            setCanExtractBg(!payload.isPreCutout);
+            setActiveSavedFaceId('');
             if (payload.previewDataUrl) setPreviewUrl(payload.previewDataUrl);
             commitSnap((s) => ({
               ...s,
@@ -2999,7 +3038,55 @@ export default function StudioView({
                 </div>
               </div>
 
-              {isDirectMode && Boolean(snap.directPhotoId) && (activeExportVariant !== 'pure' || !snap.directPhotoIsPreCutout) && (
+              {/* Consolidated Background & DF11 Model Format Bar in Paso 1 */}
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 px-2.5 py-1.5 text-xs">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">Fondo y Formato:</span>
+                  <div
+                    className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 dark:bg-slate-950 p-0.5 border border-slate-200/80 dark:border-slate-800"
+                    role="group"
+                    aria-label="Formato de modelo DF11"
+                  >
+                    {(
+                      [
+                        ['classic', 'Classic 260×310', 'Formato estándar DF11 con marco biselado 260×310 px y Capa Blanca DF11'],
+                        ['pure', 'Pure 220×276', 'Formato DF11 Pure 220×276 px sin marco y fondo transparente (Alfa = 0)'],
+                        ['dual', 'Dual (Ambas)', 'Exporta Classic (260×310) y Pure (220×276) a la vez en carpetas independientes'],
+                      ] as const
+                    ).map(([vKey, vLabel, vTitle]) => (
+                      <button
+                        key={vKey}
+                        type="button"
+                        aria-pressed={activeExportVariant === vKey}
+                        title={vTitle}
+                        onClick={() => handleSelectExportVariant(vKey)}
+                        className={`px-2 py-1 rounded-md text-[11px] font-medium truncate transition ${
+                          activeExportVariant === vKey
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                        }`}
+                      >
+                        {vLabel}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {activeExportVariant === 'pure' ? (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
+                    Pure: Alfa = 0 (sin fondo)
+                  </span>
+                ) : activeExportVariant === 'dual' ? (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300">
+                    Aplica a Classic · Pure siempre Alfa = 0
+                  </span>
+                ) : (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
+                    Classic: Capa Blanca DF11
+                  </span>
+                )}
+              </div>
+
+              {isDirectMode && Boolean(snap.directPhotoId) && !snap.directPhotoIsPreCutout && (
                 <div className="rounded-lg border border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20 px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs">
                   {activeExportVariant !== 'pure' ? (
                     <div
@@ -3010,71 +3097,37 @@ export default function StudioView({
                       <span className="text-emerald-900 dark:text-emerald-200 font-medium mr-0.5">
                         Fondo Classic:
                       </span>
-                      {snap.directPhotoIsPreCutout ? (
-                        <>
-                          <button
-                            type="button"
-                            aria-pressed={snap.bgMode === 'white_df11'}
-                            onClick={() => {
-                              if (activeExportVariant === 'dual') setDualPreviewSide('classic');
-                              commitSnap((s) => ({ ...s, bgMode: 'white_df11', bgBlur: 0, directBgReplace: false }));
-                            }}
-                            className={segBtn(snap.bgMode === 'white_df11')}
-                          >
-                            Capa Blanca DF11
-                          </button>
-                          <button
-                            type="button"
-                            aria-pressed={snap.bgMode === 'transparent'}
-                            onClick={() => {
-                              if (activeExportVariant === 'dual') setDualPreviewSide('classic');
-                              commitSnap((s) => ({ ...s, bgMode: 'transparent', directBgReplace: false }));
-                            }}
-                            className={segBtn(snap.bgMode === 'transparent')}
-                          >
-                            Sin fondo (Alfa = 0)
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            aria-pressed={!snap.directBgReplace}
-                            title="Mantiene intacto el fondo original que ya viene en la captura o recorte"
-                            onClick={() => {
-                              if (activeExportVariant === 'dual') setDualPreviewSide('classic');
-                              commitSnap((s) => ({ ...s, directBgReplace: false }));
-                            }}
-                            className={segBtn(!snap.directBgReplace)}
-                          >
-                            Fondo original
-                          </button>
-                          <button
-                            type="button"
-                            aria-pressed={snap.directBgReplace && snap.bgMode === 'white_df11'}
-                            title="Limpia fondos suaves o de estudio y aplica la Capa Blanca Oficial DF11"
-                            onClick={() => {
-                              if (activeExportVariant === 'dual') setDualPreviewSide('classic');
-                              commitSnap((s) => ({ ...s, directBgReplace: true, bgMode: 'white_df11', bgBlur: 0 }));
-                            }}
-                            className={segBtn(snap.directBgReplace && snap.bgMode === 'white_df11')}
-                          >
-                            Capa Blanca DF11
-                          </button>
-                          {snap.directBgReplace && snap.bgMode !== 'white_df11' && (
-                            <span className="px-1.5 py-0.5 rounded bg-emerald-600/15 text-emerald-800 dark:text-emerald-300 text-[10px] font-medium">
-                              Fondo Paso 3
-                            </span>
-                          )}
-                        </>
-                      )}
+                      <button
+                        type="button"
+                        aria-pressed={!snap.directBgReplace}
+                        title="Mantiene intacto el fondo original que ya viene en la captura o recorte"
+                        onClick={() => {
+                          if (activeExportVariant === 'dual') setDualPreviewSide('classic');
+                          commitSnap((s) => ({ ...s, directBgReplace: false }));
+                        }}
+                        className={segBtn(!snap.directBgReplace)}
+                      >
+                        Fondo original
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={snap.directBgReplace && snap.bgMode === 'white_df11'}
+                        title="Limpia fondos suaves o de estudio y aplica la Capa Blanca Oficial DF11"
+                        onClick={() => {
+                          if (activeExportVariant === 'dual') setDualPreviewSide('classic');
+                          commitSnap((s) => ({ ...s, directBgReplace: true, bgMode: 'white_df11', bgBlur: 0 }));
+                        }}
+                        className={segBtn(snap.directBgReplace && snap.bgMode === 'white_df11')}
+                      >
+                        Capa Blanca DF11
+                      </button>
                     </div>
                   ) : (
                     <span className="text-emerald-900 dark:text-emerald-200 font-medium inline-flex items-center gap-1.5">
                       <Scissors className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Contorno Pure:
                     </span>
                   )}
-                  {!snap.directPhotoIsPreCutout && (activeExportVariant !== 'classic' || snap.directBgReplace) && (
+                  {(activeExportVariant !== 'classic' || snap.directBgReplace) && (
                     <div className="flex-1 min-w-[200px] max-w-[320px]">
                       <PercentStepperControl
                         sessionPrefix="pureTol"
@@ -3162,18 +3215,80 @@ export default function StudioView({
 
                   {faces.length > 0 && (
                     <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                      {faces.map((f) => (
-                        <button
-                          key={f.faceId}
-                          type="button"
-                          onClick={() => void handlePickSavedFace(f.faceId)}
-                          title={`Cargar ${f.name}`}
-                          className="shrink-0 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-800 hover:border-emerald-500 bg-slate-50 dark:bg-slate-950/60 inline-flex items-center gap-1.5 text-[11px] text-slate-700 dark:text-slate-300 transition"
-                        >
-                          <img src={f.thumbDataUrl} alt={f.name} className="w-6 h-6 object-contain rounded bg-slate-900" />
-                          <span className="max-w-[92px] truncate">{f.name}</span>
-                        </button>
-                      ))}
+                      {faces.map((f) => {
+                        const isConfirmingFace = confirmDeleteFaceId === f.faceId;
+                        const isSample = f.kind === 'sample';
+                        return (
+                          <div
+                            key={f.faceId}
+                            role="group"
+                            className={`shrink-0 rounded-md border ${
+                              activeSavedFaceId === f.faceId
+                                ? 'border-emerald-500 bg-emerald-50/60 dark:bg-emerald-950/30'
+                                : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 hover:border-emerald-500/70'
+                            } inline-flex items-center overflow-hidden text-[11px] text-slate-700 dark:text-slate-300 transition`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => void handlePickSavedFace(f.faceId)}
+                              title={`Cargar ${f.name}`}
+                              className="px-2 py-1 inline-flex items-center gap-1.5 hover:text-emerald-700 dark:hover:text-emerald-300 transition"
+                            >
+                              <img src={f.thumbDataUrl} alt={f.name} className="w-6 h-6 object-contain rounded bg-slate-900" />
+                              <span className="max-w-[92px] truncate">{f.name}</span>
+                              {isSample && (
+                                <span className="px-1 py-0.2 rounded text-[9px] font-medium bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                                  Prueba
+                                </span>
+                              )}
+                            </button>
+                            {isConfirmingFace ? (
+                              <div className="inline-flex items-center border-l border-slate-200 dark:border-slate-800 px-1 gap-0.5">
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void handleDeleteSavedFace(f.faceId);
+                                  }}
+                                  className="px-1.5 py-0.5 rounded bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-semibold"
+                                >
+                                  Borrar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setConfirmDeleteFaceId(null);
+                                  }}
+                                  title="Cancelar borrado"
+                                  className="px-1 py-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 text-[10px]"
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                aria-label="Quitar cara guardada"
+                                title={`Eliminar ${f.name} (Shift+Clic borra directo)`}
+                                disabled={busy}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (e.shiftKey) {
+                                    void handleDeleteSavedFace(f.faceId);
+                                  } else {
+                                    setConfirmDeleteFaceId(f.faceId);
+                                  }
+                                }}
+                                className="px-1.5 py-1 border-l border-slate-200/70 dark:border-slate-800 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/35 transition"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </>
@@ -3301,8 +3416,11 @@ export default function StudioView({
               </div>
             </div>
 
-            {/* PASO 2: CAMISETA PLANTILLA / STAFF */}
-            <div onClick={() => setActiveStep(2)} className="flex-1 min-h-0 p-3 flex flex-col gap-2 overflow-hidden">
+            {/* PASO 2: CAMISETA CAMPO / PORTERO / STAFF */}
+            <div
+              onClick={() => setActiveStep(2)}
+              className="flex-1 min-h-0 p-3 rounded-b-xl flex flex-col gap-2 overflow-hidden"
+            >
               <div className="shrink-0 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
                   Paso 2 · Capa Camiseta Plantilla
@@ -3313,7 +3431,14 @@ export default function StudioView({
                     onClick={() => setStep2Category('player')}
                     className={segBtn(step2Category === 'player')}
                   >
-                    Plantilla
+                    Campo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStep2Category('goalkeeper')}
+                    className={segBtn(step2Category === 'goalkeeper')}
+                  >
+                    Portero
                   </button>
                   <button
                     type="button"
@@ -3386,7 +3511,9 @@ export default function StudioView({
                       aria-label="Buscar camiseta plantilla en montaje"
                       value={step2Search}
                       onChange={(e) => setStep2Search(e.target.value)}
-                      placeholder={`Buscar en ${step2Category === 'staff' ? 'Staff' : 'Plantilla'} por nombre, club, #ID o temporada…`}
+                      placeholder={`Buscar en ${
+                        step2Category === 'staff' ? 'Staff' : step2Category === 'goalkeeper' ? 'Portero' : 'Campo'
+                      } por nombre, club, #ID o temporada…`}
                       className="w-full pl-8 pr-3 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
                     />
                   </div>
@@ -3396,39 +3523,107 @@ export default function StudioView({
                   {filteredStep2Templates.map((t) => {
                     const active = t.templateId === snap.templateId;
                     const isTitular = Boolean(t.clubId) && t.isActiveForClub !== false;
+                    const cat = normalizeCategory(t.category);
+                    const isConfirmingCard = confirmDeleteStep2Tid === t.templateId;
                     return (
-                      <button
+                      <div
                         key={t.templateId}
-                        type="button"
-                        onClick={() => void handleSelectTemplate(t.templateId)}
-                        className={`p-1.5 rounded-lg border text-center flex flex-col items-center gap-0.5 transition ${
+                        role="group"
+                        className={`rounded-lg border text-center flex flex-col justify-between overflow-hidden transition ${
                           active
                             ? 'border-emerald-500 bg-emerald-50/60 dark:bg-emerald-950/30'
                             : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50 hover:border-slate-400'
                         }`}
                       >
-                        <div className="relative">
-                          <img src={t.thumbDataUrl} alt={t.displayName} className="w-12 h-12 object-contain rounded bg-[#0f172a]" />
-                          {t.clubId && (
-                            <span
-                              className={`absolute -top-1 -right-1 text-[8px] px-1 rounded font-semibold ${
-                                isTitular ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-200'
-                              }`}
-                            >
-                              {isTitular ? '★' : 'H'}
-                            </span>
+                        <button
+                          type="button"
+                          onClick={() => void handleSelectTemplate(t.templateId)}
+                          className="w-full p-1.5 pb-1 flex flex-col items-center gap-0.5 cursor-pointer"
+                        >
+                          <div className="relative">
+                            <img src={t.thumbDataUrl} alt={t.displayName} className="w-12 h-12 object-contain rounded bg-[#0f172a]" />
+                            {cat === 'goalkeeper' && (
+                              <span
+                                title="Equipación de Portero (GK)"
+                                className="absolute -top-1 -left-1 text-[8px] px-1 rounded font-semibold bg-amber-600 text-white"
+                              >
+                                GK
+                              </span>
+                            )}
+                            {t.clubId && (
+                              <span
+                                className={`absolute -top-1 -right-1 text-[8px] px-1 rounded font-semibold ${
+                                  isTitular ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-200'
+                                }`}
+                              >
+                                {isTitular ? '★' : 'H'}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[11px] font-medium truncate w-full text-slate-800 dark:text-slate-200">
+                            {t.displayName}
+                          </span>
+                        </button>
+                        <div className="h-5 px-1.5 border-t border-slate-200/60 dark:border-slate-800/80 flex items-center justify-between gap-1 text-[9px]">
+                          {isConfirmingCard ? (
+                            <div className="w-full flex items-center justify-between gap-1">
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void handleDeleteTemplateById(t.templateId);
+                                }}
+                                className="px-1.5 py-0.5 rounded bg-rose-600 hover:bg-rose-500 text-white font-semibold"
+                              >
+                                Borrar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setConfirmDeleteStep2Tid(null);
+                                }}
+                                title="Cancelar borrado"
+                                className="px-1 py-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <span className="text-emerald-700 dark:text-emerald-400 truncate tabular-nums">
+                                {t.clubId
+                                  ? `#${t.clubId}${t.season ? ` · ${compactSeason(t.season)}` : ''}`
+                                  : t.season
+                                  ? compactSeason(t.season)
+                                  : cat === 'goalkeeper'
+                                  ? 'GK'
+                                  : cat === 'staff'
+                                  ? 'Staff'
+                                  : 'Campo'}
+                              </span>
+                              <button
+                                type="button"
+                                aria-label="Borrar plantilla de camiseta"
+                                title={`Eliminar ${t.displayName} (Shift+Clic borra directo)`}
+                                disabled={busy}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (e.shiftKey) {
+                                    void handleDeleteTemplateById(t.templateId);
+                                  } else {
+                                    setConfirmDeleteStep2Tid(t.templateId);
+                                  }
+                                }}
+                                className="p-0.5 rounded text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition"
+                              >
+                                <Trash2 className="w-2.5 h-2.5" />
+                              </button>
+                            </>
                           )}
                         </div>
-                        <span className="text-[11px] font-medium truncate w-full text-slate-800 dark:text-slate-200">
-                          {t.displayName}
-                        </span>
-                        {t.clubId && (
-                          <span className="text-[9px] text-emerald-700 dark:text-emerald-400 truncate max-w-full tabular-nums">
-                            #{t.clubId}
-                            {t.season ? ` · ${t.season}` : ''}
-                          </span>
-                        )}
-                      </button>
+                      </div>
                     );
                   })}
                   <button
@@ -3440,7 +3635,13 @@ export default function StudioView({
                     className="p-1.5 rounded-lg border border-dashed border-emerald-500/60 hover:border-emerald-500 text-emerald-700 dark:text-emerald-400 flex flex-col items-center justify-center gap-1 text-[11px] font-medium"
                   >
                     <Shirt className="w-5 h-5" />
-                    <span>{step2Category === 'staff' ? '+ Extraer staff' : '+ Extraer camiseta'}</span>
+                    <span>
+                      {step2Category === 'staff'
+                        ? '+ Extraer staff'
+                        : step2Category === 'goalkeeper'
+                        ? '+ Extraer portero'
+                        : '+ Extraer camiseta'}
+                    </span>
                   </button>
                 </div>
 
@@ -3504,10 +3705,11 @@ export default function StudioView({
                         <select
                           aria-label="Categoría de prenda activa"
                           value={tplCategoryDraft}
-                          onChange={(e) => setTplCategoryDraft(e.target.value === 'staff' ? 'staff' : 'player')}
+                          onChange={(e) => setTplCategoryDraft(normalizeCategory(e.target.value))}
                           className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
                         >
-                          <option value="player">Tipo: Plantilla</option>
+                          <option value="player">Tipo: Campo</option>
+                          <option value="goalkeeper">Tipo: Portero (GK)</option>
                           <option value="staff">Tipo: Staff</option>
                         </select>
                         {tplClubDraft && (
@@ -3527,7 +3729,9 @@ export default function StudioView({
                               onChange={(e) => setTplActiveDraft(e.target.checked)}
                               className="accent-emerald-600"
                             />
-                            <span>★ Titular activa</span>
+                            <span>
+                              ★ Titular activa ({tplCategoryDraft === 'staff' ? 'Staff' : tplCategoryDraft === 'goalkeeper' ? 'Portero' : 'Campo'})
+                            </span>
                           </label>
                         )}
                       </div>
@@ -3577,207 +3781,25 @@ export default function StudioView({
               </div>
               )}
             </div>
-
-            {/* PASO 3: FONDO (Sin alterar comportamiento confirmado por el usuario) */}
-            <div onClick={() => setActiveStep(3)} className="shrink-0 px-3 py-2.5 space-y-2 rounded-b-xl">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-                    Paso 3 · Capa Fondo (Por defecto DF11)
-                  </h2>
-                  {activeExportVariant === 'pure' && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
-                      Pure: Alfa = 0 (sin fondo)
-                    </span>
-                  )}
-                  {activeExportVariant === 'dual' && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300">
-                      Aplica a Classic · Pure siempre Alfa = 0
-                    </span>
-                  )}
-                  {isDirectMode && Boolean(snap.directPhotoId) && !snap.directPhotoIsPreCutout && activeExportVariant !== 'pure' && (
-                    <label
-                      title="Limpia el contorno con 0% IA también en Classic para aplicarle la Capa Blanca DF11 o el fondo del Paso 3"
-                      className="inline-flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-300"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={snap.directBgReplace}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          if (activeExportVariant === 'dual') setDualPreviewSide('classic');
-                          commitSnap((s) => ({
-                            ...s,
-                            directBgReplace: checked,
-                            ...(checked && s.bgMode === 'transparent' ? { bgMode: 'white_df11', bgBlur: 0 } : {}),
-                          }));
-                        }}
-                        className="accent-emerald-600"
-                      />
-                      Sustituir fondo en Classic
-                    </label>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    ref={bgInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      e.target.value = '';
-                      if (f) void handleCustomBgUpload(f);
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void handlePickCustomBg()}
-                    className="px-2.5 py-1 text-xs rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
-                  >
-                    Subir fondo
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isDirectMode || !snap.headAssetId || !canExtractBg || busy}
-                    onClick={() => void handleExtractBg()}
-                    title={
-                      isDirectMode
-                        ? 'En modo Foto Directa el fondo original ya forma parte de la foto'
-                        : !canExtractBg
-                        ? 'Disponible cuando subes una foto con fondo original'
-                        : 'Extraer fondo limpio de la foto'
-                    }
-                    className="px-2.5 py-1 text-xs rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-45 inline-flex items-center gap-1"
-                  >
-                    <Sparkles className="w-3 h-3" /> Extraer de foto
-                  </button>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center text-xs">
-                <select
-                  aria-label="Modo de fondo"
-                  value={
-                    isDirectMode && !snap.directPhotoIsPreCutout && !snap.directBgReplace
-                      ? '__keep_original__'
-                      : snap.bgMode
-                  }
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (activeExportVariant === 'dual') setDualPreviewSide('classic');
-                    if (val === '__keep_original__') {
-                      commitSnap((s) => ({ ...s, directBgReplace: false }));
-                      return;
-                    }
-                    commitSnap((s) => ({
-                      ...s,
-                      bgMode: val as BgMode,
-                      ...(s.step1Mode === 'direct_photo' && !s.directPhotoIsPreCutout
-                        ? { directBgReplace: true }
-                        : {}),
-                    }));
-                  }}
-                  className="px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
-                >
-                  {isDirectMode && !snap.directPhotoIsPreCutout && (
-                    <option value="__keep_original__">Fondo original del recorte (sin sustituir)</option>
-                  )}
-                  <option value="white_df11">Blanco Estudio DF11 (Oficial)</option>
-                  <option value="transparent">Sin fondo (Transparente)</option>
-                  <option value="pearl_studio">Gris Perla Estudio</option>
-                  <option value="stadium_bokeh">Estadio Nocturno</option>
-                  <option value="tunnel_club">Túnel de Vestuarios</option>
-                  <option value="office_staff">Despacho Staff / Prensa</option>
-                  <option value="custom">{hasExtractedBg ? 'Fondo Limpio Extraído / Propio' : 'Fondo Personalizado'}</option>
-                </select>
-                <label className="flex items-center gap-2 min-w-0 text-slate-700 dark:text-slate-300 tabular-nums">
-                  <span className="shrink-0">Bokeh</span>
-                  <input
-                    type="range"
-                    min="0"
-                    max="18"
-                    step="0.5"
-                    disabled={
-                      snap.bgMode === 'transparent' ||
-                      (isDirectMode && !snap.directPhotoIsPreCutout && !snap.directBgReplace)
-                    }
-                    value={snap.bgBlur}
-                    onPointerDown={() => {
-                      bokehDragRef.current = true;
-                      endEditSession();
-                    }}
-                    onPointerUp={() => {
-                      bokehDragRef.current = false;
-                      endEditSession('bokeh:slider');
-                    }}
-                    onPointerCancel={() => {
-                      bokehDragRef.current = false;
-                      endEditSession('bokeh:slider');
-                    }}
-                    onBlur={() => {
-                      bokehDragRef.current = false;
-                      endEditSession('bokeh:slider');
-                    }}
-                    onChange={(e) =>
-                      commitSessionSnap(bokehDragRef.current ? 'bokeh:slider' : undefined, (s) => ({
-                        ...s,
-                        bgBlur: Number(e.target.value),
-                      }))
-                    }
-                    className="min-w-0 flex-1 accent-emerald-600 disabled:opacity-40"
-                  />
-                  <span className="w-9 shrink-0 text-right tabular-nums">{snap.bgBlur}px</span>
-                </label>
-              </div>
-            </div>
           </section>
 
-          {/* PASO 4: ALWAYS LAST IN COMPRESSED STACK & TAB ORDER — DOCKED BENEATH CANVAS ON DESKTOP (lg:row-start-2) */}
+          {/* PASO 3: ALWAYS LAST IN COMPRESSED STACK & TAB ORDER — DOCKED BENEATH CANVAS ON DESKTOP (lg:row-start-2) */}
           <div className="lg:col-span-5 xl:col-span-4 lg:col-start-1 lg:row-start-2 min-h-0 flex flex-col lg:overflow-y-auto">
             <section
-              onClick={() => setActiveStep(4)}
+              onClick={() => setActiveStep(3)}
               className="lg:mt-auto rounded-xl shadow-xs border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5 space-y-1.5 text-xs shrink-0"
             >
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-                  Paso 4 · Marco Maestro DF11 y Exportación
+                  Paso 3 · Marco Maestro DF11 y Exportación
                 </h2>
                 <span className="text-[10px] text-slate-400 dark:text-slate-500 tabular-nums">
                   {activeExportVariant === 'pure'
                     ? 'Pure 220×276 · Alfa = 0'
                     : activeExportVariant === 'dual'
                     ? 'Dual: 260×310 + 220×276'
-                    : 'Alpha = 0 · Opaco'}
+                    : '260×310 · Blanco DF11'}
                 </span>
-              </div>
-
-              <div
-                className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 dark:bg-slate-950 p-0.5 border border-slate-200/80 dark:border-slate-800"
-                role="group"
-                aria-label="Formato de modelo DF11"
-              >
-                {(
-                  [
-                    ['classic', 'Classic 260×310', 'Formato estándar DF11 con marco biselado 260×310 px'],
-                    ['pure', 'Pure 220×276', 'Formato DF11 Pure 220×276 px sin marco y fondo transparente (Alfa = 0)'],
-                    ['dual', 'Dual (Ambas)', 'Exporta Classic (260×310) y Pure (220×276) a la vez en carpetas independientes'],
-                  ] as const
-                ).map(([vKey, vLabel, vTitle]) => (
-                  <button
-                    key={vKey}
-                    type="button"
-                    aria-pressed={activeExportVariant === vKey}
-                    title={vTitle}
-                    onClick={() => handleSelectExportVariant(vKey)}
-                    className={`px-2 py-1 rounded-md text-[11px] font-medium truncate transition ${
-                      activeExportVariant === vKey
-                        ? 'bg-emerald-600 text-white shadow-xs'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-                    }`}
-                  >
-                    {vLabel}
-                  </button>
-                ))}
               </div>
 
               <div className="rounded-lg bg-slate-100 dark:bg-slate-950 px-2.5 py-1">

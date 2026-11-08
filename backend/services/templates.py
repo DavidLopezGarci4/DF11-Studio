@@ -12,6 +12,9 @@ import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+import stat
+import time
+from typing import Literal
 
 import numpy as np
 from PIL import Image, ImageFilter
@@ -72,8 +75,88 @@ class CollarProfile:
         )
 
 
-def normalize_template_category(raw: str) -> str:
-    return "staff" if str(raw or "").strip().lower() == "staff" else "player"
+TemplateCategory = Literal["player", "goalkeeper", "staff"]
+_GK_TOKEN_RE = re.compile(r"(?:^|[_\-\s])(gk|portero|goalkeeper|arquero|guardameta)(?:$|[_\-\s])", re.IGNORECASE)
+_STAFF_TOKEN_RE = re.compile(r"(?:^|[_\-\s])(staff|traje|coach|entrenador|mister)(?:$|[_\-\s])", re.IGNORECASE)
+_SEASON_YEARS_RE = re.compile(r"(20\d{2}|19\d{2}|\d{2})")
+
+
+def normalize_template_category(raw: str | None) -> str:
+    val = str(raw or "").strip().lower()
+    if val == "staff":
+        return "staff"
+    if val in ("goalkeeper", "gk", "portero", "arquero"):
+        return "goalkeeper"
+    return "player"
+
+
+def _infer_category_from_stem(stem: str) -> str:
+    s = str(stem or "").strip()
+    if _GK_TOKEN_RE.search(s):
+        return "goalkeeper"
+    if _STAFF_TOKEN_RE.search(s):
+        return "staff"
+    return "player"
+
+
+def _parse_season_years(season: str) -> tuple[int, int]:
+    tokens = _SEASON_YEARS_RE.findall(str(season or ""))
+    if not tokens:
+        return (0, 0)
+    years: list[int] = []
+    for tok in tokens[:2]:
+        y = int(tok)
+        if y < 100:
+            y += 2000 if y < 80 else 1900
+        years.append(y)
+    if len(years) == 1:
+        return (years[0], years[0])
+    if years[1] < years[0]:
+        years[1] = (years[0] // 100) * 100 + (years[1] % 100)
+        if years[1] < years[0]:
+            years[1] += 100
+    return (years[0], years[1])
+
+
+def _season_sort_key(season: str, mtime_ns: int = 0, template_id: str = "") -> tuple[int, int, int, str]:
+    y_start, y_end = _parse_season_years(season)
+    return (y_start, y_end, int(mtime_ns), str(template_id or "").lower())
+
+
+def safe_ntfs_unlink(path: Path, retries: int = 5) -> None:
+    for attempt in range(retries):
+        try:
+            if not path.exists() and not path.is_symlink():
+                return
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            try:
+                os.chmod(path, stat.S_IWRITE)
+            except OSError:
+                pass
+            if attempt + 1 >= retries:
+                raise ValueError(f"El archivo '{path.name}' está en uso por otro proceso; inténtalo de nuevo.") from None
+            time.sleep(0.02 * (2**attempt))
+
+
+def _purge_raw_archive_for_tid(archive_dir: Path, tid: str) -> None:
+    if not tid or not archive_dir.is_dir():
+        return
+    arch_root = archive_dir.resolve()
+    arch_re = re.compile(rf"^{re.escape(tid)}_[0-9a-f]{{10}}$", re.IGNORECASE)
+    for cand in list(archive_dir.iterdir()):
+        try:
+            if (
+                cand.is_file()
+                and not cand.is_symlink()
+                and cand.resolve().parent == arch_root
+                and cand.suffix.lower() in IMAGE_EXTS
+                and arch_re.match(cand.stem)
+            ):
+                safe_ntfs_unlink(cand)
+        except Exception:
+            continue
 
 
 @dataclass(frozen=True, slots=True)
@@ -822,7 +905,7 @@ def sync_tshirt_templates_dir(
             cid = cached["club_id"] if cached else ""
             cname = _resolve_club_display_name(cid, cached["club_name"] if cached else "", clubs_map)
             season = cached["season"] if cached else ""
-            cat = cached["category"] if cached else "player"
+            cat = normalize_template_category(cached["category"]) if cached else _infer_category_from_stem(tid)
             is_act = int(bool(cached["is_active_for_club"])) if (cached and cid) else (1 if cid else 0)
 
             if cached_key != tid:
@@ -860,7 +943,15 @@ def sync_tshirt_templates_dir(
             act_idxs = [i for i in idxs if out[i].is_active_for_club]
             if len(act_idxs) == 1:
                 continue
-            chosen_idx = act_idxs[0] if act_idxs else idxs[0]
+            pool = act_idxs if act_idxs else idxs
+            chosen_idx = max(
+                pool,
+                key=lambda i: _season_sort_key(
+                    out[i].season,
+                    int(existing.get(out[i].template_id, {}).get("mtime_ns", 0)),
+                    out[i].template_id,
+                ),
+            )
             for i in idxs:
                 want_act = i == chosen_idx
                 if out[i].is_active_for_club != want_act:
@@ -904,33 +995,35 @@ def _ensure_club_has_one_active(conn: object, club_id: str, category: str = "pla
     cat = normalize_template_category(category)
     c = conn  # sqlite3.Connection
     active_rows = c.execute(  # type: ignore[attr-defined]
-        "SELECT template_id FROM shirt_templates WHERE club_id=? AND category=? AND is_active_for_club=1 ORDER BY mtime_ns DESC",
+        "SELECT template_id, season, mtime_ns FROM shirt_templates WHERE club_id=? AND category=? AND is_active_for_club=1",
         (club_id, cat),
     ).fetchall()
     if len(active_rows) > 1:
-        keep_tid = str(active_rows[0][0])
+        best_act = max(active_rows, key=lambda r: _season_sort_key(str(r[1]), int(r[2]), str(r[0])))
+        keep_tid = str(best_act[0])
         c.execute(  # type: ignore[attr-defined]
             "UPDATE shirt_templates SET is_active_for_club=0 WHERE club_id=? AND category=? AND template_id!=?",
             (club_id, cat, keep_tid),
         )
     elif len(active_rows) == 0:
-        cand_row = (
+        cand_rows = (
             c.execute(  # type: ignore[attr-defined]
-                "SELECT template_id FROM shirt_templates WHERE club_id=? AND category=? AND template_id!=? ORDER BY mtime_ns DESC LIMIT 1",
+                "SELECT template_id, season, mtime_ns FROM shirt_templates WHERE club_id=? AND category=? AND template_id!=?",
                 (club_id, cat, prefer_other_than),
-            ).fetchone()
+            ).fetchall()
             if prefer_other_than
-            else None
+            else []
         )
-        if cand_row is None:
-            cand_row = c.execute(  # type: ignore[attr-defined]
-                "SELECT template_id FROM shirt_templates WHERE club_id=? AND category=? ORDER BY mtime_ns DESC LIMIT 1",
+        if not cand_rows:
+            cand_rows = c.execute(  # type: ignore[attr-defined]
+                "SELECT template_id, season, mtime_ns FROM shirt_templates WHERE club_id=? AND category=?",
                 (club_id, cat),
-            ).fetchone()
-        if cand_row:
+            ).fetchall()
+        if cand_rows:
+            best_cand = max(cand_rows, key=lambda r: _season_sort_key(str(r[1]), int(r[2]), str(r[0])))
             c.execute(  # type: ignore[attr-defined]
                 "UPDATE shirt_templates SET is_active_for_club=1 WHERE template_id=?",
-                (str(cand_row[0]),),
+                (str(best_cand[0]),),
             )
 
 
@@ -1014,23 +1107,26 @@ def delete_shirt_template(
     template_id: str,
     tpl_dir: Path | None = None,
     db_path: Path | None = None,
+    raw_archive_dir: Path | None = None,
 ) -> str:
-    """Safely delete a shirt template PNG from tshirt_templates and remove its metadata from SQLite."""
+    """Safely delete a shirt template PNG from tshirt_templates, purge its raw archive backup, and remove its metadata from SQLite."""
     tid_req = str(template_id or "").strip()
     if not tid_req or "/" in tid_req or "\\" in tid_req or ".." in tid_req:
         raise ValueError("Identificador de plantilla inválido.")
     folder = (tpl_dir or get_tshirt_templates_dir()).resolve()
+    archive = (raw_archive_dir or get_raw_tshirt_archive_dir()).resolve()
     state_db = db_path or get_state_db_path()
 
     with _TEMPLATES_LOCK:
-        items = sync_tshirt_templates_dir(tpl_dir=folder, db_path=state_db)
+        items = sync_tshirt_templates_dir(tpl_dir=folder, raw_archive_dir=archive, db_path=state_db)
         match = next((t for t in items if t.template_id == tid_req), None)
         if match is None:
             raise ValueError(f"Plantilla de camiseta no encontrada: {tid_req}")
         resolved_file = match.file_path.resolve()
         if resolved_file.parent != folder:
             raise ValueError("Ruta de plantilla fuera de tshirt_templates.")
-        resolved_file.unlink(missing_ok=True)
+        safe_ntfs_unlink(resolved_file)
+        _purge_raw_archive_for_tid(archive, match.template_id)
         with init_state_db(state_db) as conn:
             conn.execute("DELETE FROM shirt_templates WHERE template_id=?", (match.template_id,))
             if match.club_id:
@@ -1046,6 +1142,28 @@ _WIN_RESERVED = frozenset(
 def slugify_template_id(name: str, fallback: str = "Camiseta") -> str:
     slug = re.sub(r"[^A-Za-z0-9_-]+", "_", name.strip()).strip("_")[:48] or fallback
     return f"{slug}_tpl" if slug.upper() in _WIN_RESERVED else slug
+
+
+def _compose_bounded_tid(
+    base_raw: str,
+    role_tag: str,
+    season_slug: str,
+    seq: int | None,
+    fallback: str,
+) -> str:
+    tail_parts: list[str] = []
+    if role_tag:
+        tail_parts.append(role_tag)
+    if season_slug:
+        tail_parts.append(season_slug)
+    if seq is not None and seq >= 2:
+        tail_parts.append(str(seq))
+    tail = "_".join(tail_parts)
+    if not tail:
+        return slugify_template_id(base_raw, fallback=fallback)
+    max_base = max(8, 48 - len(tail) - 1)
+    base_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", base_raw.strip()).strip("_")[:max_base].rstrip("_") or fallback[:max_base]
+    return slugify_template_id(f"{base_slug}_{tail}", fallback=fallback)
 
 
 def save_new_shirt_template(
@@ -1075,16 +1193,49 @@ def save_new_shirt_template(
         folder.mkdir(parents=True, exist_ok=True)
         clean_club = validate_club_id(club_id)
         clean_season = season.strip()[:24]
-        fallback_lbl = "Traje_Staff" if clean_cat == "staff" else "Camiseta_Club"
-        clean_disp = display_name.strip()[:80] or template_id.strip()[:80] or ("Traje Staff" if clean_cat == "staff" else "Camiseta Club")
+        fallback_lbl = (
+            "Traje_Staff"
+            if clean_cat == "staff"
+            else "Camiseta_Portero"
+            if clean_cat == "goalkeeper"
+            else "Camiseta_Club"
+        )
+        default_disp = (
+            "Traje Staff"
+            if clean_cat == "staff"
+            else "Camiseta Portero"
+            if clean_cat == "goalkeeper"
+            else "Camiseta Club"
+        )
+        clean_disp = display_name.strip()[:80] or template_id.strip()[:80] or default_disp
         season_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", clean_season).strip("_")[:24]
-        if template_id.strip():
+        explicit_tid = bool(template_id and template_id.strip())
+        if explicit_tid:
             tid = slugify_template_id(template_id.strip(), fallback=fallback_lbl)
-        elif season_slug:
-            base_part = re.sub(r"[^A-Za-z0-9_-]+", "_", clean_disp).strip("_")[: max(12, 48 - len(season_slug) - 1)] or fallback_lbl
-            tid = slugify_template_id(f"{base_part}_{season_slug}", fallback=fallback_lbl)
         else:
-            tid = slugify_template_id(clean_disp, fallback=fallback_lbl)
+            role_tag = "GK" if (clean_cat == "goalkeeper" and not _GK_TOKEN_RE.search(clean_disp)) else ""
+            with init_state_db(state_db) as conn:
+                existing_rows = conn.execute(
+                    "SELECT template_id, club_id, season, category FROM shirt_templates"
+                ).fetchall()
+            doomed_lower = (
+                {
+                    str(r[0]).lower()
+                    for r in existing_rows
+                    if str(r[1]) == clean_club and normalize_template_category(str(r[3])) == clean_cat
+                }
+                if (clean_club and replace_previous_for_club)
+                else set()
+            )
+            occupied_lower = (
+                {p.stem.lower() for p in folder.iterdir() if p.is_file()}
+                | {str(r[0]).lower() for r in existing_rows}
+            ) - doomed_lower
+            tid = _compose_bounded_tid(clean_disp, role_tag, season_slug, None, fallback_lbl)
+            seq = 2
+            while tid.lower() in occupied_lower:
+                tid = _compose_bounded_tid(clean_disp, role_tag, season_slug, seq, fallback_lbl)
+                seq += 1
         target_png = folder / f"{tid}.png"
 
         if raw_bytes:
@@ -1117,7 +1268,8 @@ def save_new_shirt_template(
                 for old_tid, old_fname in old_rows:
                     old_fp = (folder / str(old_fname)).resolve()
                     if old_fp.parent == folder:
-                        old_fp.unlink(missing_ok=True)
+                        safe_ntfs_unlink(old_fp)
+                    _purge_raw_archive_for_tid(archive, str(old_tid))
                     conn.execute("DELETE FROM shirt_templates WHERE template_id=?", (str(old_tid),))
                 act_flag = 1
             elif clean_club and act_flag == 1:
@@ -1165,12 +1317,16 @@ def get_club_shirt_template(
     if not cid:
         return None
     items = sync_tshirt_templates_dir(tpl_dir=tpl_dir, db_path=db_path)
-    if category in ("player", "staff"):
-        return (
-            next((t for t in items if t.club_id == cid and t.category == category and t.is_active_for_club), None)
-            or next((t for t in items if t.club_id == cid and t.category == category), None)
-        )
-    return (
-        next((t for t in items if t.club_id == cid and t.is_active_for_club), None)
-        or next((t for t in items if t.club_id == cid), None)
-    )
+    if category in ("player", "goalkeeper", "staff"):
+        cat_items = [t for t in items if t.club_id == cid and t.category == category]
+        if not cat_items:
+            return None
+        active = [t for t in cat_items if t.is_active_for_club]
+        pool = active if active else cat_items
+        return max(pool, key=lambda t: _season_sort_key(t.season, 0, t.template_id))
+    club_items = [t for t in items if t.club_id == cid]
+    if not club_items:
+        return None
+    active = [t for t in club_items if t.is_active_for_club]
+    pool = active if active else club_items
+    return max(pool, key=lambda t: _season_sort_key(t.season, 0, t.template_id))

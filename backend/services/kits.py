@@ -51,7 +51,7 @@ class KitSpec:
 
 _INITIALIZED_DBS: dict[Path, int] = {}
 _DB_INIT_LOCK = threading.Lock()
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 _CLUB_ID_RE = re.compile(r"^\d{1,12}$")
 _SAVE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 _SCHEMA_SQL = (
@@ -101,7 +101,9 @@ def init_state_db(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
                     if "category" not in cols:
                         boot_conn.execute("ALTER TABLE shirt_templates ADD COLUMN category TEXT NOT NULL DEFAULT 'player'")
                     boot_conn.execute("UPDATE shirt_templates SET is_active_for_club=0 WHERE club_id=''")
-                    boot_conn.execute("UPDATE shirt_templates SET category='player' WHERE category NOT IN ('player', 'staff')")
+                    boot_conn.execute(
+                        "UPDATE shirt_templates SET category='player' WHERE category NOT IN ('player', 'goalkeeper', 'staff')"
+                    )
                     boot_conn.execute(
                         "INSERT OR IGNORE INTO save_profiles (save_id, display_name, is_active, created_ms) "
                         "VALUES ('default', 'Partida Principal', 0, 0)"

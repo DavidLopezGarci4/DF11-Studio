@@ -1,5 +1,5 @@
 import { MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowRight, Check, Crop, ImagePlus, Loader2, RotateCcw, Save, Scissors, Upload } from 'lucide-react';
+import { ArrowRight, Check, Crop, ImagePlus, Loader2, RotateCcw, Save, Scissors, Trash2, Upload } from 'lucide-react';
 import {
   CaptureTarget,
   CropViewportDTO,
@@ -27,6 +27,8 @@ interface Props {
   incomingStage?: { seq: number; data: StagedFaceResponse } | null;
   onCaptureScreen?: (target: CaptureTarget) => void;
   onFacesUpdated: (faces: SavedFaceInfo[]) => void;
+  onDeleteSavedFace?: (faceId: string) => Promise<void> | void;
+  onClearSampleFaces?: () => Promise<void> | void;
   onUseExtractedFace: (payload: {
     headAssetId: string;
     name: string;
@@ -44,6 +46,8 @@ export default function FaceExtractorTool({
   incomingStage,
   onCaptureScreen,
   onFacesUpdated,
+  onDeleteSavedFace,
+  onClearSampleFaces,
   onUseExtractedFace,
   onPickSavedFace,
 }: Props) {
@@ -58,6 +62,52 @@ export default function FaceExtractorTool({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
+  const [confirmDeleteFaceId, setConfirmDeleteFaceId] = useState<string | null>(null);
+  const [confirmClearSamples, setConfirmClearSamples] = useState(false);
+
+  const sampleFacesCount = faces.filter((f) => f.kind === 'sample').length;
+
+  const handleDeleteFaceInternal = async (faceId: string) => {
+    setErr('');
+    setMsg('');
+    if (onDeleteSavedFace) {
+      await onDeleteSavedFace(faceId);
+      setConfirmDeleteFaceId(null);
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await callBridge<{ deletedFaceId: string; faces: SavedFaceInfo[] }>('delete_saved_face', faceId);
+      if (Array.isArray(res?.faces)) onFacesUpdated(res.faces);
+      setConfirmDeleteFaceId(null);
+      setMsg(`Cara eliminada: ${res?.deletedFaceId ?? faceId}`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'No se pudo eliminar la cara.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleClearSamplesInternal = async () => {
+    setErr('');
+    setMsg('');
+    if (onClearSampleFaces) {
+      await onClearSampleFaces();
+      setConfirmClearSamples(false);
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await callBridge<{ deletedCount: number; faces: SavedFaceInfo[] }>('clear_sample_faces');
+      if (Array.isArray(res?.faces)) onFacesUpdated(res.faces);
+      setConfirmClearSamples(false);
+      setMsg(`Caras de prueba eliminadas (${res?.deletedCount ?? 0}).`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'No se pudieron limpiar las caras de prueba.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const fileRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
@@ -442,11 +492,43 @@ export default function FaceExtractorTool({
         )}
 
         <div className="flex-1 min-h-0 p-3 flex flex-col gap-2 overflow-hidden">
-          <div className="shrink-0 flex items-center justify-between text-xs">
+          <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="font-semibold text-slate-800 dark:text-slate-200 tabular-nums">
               Biblioteca de Caras ({faces.length})
             </span>
-            <span className="text-slate-500 dark:text-slate-400">caras_extraidas · caras_prueba</span>
+            <div className="flex flex-wrap items-center gap-2">
+              {sampleFacesCount > 0 &&
+                (confirmClearSamples ? (
+                  <div className="inline-flex items-center gap-1">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handleClearSamplesInternal()}
+                      className="px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-semibold"
+                    >
+                      Confirmar ({sampleFacesCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClearSamples(false)}
+                      className="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[11px]"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setConfirmClearSamples(true)}
+                    title="Vaciar únicamente la carpeta caras_prueba preservando caras_extraidas"
+                    className="px-2 py-0.5 rounded border border-rose-500/35 bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 text-[11px] font-medium inline-flex items-center gap-1 transition"
+                  >
+                    <Trash2 className="w-3 h-3" /> Limpiar prueba ({sampleFacesCount})
+                  </button>
+                ))}
+              <span className="text-slate-500 dark:text-slate-400">caras_extraidas · caras_prueba</span>
+            </div>
           </div>
           {faces.length === 0 ? (
             <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -454,17 +536,83 @@ export default function FaceExtractorTool({
             </p>
           ) : (
             <div className="flex-1 min-h-[120px] overflow-y-auto content-start grid grid-cols-3 sm:grid-cols-5 xl:grid-cols-6 gap-2 pr-1">
-              {faces.map((f) => (
-                <button
-                  key={f.faceId}
-                  type="button"
-                  onClick={() => onPickSavedFace(f.faceId)}
-                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-emerald-500 bg-slate-50 dark:bg-slate-950/60 flex flex-col items-center gap-1 text-center transition"
-                >
-                  <img src={f.thumbDataUrl} alt={f.name} className="w-12 h-12 object-contain rounded bg-slate-900/80" />
-                  <span className="text-[11px] font-medium truncate w-full text-slate-700 dark:text-slate-300">{f.name}</span>
-                </button>
-              ))}
+              {faces.map((f) => {
+                const isConfirming = confirmDeleteFaceId === f.faceId;
+                const isSample = f.kind === 'sample';
+                return (
+                  <div
+                    key={f.faceId}
+                    role="group"
+                    className="rounded-lg border border-slate-200 dark:border-slate-800 hover:border-emerald-500 bg-slate-50 dark:bg-slate-950/60 flex flex-col justify-between overflow-hidden text-center transition"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onPickSavedFace(f.faceId)}
+                      title={`Cargar ${f.name} en Montaje`}
+                      className="w-full p-1.5 pb-1 flex flex-col items-center gap-1 cursor-pointer"
+                    >
+                      <img src={f.thumbDataUrl} alt={f.name} className="w-12 h-12 object-contain rounded bg-slate-900/80" />
+                      <span className="text-[11px] font-medium truncate w-full text-slate-700 dark:text-slate-300">{f.name}</span>
+                    </button>
+                    <div className="h-6 px-1.5 border-t border-slate-200/70 dark:border-slate-800 flex items-center justify-between gap-1 text-[9px]">
+                      {isConfirming ? (
+                        <div className="w-full flex items-center justify-between gap-1">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleDeleteFaceInternal(f.faceId);
+                            }}
+                            className="px-1.5 py-0.5 rounded bg-rose-600 hover:bg-rose-500 text-white font-semibold"
+                          >
+                            Borrar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setConfirmDeleteFaceId(null);
+                            }}
+                            className="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                          >
+                            No
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <span
+                            className={`px-1 py-0.2 rounded font-medium ${
+                              isSample
+                                ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                                : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                            }`}
+                          >
+                            {isSample ? 'Prueba' : 'Extraída'}
+                          </span>
+                          <button
+                            type="button"
+                            aria-label={`Eliminar cara ${f.name}`}
+                            title={`Eliminar ${f.name} (Shift+Clic borra directo)`}
+                            disabled={busy}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (e.shiftKey) {
+                                void handleDeleteFaceInternal(f.faceId);
+                              } else {
+                                setConfirmDeleteFaceId(f.faceId);
+                              }
+                            }}
+                            className="p-0.5 rounded text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
           {err && <p className="text-xs text-rose-600 dark:text-rose-400">{err}</p>}

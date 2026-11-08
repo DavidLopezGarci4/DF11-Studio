@@ -6,9 +6,11 @@ import base64
 from collections import OrderedDict
 import io
 import math
+import os
 from pathlib import Path
 import threading
 from typing import Any
+import unicodedata
 
 import numpy as np
 from PIL import Image
@@ -62,6 +64,7 @@ from backend.services.templates import (
     extract_collar_profile,
     normalize_template_category,
     rename_shirt_template,
+    safe_ntfs_unlink,
     sanitize_shirt_template_rgba,
     save_new_shirt_template,
     set_active_club_shirt_template,
@@ -491,27 +494,52 @@ class ModularWorkflowSession:
                 continue
         return out
 
-    def _resolve_face_path(self, face_id: str) -> tuple[Path, str]:
-        if ":" not in face_id:
+    def _resolve_face_path(self, face_id: str, require_exists: bool = True) -> tuple[Path, str, str]:
+        raw_fid = str(face_id or "").strip()
+        if ":" not in raw_fid:
             raise ValueError("Identificador de cara inválido.")
-        prefix, fname = face_id.split(":", 1)
-        if not fname or Path(fname).name != fname or ".." in fname:
-            raise ValueError("Ruta de cara no permitida.")
-        root = self.extracted_faces_dir if prefix == "ext" else self.sample_faces_dir if prefix == "smp" else None
-        if root is None:
+        prefix, fname = raw_fid.split(":", 1)
+        prefix = prefix.strip().lower()
+        if prefix not in ("ext", "smp"):
             raise ValueError("Origen de biblioteca de caras desconocido.")
-        cand = (root / fname).resolve()
-        cand.relative_to(root.resolve())
-        if not cand.is_file():
+        if (
+            not fname
+            or ":" in fname
+            or "/" in fname
+            or "\\" in fname
+            or ".." in fname
+            or Path(fname).name != fname
+            or Path(fname).suffix.lower() not in IMAGE_EXTS
+        ):
+            raise ValueError("Ruta de cara no permitida.")
+        root = (self.extracted_faces_dir if prefix == "ext" else self.sample_faces_dir).resolve()
+        raw_cand = root / fname
+        if raw_cand.is_symlink():
+            raise ValueError("Ruta de cara no permitida.")
+        cand = raw_cand.resolve()
+        cand.relative_to(root)
+        if cand.parent != root:
+            raise ValueError("Ruta de cara no permitida.")
+        if not cand.is_file() and root.is_dir():
+            target_nfc = unicodedata.normalize("NFC", fname).casefold()
+            for entry in root.iterdir():
+                if (
+                    entry.is_file()
+                    and not entry.is_symlink()
+                    and unicodedata.normalize("NFC", entry.name).casefold() == target_nfc
+                ):
+                    cand = entry.resolve()
+                    break
+        if require_exists and not cand.is_file():
             raise ValueError(f"Archivo de cara no encontrado: {fname}")
-        return cand, cand.stem
+        return cand, cand.stem, f"{prefix}:{cand.name}"
 
     def load_face_from_library(
         self, face_id: str, template_id: str = "", extra_params: dict[str, Any] | None = None, custom_bg: Image.Image | None = None
     ) -> dict[str, Any]:
-        path, stem = self._resolve_face_path(face_id)
+        path, stem, canonical_fid = self._resolve_face_path(face_id, require_exists=True)
         st = path.stat()
-        ckey = (face_id, st.st_mtime_ns, st.st_size)
+        ckey = (canonical_fid, st.st_mtime_ns, st.st_size)
         with self._lock:
             aid = self._disk_face_cache.get(ckey)
             if aid is not None:
@@ -554,6 +582,43 @@ class ModularWorkflowSession:
             raise ValueError("No hay ninguna cara extraída activa para guardar.")
         fid, slug, _ = save_clean_face_to_library(asset.rgba, name, extracted_dir=self.extracted_faces_dir)
         return {"faceId": fid, "name": slug, "faces": self.list_faces()}
+
+    def delete_face_from_library(self, face_id: str) -> dict[str, Any]:
+        cand, _stem, canonical_fid = self._resolve_face_path(face_id, require_exists=False)
+        if cand.is_file():
+            safe_ntfs_unlink(cand)
+        req_cf = str(face_id or "").strip().casefold()
+        can_cf = canonical_fid.casefold()
+        norm_path = os.path.normcase(str(cand))
+        with self._lock:
+            for k in [k for k in self._disk_face_cache if k[0].casefold() in (req_cf, can_cf)]:
+                self._disk_face_cache.pop(k, None)
+            for k in [k for k in self._thumb_cache if os.path.normcase(k[0]) == norm_path]:
+                self._thumb_cache.pop(k, None)
+        return {"deletedFaceId": str(face_id or "").strip(), "faces": self.list_faces()}
+
+    def clear_sample_faces(self) -> dict[str, Any]:
+        deleted_ids: list[str] = []
+        root = self.sample_faces_dir.resolve()
+        if root.is_dir():
+            for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+                if (
+                    entry.is_file()
+                    and not entry.is_symlink()
+                    and entry.resolve().parent == root
+                    and entry.suffix.lower() in IMAGE_EXTS
+                ):
+                    fid = f"smp:{entry.name}"
+                    safe_ntfs_unlink(entry)
+                    deleted_ids.append(fid)
+                    norm_path = os.path.normcase(str(entry.resolve()))
+                    with self._lock:
+                        for k in [k for k in self._thumb_cache if os.path.normcase(k[0]) == norm_path]:
+                            self._thumb_cache.pop(k, None)
+        with self._lock:
+            for k in [k for k in self._disk_face_cache if k[0].casefold().startswith("smp:")]:
+                self._disk_face_cache.pop(k, None)
+        return {"deletedFaceIds": deleted_ids, "deletedCount": len(deleted_ids), "faces": self.list_faces()}
 
     # --- Tool 2: Shirt Template Extractor & Registry ---
 
@@ -770,9 +835,21 @@ class ModularWorkflowSession:
             replace_previous_for_club=bool(opts.get("replacePreviousForClub", False)),
             category=normalize_template_category(str(opts.get("category", "player"))),
         )
+        templates_list = self.list_templates()
+        valid_paths = {os.path.normcase(str((self.templates_dir / str(t["filename"])).resolve())) for t in templates_list}
+        with self._lock:
+            for cache_dict in (self._shirt_png_cache, self._thumb_cache):
+                stale_keys = [
+                    k
+                    for k in cache_dict
+                    if os.path.normcase(k[0]).startswith(os.path.normcase(str(self.templates_dir)))
+                    and os.path.normcase(k[0]) not in valid_paths
+                ]
+                for sk in stale_keys:
+                    cache_dict.pop(sk, None)
         return {
             "savedTemplateId": tpl.template_id,
-            "templates": self.list_templates(),
+            "templates": templates_list,
             "clubs": load_merged_clubs(self.db_path),
         }
 
@@ -812,11 +889,12 @@ class ModularWorkflowSession:
             template_id=template_id,
             tpl_dir=self.templates_dir,
             db_path=self.db_path,
+            raw_archive_dir=self.raw_archive_dir,
         )
         with self._lock:
-            target_prefix = str((self.templates_dir / f"{deleted_id}.png").resolve()).lower()
+            target_prefix = os.path.normcase(str((self.templates_dir / f"{deleted_id}.png").resolve()))
             for cache_dict in (self._shirt_png_cache, self._thumb_cache):
-                stale_keys = [k for k in cache_dict if k[0].lower() == target_prefix]
+                stale_keys = [k for k in cache_dict if os.path.normcase(k[0]) == target_prefix]
                 for sk in stale_keys:
                     cache_dict.pop(sk, None)
         return {"deletedTemplateId": deleted_id, "templates": self.list_templates()}

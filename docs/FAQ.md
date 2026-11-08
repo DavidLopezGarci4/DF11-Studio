@@ -1,14 +1,14 @@
 # Preguntas Frecuentes y Guía de Herramientas (FAQ) — DF11 Face Studio
 
 > Guía de referencia rápida y operativa sobre todas las funciones activas en la versión oficial.
-> **Versión:** `v1.6.0` • **Actualizado:** 2026-11-07 • **Módulos Auditados:** 4/4
+> **Versión:** `v1.6.0` • **Actualizado:** 2026-11-08 • **Módulos Auditados:** 4/4
 
 ---
 
 ## Índice Rápido
-1. [Captura en Caliente, Montaje Paso a Paso, DF11 Pure / Dual y Packs de Faces FM](#1-captura-en-caliente-montaje-paso-a-paso-df11-pure--dual-y-packs-de-faces-fm)
+1. [Captura en Caliente, Montaje Paso a Paso (3 Pasos), DF11 Pure / Dual y Packs de Faces FM](#1-captura-en-caliente-montaje-paso-a-paso-df11-pure--dual-y-packs-de-faces-fm)
 2. [Extractor de Caras y Zona de Corte](#2-extractor-de-caras-y-zona-de-corte)
-3. [Extractor de Camisetas, Plantilla / Staff y #ID de Clubes](#3-extractor-de-camisetas-plantilla--staff-y-id-de-clubes)
+3. [Extractor de Camisetas, Campo / Portero (GK) / Staff y #ID de Clubes](#3-extractor-de-camisetas-plantilla--staff-y-id-de-clubes)
 4. [Sincronizador NG_Regens, FM27 y OneDrive](#4-sincronizador-ng_regens-fm27-y-onedrive)
 
 ---
@@ -16,10 +16,11 @@
 ## 1. Captura en Caliente, Montaje Paso a Paso, DF11 Pure / Dual y Packs de Faces FM
 
 ### ¿Dónde encuentro y cómo uso la exportación en DF11 Pure (`220 × 276` sin marco) y el modo Dual a dos carpetas a la vez?
-* **Dónde encontrar los botones (3 accesos directos):**
-  1. **En la cabecera superior del `Lienzo Oficial DF11`:** Justo encima de la previsualización de tu jugador tienes el selector rápido **`Classic | DF11 Pure | Dual`**.
-  2. **En el `Paso 4 · Marco Maestro DF11 y Exportación` (debajo del lienzo):** En la fila **`Formato DF11`** puedes pulsar **`Classic 260×310`**, **`Pure 220×276`** o **`Dual (Ambas)`**.
-  3. **En la pestaña `Sincronizador NG_Regens`:** En la barra superior de opciones dispones del mismo selector **`Classic 260×310 | Pure 220×276 | Dual (Ambas)`** para sincronizar lotes completos.
+* **Dónde encontrar los botones (4 accesos directos):**
+  1. **Directamente en el `Paso 1 · Capa Cara y Cuello`:** En la fila **`Formato de modelo DF11`** puedes pulsar **`Classic 260×310`**, **`Pure 220×276`** o **`Dual (Ambas)`**.
+  2. **En la cabecera superior del `Lienzo Oficial DF11`:** Justo encima de la previsualización de tu jugador tienes el selector rápido **`Classic | DF11 Pure | Dual`**.
+  3. **En el `Paso 3 · Marco Maestro DF11 y Exportación` (debajo del lienzo):** Dispones de la misma fila **`Formato DF11`** sincronizada con el Paso 1.
+  4. **En la pestaña `Sincronizador NG_Regens`:** En la barra superior de opciones dispones del mismo selector **`Classic 260×310 | Pure 220×276 | Dual (Ambas)`** para sincronizar lotes completos.
 * **Carpetas independientes y conmutador de vista en vivo:** En modo **`Dual (Ambas)`** aparecen dos botones separados de carpeta (uno para **Classic** y otro para **Pure**, tanto en **`1. Nuestras creaciones`** como en **`2. Pack de Faces FM`**) y bajo el lienzo puedes alternar entre **`Vista Classic`** y **`Vista Pure`** antes de guardar.
 * **Limpieza de contorno 100% gratuita y sin IA (ni siquiera la primera vez):** Cuando usas **`Foto Directa + Marco DF11`**, conviertes tarjetas existentes con **`Ficha → Pure`** o sincronizas lotes sin equipación de club, un algoritmo óptico determinista limpia al instante el contorno del futbolista sobre fondos suaves, de estudio o viñetas sin invocar inteligencia artificial en ningún momento. En fotos con iluminación compleja dispones además del deslizador **`Contorno Pure`** (`0%–100%`) y reimportación `1:1` sin pérdida.
 * **Aviso de prioridad en `graphics/` de Football Manager:** Si en modo Dual apuntas ambas carpetas dentro del árbol activo `graphics/` de Football Manager, la app muestra un aviso preventivo recordando que el juego resuelve el mismo `#ID` por orden alfabético de carpetas.
@@ -31,22 +32,22 @@
 * **Vídeos en negro por protección del navegador:** Si al capturar un vídeo en pausa aparece un recuadro negro, desactiva *«Usar aceleración por hardware cuando esté disponible»* en los ajustes de tu navegador.
 
 ### ¿Cómo creo una ficha rápida con Foto Directa + Marco DF11 (Fondo original vs Capa Blanca DF11, 4 puntos cardinales y Zoom)?
-* **Formato directo con `Fondo original` o `Capa Blanca DF11`:** En el Paso 1 pulsa **`Foto Directa + Marco DF11`** y sube, captura o pega cualquier foto para aplicarle el marco biselado oficial DF11 (`260 × 310 px`). En **`Fondo Classic`** puedes alternar con un clic entre **`Fondo original`** (conserva el fondo que ya viene en tu captura) y **`Capa Blanca DF11`** (sustituye fondos suaves o de estudio por el blanco degradado oficial DF11), o seleccionar cualquier escenario en el Paso 3.
+* **Formato directo con `Fondo original` o `Capa Blanca DF11` en el Paso 1:** En el Paso 1 pulsa **`Foto Directa + Marco DF11`** y sube, captura o pega cualquier foto para aplicarle el marco biselado oficial DF11 (`260 × 310 px`). En **`Fondo Classic`** puedes alternar con un clic entre **`Fondo original`** (conserva el fondo que ya viene en tu captura) y **`Capa Blanca DF11`** (sustituye fondos suaves o de estudio por el blanco degradado oficial DF11), sin necesitar ningún paso intermedio de fondo.
 * **Movimiento en los 4 puntos cardinales y Zoom con pivote central:** Desplaza la imagen en los 4 puntos cardinales mediante los botones **`↑ N`**, **`↓ S`**, **`← O`**, **`→ E`** (`0,0` para centrar), arrastrando con el ratón o con las flechas del teclado (`←` `↑` `↓` `→`, o `Shift` para mayor paso), y aumenta o disminuye por **`Zoom`** (`35%–300%`) con la rueda, la barra, el cuadro numérico exacto o las dos flechas arriba/abajo.
 * **Ajustar a bordes, rescate desde Zona de corte y alternancia libre:** Con **`Ajustar a bordes`** activo evitas dejar franjas vacías, con **`Foto Directa`** rescatas sin pérdida cualquier captura tomada desde la Zona de corte, y puedes alternar en cualquier momento con **`Modo Capas (Cara + Camiseta)`** conservando intacto el encuadre de cada modo.
 
-### ¿Cómo funciona «Calidad óptica» en el Paso 4 para mejorar la imagen final sin IA?
-* **Procesamiento 100% offline y 0% IA:** En el Paso 4 regula **`Calidad óptica`** (`0%` a `100%`) con barra deslizante, número exacto o flechas arriba/abajo; emplea óptica matemática pura en local sin redes neuronales ni conexión a internet.
+### ¿Cómo funciona «Calidad óptica» en el Paso 3 para mejorar la imagen final sin IA?
+* **Procesamiento 100% offline y 0% IA:** En el Paso 3 (`Marco Maestro DF11 y Exportación`) regula **`Calidad óptica`** (`0%` a `100%`) con barra deslizante, número exacto o flechas arriba/abajo; emplea óptica matemática pura en local sin redes neuronales ni conexión a internet.
 * **Nitidez real sin alterar rasgos:** Limpia bloques de compresión JPEG y realza micro-detalles en ojos, cabello y escudos sin halos blancos, protegiendo la textura natural de la piel y los colores intensos de las equipaciones.
 
-### ¿Cómo funciona el Modo Capas en el Paso 1 (ratón, flechas, Zoom y Cuello cilíndrico anatómico)?
+### ¿Cómo funciona el Modo Capas en el Paso 1 (ratón, flechas, Zoom, Cuello cilíndrico y borrado de caras de prueba)?
 * **Movimiento con ratón y flechas del teclado:** Con el Paso 1 seleccionado (`Activo · N/S/E/O, Ratón o ←↑↓→`), arrastra la cabeza con el ratón sobre el lienzo `260 × 310 px` o muévela píxel a píxel con las teclas direccionales `←` `↑` `↓` `→` (mantén `Shift` para saltos rápidos de `5 px`).
 * **Zoom y Cuello cilíndrico con cuadro numérico y flechas arriba/abajo:** Tanto en `Zoom` (`15%–220%`) como en `Cuello` (`0%–150%`) dispones de barra deslizante, cuadro de texto numérico exacto y dos flechas situadas inmediatamente a su derecha (`+1%` / `-1%`). Al elevar la cabeza respecto de la camiseta, el motor alarga únicamente el **cuello cilíndrico anatómico** sin estirar verticalmente los trapecios, y con `Cuello` regulas su anchura para encajar en cualquier escote.
-* **Deshacer, Rehacer y Suprimir:** Usa los botones superiores o los atajos `Ctrl+Z`, `Ctrl+Y` y `Supr` para limpiar o recuperar cualquier edición al instante.
+* **Eliminación rápida de caras guardadas o de prueba:** En la tira **`Usar cara guardada`** del Paso 1 o en la **`Biblioteca de Caras`** de `Recortar Cara`, pulsa el icono **`×`** y confirma **`Borrar`** para eliminar cualquier cara de prueba que no te interese (o usa **`Limpiar prueba (N)`** para vaciar todas las de muestra de una vez), conservando siempre `Ctrl+Z` si estaba en el lienzo.
 
 ### ¿Cómo edito una ficha ya montada de mi Pack de Faces de FM o guardo con su número original?
 * **Edición y conversión directa de fichas de Facepacks:** En el Paso 1 pulsa **`Cambiar camiseta a ficha FM`** para extraer limpiamente la cabeza y cuello del futbolista sobre cualquiera de tus plantillas, **`Cambiar cara (conservar su camiseta)`** para aislar la equipación exacta de esa tarjeta en memoria, o **`Ficha → Pure`** para quitar matemáticamente el bisel de cualquier tarjeta DF11 Classic (`260 × 310 px`) y convertirla al instante en DF11 Pure (`220 × 276 px`). Si el archivo se llama `<ID>.png`, el número del futbolista se rellena solo.
-* **Doble destino en el Paso 4:** Elige **`1. Nuestras creaciones`** para guardar en tu carpeta personal (`PNG Oficial` o `JPG`) **sin necesidad de indicar ningún `#ID` oficial de Football Manager** (puedes dejar el cuadro vacío para guardado automático o escribir cualquier nombre libre), o **`2. Pack de Faces FM`** para seleccionar la carpeta gráfica oficial de caras de Football Manager y guardar el archivo con su `<ID>.png` obligatorio actualizando `config.xml` de forma segura.
+* **Doble destino en el Paso 3:** Elige **`1. Nuestras creaciones`** para guardar en tu carpeta personal (`PNG Oficial` o `JPG`) **sin necesidad de indicar ningún `#ID` oficial de Football Manager** (puedes dejar el cuadro vacío para guardado automático o escribir cualquier nombre libre), o **`2. Pack de Faces FM`** para seleccionar la carpeta gráfica oficial de caras de Football Manager y guardar el archivo con su `<ID>.png` obligatorio actualizando `config.xml` de forma segura.
 
 ---
 
@@ -61,15 +62,15 @@
 
 ## 3. Extractor de Camisetas, Plantilla / Staff y #ID de Clubes
 
-### ¿Cómo extraigo camisetas de jugador o trajes de Staff con máxima nitidez?
-* **Clasificación `Plantilla` o `Staff` al extraer:** En `Extraer Camiseta`, selecciona en **`Destino en Paso 2 (Montaje)`** si la prenda pertenece a **`Plantilla`** (equipaciones de futbolistas) o **`Staff`** (polos, chaquetas o trajes de cuerpo técnico). En el Paso 2 solo verás esas dos pestañas reales de alta calidad.
+### ¿Cómo extraigo camisetas de Campo, de Portero (GK) o trajes de Staff con máxima nitidez?
+* **Clasificación `Campo`, `Portero (GK)` o `Staff` al extraer:** En `Extraer Camiseta`, selecciona en **`Destino en Paso 2 (Montaje)`** si la prenda pertenece a **`Campo`** (jugadores de campo, por defecto), **`Portero (GK)`** (guardametas) o **`Staff`** (polos, chaquetas o trajes de cuerpo técnico). En el Paso 2 verás esas tres pestañas reales de alta calidad.
 * **Motor 2× SSAA y Nitidez textil:** Ajusta posición y tamaño en el lienzo con `Deshacer / Rehacer`, regula `Nitidez textil` para realzar escudos, marcas y ribetes de cuello y pulsa `Extraer solo la camiseta` (`~30-45 KB`).
 * **Hombros limpios en blancas y oscuras:** `Simetrizar hombros` + `Refuerzo hombro` completan hombros blancos sobre fondo blanco sin contaminar mangas oscuras.
 
-### ¿Cómo conozco el #ID de cada club, busco entre muchas camisetas o actualizo temporadas?
+### ¿Cómo conviven camisetas de Campo y de Portero (GK) por temporada, conozco el #ID de cada club o elimino las que no uso?
+* **Convivencia por club, temporada y rol (`Campo` / `Portero GK` / `Staff`):** Dentro de un mismo club y temporada (ej. `2026/27`) pueden convivir simultáneamente `1 ★ Titular activa` de `Campo`, `1 ★ Titular activa` de `Portero (GK)` y `1 ★ Titular activa` de `Staff` sin sobrescribirse entre sí; por defecto la asignación automática del club viste siempre la de `Campo`.
 * **Cómo ver el #ID en Football Manager:** En el juego abre `Preferencias -> Interfaz` y activa *«Mostrar ID de pantalla en la barra de título para ayudar con la apariencia»* (ej. `1744` Rayo Vallecano, `1736` Real Madrid). También puedes pulsar `Importar #IDs FM` sobre tu carpeta `graphics` o escribir cualquier `#ID` numérico y nombre de club.
-* **Actualización por temporadas:** Indica la temporada (ej. `2026/27`) y marca `★ Prenda Titular Activa`; cada club puede tener su camiseta titular de `Plantilla` y su prenda titular de `Staff` de forma independiente.
-* **Buscador y eliminación:** Filtra por nombre, club, `#ID`, tipo (`Plantilla` / `Staff`) o temporada y usa los iconos de edición o papelera (`Borrar`) para gestionar `tshirt_templates`.
+* **Buscador y eliminación rápida en Paso 2 y Biblioteca:** Filtra por nombre, club, `#ID`, rol (`Campo` / `Portero` / `Staff`) o temporada y elimina cualquier camiseta de prueba pulsando el icono **`×`** y confirmando **`Borrar`** directamente desde las tarjetas del Paso 2 o desde `Extraer Camiseta`.
 
 ---
 

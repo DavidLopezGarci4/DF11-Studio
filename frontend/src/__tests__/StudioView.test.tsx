@@ -17,8 +17,8 @@ const CLUBS = {
 const ONE_PX_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
-describe('StudioView modular 3-tool & 4-step layer contract', () => {
-  it('renders the 3 studio tools, 4 chronological steps, and ONLY Plantilla and Staff tabs in Paso 2', async () => {
+describe('StudioView modular 3-tool & 3-step layer contract', () => {
+  it('renders the 3 studio tools, 3 chronological steps (without Paso 3 · Capa Fondo), and Campo / Portero / Staff tabs in Paso 2', async () => {
     render(<StudioView clubs={CLUBS} exportDir="D:\\DF11Studio\\Exports" onExportDirChange={() => {}} initialJump={null} />);
     await waitFor(() => expect(screen.getByRole('tab', { name: /Extraer Camiseta \(0\)/i })).toBeInTheDocument());
     expect(screen.getByRole('tab', { name: /Montaje Paso a Paso/i })).toBeInTheDocument();
@@ -26,20 +26,20 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
 
     const step1 = screen.getByText(/Paso 1 · Capa Cara y Cuello/i);
     const step2 = screen.getByText(/Paso 2 · Capa Camiseta Plantilla/i);
-    const step3 = screen.getByText(/Paso 3 · Capa Fondo/i);
-    const step4 = screen.getByText(/Paso 4 · Marco Maestro DF11 y Exportación/i);
+    const step3 = screen.getByText(/Paso 3 · Marco Maestro DF11 y Exportación/i);
     expect(step1).toBeInTheDocument();
     expect(step2).toBeInTheDocument();
     expect(step3).toBeInTheDocument();
-    expect(step4).toBeInTheDocument();
+    expect(screen.queryByText(/Paso 3 · Capa Fondo/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Paso 4 · Marco Maestro DF11 y Exportación/i)).not.toBeInTheDocument();
 
-    // In compressed / single-column layout and Tab focus order, Paso 1 -> 2 -> 3 -> 4 must stay strictly chronological
+    // In compressed / single-column layout and Tab focus order, Paso 1 -> 2 -> 3 must stay strictly chronological
     expect(step1.compareDocumentPosition(step2) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(step2.compareDocumentPosition(step3) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(step3.compareDocumentPosition(step4) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
-    // Procedural low-quality tabs must be completely gone; only Plantilla & Staff remain
-    expect(screen.getByRole('button', { name: /^Plantilla$/i })).toBeInTheDocument();
+    // Procedural low-quality tabs must be completely gone; Campo, Portero & Staff tabs are present in Paso 2
+    expect(screen.getByRole('button', { name: /^Campo$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Portero$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Staff$/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Original \/ Sin/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Club$/i })).not.toBeInTheDocument();
@@ -1111,7 +1111,7 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       fireEvent.click(clampCheckbox);
       expect(clampCheckbox).not.toBeChecked();
 
-      // Adjust Paso 4 'Calidad óptica' (100% offline WGIF) with coalesced typing + stepper arrow, then export
+      // Adjust Paso 3 'Calidad óptica' (100% offline WGIF) with coalesced typing + stepper arrow, then export
       const qualInput = screen.getByLabelText(/Valor exacto de Calidad óptica/i);
       fireEvent.focus(qualInput);
       fireEvent.change(qualInput, { target: { value: '6' } });
@@ -1125,8 +1125,8 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       fireEvent.click(screen.getByRole('button', { name: /Subir Calidad óptica/i }));
       expect(qualInput).toHaveValue('66');
 
-      // Paso 3 'Extraer de foto' must remain disabled in zero-AI Direct Photo mode
-      expect(screen.getByRole('button', { name: /Extraer de foto/i })).toBeDisabled();
+      // Paso 3 'Capa Fondo' is removed in the 3-step studio flow
+      expect(screen.queryByText(/Paso 3 · Capa Fondo/i)).not.toBeInTheDocument();
 
       // Switching to Modo Capas via Paso 2 notice and back preserves independent transforms
       fireEvent.click(screen.getByRole('button', { name: /Cambiar a Modo Capas/i }));
@@ -1823,14 +1823,11 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
 
       const whiteBtn = screen.getByRole('button', { name: /^Capa Blanca DF11$/i });
       const origBtn = screen.getByRole('button', { name: /^Fondo original$/i });
-      const bgSelect = screen.getByLabelText(/Modo de fondo/i) as HTMLSelectElement;
       expect(whiteBtn).toHaveAttribute('aria-pressed', 'true');
-      expect(bgSelect.value).toBe('white_df11');
 
-      // 2. Switch to 'Fondo original' -> Paso 3 select switches to '__keep_original__', avoiding silent no-op when re-selecting white_df11!
+      // 2. Switch to 'Fondo original' and back to 'Capa Blanca DF11' directly in Paso 1
       fireEvent.click(origBtn);
       expect(origBtn).toHaveAttribute('aria-pressed', 'true');
-      expect(bgSelect.value).toBe('__keep_original__');
       await waitFor(() =>
         expect(
           calls.some(
@@ -1841,7 +1838,7 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
         ).toBe(true),
       );
 
-      fireEvent.change(bgSelect, { target: { value: 'white_df11' } });
+      fireEvent.click(whiteBtn);
       expect(whiteBtn).toHaveAttribute('aria-pressed', 'true');
       await waitFor(() =>
         expect(
@@ -1864,6 +1861,97 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       fireEvent.click(rescueBtn);
       expect(await screen.findByText(/Activa: Recorte_En_Zona/i)).toBeInTheDocument();
       expect(calls.filter((c) => c.fn === 'promote_staged_crop_to_direct_photo')).toHaveLength(1);
+    } finally {
+      delete window.pywebview;
+    }
+  });
+
+  it('supports inline deletion of saved/sample faces in Paso 1 & FaceExtractorTool, inline shirt deletion in Paso 2, and Portero (GK) role coexistence', async () => {
+    const calls: Array<{ fn: string; args: unknown[] }> = [];
+    let currentFaces = [
+      { faceId: 'smp:Sample1.png', name: 'Sample1', kind: 'sample' as const, thumbDataUrl: ONE_PX_PNG },
+      { faceId: 'ext:Player1.png', name: 'Player1', kind: 'extracted' as const, thumbDataUrl: ONE_PX_PNG },
+    ];
+    let currentTemplates = [
+      {
+        templateId: 'Rayo_2026_27',
+        filename: 'Rayo_2026_27.png',
+        displayName: 'Rayo Campo',
+        clubId: '1744',
+        clubName: 'Rayo Vallecano',
+        season: '2026/27',
+        category: 'player' as const,
+        isActiveForClub: true,
+        collarWidth: 83,
+        apexY: 227,
+        thumbDataUrl: ONE_PX_PNG,
+      },
+      {
+        templateId: 'Rayo_2026_27_GK',
+        filename: 'Rayo_2026_27_GK.png',
+        displayName: 'Rayo Portero',
+        clubId: '1744',
+        clubName: 'Rayo Vallecano',
+        season: '2026/27',
+        category: 'goalkeeper' as const,
+        isActiveForClub: true,
+        collarWidth: 83,
+        apexY: 227,
+        thumbDataUrl: ONE_PX_PNG,
+      },
+    ];
+    window.pywebview = {
+      api: {
+        list_shirt_templates: async () => currentTemplates,
+        list_saved_faces: async () => currentFaces,
+        delete_saved_face: async (faceId: unknown) => {
+          calls.push({ fn: 'delete_saved_face', args: [faceId] });
+          currentFaces = currentFaces.filter((f) => f.faceId !== faceId);
+          return { deletedFaceId: String(faceId), faces: currentFaces };
+        },
+        clear_sample_faces: async () => {
+          calls.push({ fn: 'clear_sample_faces', args: [] });
+          currentFaces = currentFaces.filter((f) => f.kind !== 'sample');
+          return { deletedCount: 1, faces: currentFaces };
+        },
+        delete_shirt_template: async (templateId: unknown) => {
+          calls.push({ fn: 'delete_shirt_template', args: [templateId] });
+          currentTemplates = currentTemplates.filter((t) => t.templateId !== templateId);
+          return { deletedTemplateId: String(templateId), templates: currentTemplates };
+        },
+        render_modular_preview: async () => ({ previewDataUrl: ONE_PX_PNG }),
+      },
+    };
+
+    try {
+      render(<StudioView clubs={CLUBS} exportDir="D:\\DF11Studio\\Exports" onExportDirChange={() => {}} initialJump={null} />);
+      expect(await screen.findByTitle('Cargar Player1')).toBeInTheDocument();
+
+      // 1. Delete saved face inline in Paso 1
+      const faceDelBtns = screen.getAllByRole('button', { name: /Quitar cara guardada/i });
+      fireEvent.click(faceDelBtns[1]); // arm delete on Player1
+      fireEvent.click(screen.getByRole('button', { name: /^Borrar$/i }));
+      await waitFor(() =>
+        expect(calls.some((c) => c.fn === 'delete_saved_face' && c.args[0] === 'ext:Player1.png')).toBe(true),
+      );
+      expect(screen.queryByTitle('Cargar Player1')).not.toBeInTheDocument();
+
+      // 2. Switch to Portero tab in Paso 2 -> shows Rayo Portero with GK badge, then delete it inline
+      fireEvent.click(screen.getByRole('button', { name: /^Portero$/i }));
+      expect(await screen.findByText('Rayo Portero')).toBeInTheDocument();
+      expect(screen.getByText('GK')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Borrar plantilla de camiseta/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^Borrar$/i }));
+      await waitFor(() =>
+        expect(calls.some((c) => c.fn === 'delete_shirt_template' && c.args[0] === 'Rayo_2026_27_GK')).toBe(true),
+      );
+      expect(screen.queryByText('Rayo Portero')).not.toBeInTheDocument();
+
+      // 3. Clear remaining sample face via FaceExtractorTool 'Limpiar prueba (1)'
+      fireEvent.click(screen.getByRole('tab', { name: /Extraer Cara/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Limpiar prueba \(1\)/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Confirmar \(1\)/i }));
+      await waitFor(() => expect(calls.some((c) => c.fn === 'clear_sample_faces')).toBe(true));
     } finally {
       delete window.pywebview;
     }

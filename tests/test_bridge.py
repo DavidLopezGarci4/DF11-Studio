@@ -1001,6 +1001,164 @@ def test_v130_round1_vault_overlap_adhoc_eviction_and_regen_jump_guards(
     assert (facepack_dir / "r-8801.png").is_file()
 
 
+def test_qa_round2_saved_face_delete_goalkeeper_coexistence_and_raw_archive_purge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify QA Round 2 axes:
+    1) Safe deletion of saved faces (ext: and smp:) + clear_sample_faces preserving caras_extraidas & RAM head_assets.
+    2) Club + Season + Role (player | goalkeeper | staff) coexistence with bounded template_id (<=48 chars), _GK suffix, and default 'player' resolution.
+    3) Exact regex boundary when purging raw_tshirt_sources on delete_shirt_template.
+    """
+    import numpy as np
+    import backend.services.vision as vision_mod
+    from backend.services.templates import _compose_bounded_tid, get_club_shirt_template
+
+    monkeypatch.setattr(vision_mod, "segment_portrait_classes", lambda im: np.zeros((im.height, im.width, 6), dtype=np.float32))
+    monkeypatch.setattr(vision_mod, "remove_background_birefnet", lambda im: im.convert("RGBA"))
+    monkeypatch.setattr(vision_mod, "detect_face_pose", lambda _im, score_thresh=0.55: None)
+
+    tpl_dir = tmp_path / "tshirt_templates"
+    raw_archive = tmp_path / "raw_tshirt_sources"
+    ext_dir = tmp_path / "caras_extraidas"
+    smp_dir = tmp_path / "caras_prueba"
+    db_path = tmp_path / "qa_round2.sqlite3"
+
+    bridge = StudioBridge(
+        vault_dir=tmp_path / "vault",
+        export_dir=tmp_path / "export",
+        db_path=db_path,
+        templates_dir=tpl_dir,
+        raw_archive_dir=raw_archive,
+        extracted_faces_dir=ext_dir,
+        sample_faces_dir=smp_dir,
+    )
+
+    # --- Axis 1: Face deletion (ext: & smp:) + clear_sample_faces ---
+    smp_dir.mkdir(parents=True, exist_ok=True)
+    raw_png = base64.b64decode(_sample_png_data_url().split(",", 1)[1])
+    (smp_dir / "SampleA.png").write_bytes(raw_png)
+    (smp_dir / "SampleB.png").write_bytes(raw_png)
+
+    face_stage = bridge.load_raw_face_source(_sample_png_data_url(), file_name="CaraBuena.png")
+    assert "suggestedViewport" in face_stage
+    ext_res = bridge.extract_face_from_crop({"zoom": 1.0, "panX": 0.0, "panY": 0.0})
+    head_aid = ext_res["headAssetId"]
+    bridge.save_extracted_face(head_aid, "Jugador_Extraido")
+    assert (ext_dir / "Jugador_Extraido.png").is_file()
+
+    # Path traversal and invalid prefix must be rejected
+    for bad_fid in ("../evil.png", "ext:../evil.png", "smp:..\\evil.png", "unknown:test.png", ""):
+        with pytest.raises(ValueError):
+            bridge.delete_saved_face(bad_fid)
+
+    # Delete a single sample face (smp:SampleA.png)
+    del_smp = bridge.delete_saved_face("smp:SampleA.png")
+    assert del_smp["deletedFaceId"] == "smp:SampleA.png"
+    assert not (smp_dir / "SampleA.png").exists()
+    assert (smp_dir / "SampleB.png").is_file()
+
+    # Clear remaining sample faces in bulk without touching caras_extraidas or RAM headAssetId
+    clr_res = bridge.clear_sample_faces()
+    assert clr_res["deletedCount"] == 1
+    assert not (smp_dir / "SampleB.png").exists()
+    assert (ext_dir / "Jugador_Extraido.png").is_file()
+    assert bridge._mod().get_head_asset(head_aid) is not None
+
+    # Delete extracted face (ext:Jugador_Extraido.png); RAM headAssetId remains valid for Ctrl+Z
+    del_ext = bridge.delete_saved_face("ext:Jugador_Extraido.png")
+    assert del_ext["deletedFaceId"] == "ext:Jugador_Extraido.png"
+    assert not (ext_dir / "Jugador_Extraido.png").exists()
+    assert bridge._mod().get_head_asset(head_aid) is not None
+
+    # --- Axis 2: Bounded template_id & Coexistence of Campo ('player') + Portero ('goalkeeper') + Staff ('staff') ---
+    long_base = "A" * 46
+    bounded_gk = _compose_bounded_tid(long_base, "GK", "2026_27", 2, "Camiseta_Portero")
+    assert len(bounded_gk) <= 48 and bounded_gk.endswith("_GK_2026_27_2")
+
+    shirt_im = Image.new("RGBA", (260, 310), (0, 0, 0, 0))
+    shirt_im.paste((210, 30, 45, 255), (25, 200, 235, 290))
+    s_buf = io.BytesIO()
+    shirt_im.save(s_buf, format="PNG")
+    s_url = "data:image/png;base64," + base64.b64encode(s_buf.getvalue()).decode("ascii")
+
+    st_src = bridge.load_raw_shirt_source(s_url, file_name="Rayo.png")
+    sid = st_src["shirtSourceId"]
+    bridge.preview_shirt_extraction({"shirtSourceId": sid})
+
+    # Save Field kit ('player') for Rayo (#1744) season 2026/27
+    s_player = bridge.save_shirt_template(
+        {
+            "shirtSourceId": sid,
+            "displayName": "Rayo Vallecano",
+            "clubId": "1744",
+            "clubName": "Rayo Vallecano",
+            "season": "2026/27",
+            "category": "player",
+            "isActiveForClub": True,
+        }
+    )
+    tid_player = s_player["savedTemplateId"]
+    assert tid_player == "Rayo_Vallecano_2026_27"
+
+    # Save Goalkeeper kit ('goalkeeper') with SAME displayName, clubId, and season -> must auto-suffix _GK and NOT overwrite player kit!
+    s_gk = bridge.save_shirt_template(
+        {
+            "shirtSourceId": sid,
+            "displayName": "Rayo Vallecano",
+            "clubId": "1744",
+            "clubName": "Rayo Vallecano",
+            "season": "2026/27",
+            "category": "goalkeeper",
+            "isActiveForClub": True,
+        }
+    )
+    tid_gk = s_gk["savedTemplateId"]
+    assert tid_gk == "Rayo_Vallecano_GK_2026_27"
+    assert (tpl_dir / f"{tid_player}.png").is_file()
+    assert (tpl_dir / f"{tid_gk}.png").is_file()
+
+    # Both Field ('player') and Goalkeeper ('goalkeeper') must remain active simultaneously for club #1744
+    by_tid = {t["templateId"]: t for t in s_gk["templates"]}
+    assert by_tid[tid_player]["isActiveForClub"] is True and by_tid[tid_player]["category"] == "player"
+    assert by_tid[tid_gk]["isActiveForClub"] is True and by_tid[tid_gk]["category"] == "goalkeeper"
+
+    # Default automatic club template resolution MUST return the Field ('player') kit, while explicit 'goalkeeper' returns GK
+    default_kit = get_club_shirt_template("1744", tpl_dir=tpl_dir, db_path=db_path)
+    gk_kit = get_club_shirt_template("1744", tpl_dir=tpl_dir, db_path=db_path, category="goalkeeper")
+    assert default_kit is not None and default_kit.template_id == tid_player
+    assert gk_kit is not None and gk_kit.template_id == tid_gk
+
+    # Saving a second Goalkeeper kit with replacePreviousForClub=True must replace ONLY goalkeeper kits, keeping Field ('player') intact!
+    s_gk2 = bridge.save_shirt_template(
+        {
+            "shirtSourceId": sid,
+            "displayName": "Rayo Portero Naranja",
+            "clubId": "1744",
+            "clubName": "Rayo Vallecano",
+            "season": "2027/28",
+            "category": "goalkeeper",
+            "isActiveForClub": True,
+            "replacePreviousForClub": True,
+        }
+    )
+    remaining_ids = {t["templateId"] for t in s_gk2["templates"]}
+    assert tid_player in remaining_ids
+    assert tid_gk not in remaining_ids
+
+    # --- Axis 3: Exact regex boundary when purging raw_tshirt_sources on delete_shirt_template ---
+    raw_archive.mkdir(parents=True, exist_ok=True)
+    own_raw = raw_archive / f"{tid_player}_0123456789.png"
+    other_prefix_raw = raw_archive / f"{tid_player}_GK_abcdef0123.png"
+    own_raw.write_bytes(raw_png)
+    other_prefix_raw.write_bytes(raw_png)
+
+    bridge.delete_shirt_template(tid_player)
+    assert not (tpl_dir / f"{tid_player}.png").exists()
+    assert not own_raw.exists()
+    assert other_prefix_raw.is_file()
+
+
+
 
 
 

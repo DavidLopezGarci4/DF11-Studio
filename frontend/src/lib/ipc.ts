@@ -1,7 +1,14 @@
-export type TemplateCategory = 'player' | 'staff';
+export type TemplateCategory = 'player' | 'goalkeeper' | 'staff';
 export type Step1Mode = 'modular' | 'direct_photo';
 export type ExportVariant = 'classic' | 'pure' | 'dual';
 export type CaptureTarget = 'direct_photo' | 'raw_face' | 'raw_shirt' | 'save_png';
+
+export function normalizeCategory(c?: string | null): TemplateCategory {
+  const s = (c || '').trim().toLowerCase();
+  if (s === 'goalkeeper' || s === 'gk' || s === 'portero' || s === 'arquero') return 'goalkeeper';
+  if (s === 'staff') return 'staff';
+  return 'player';
+}
 export interface SaveProfileInfo { saveId: string; displayName: string; isActive: boolean; }
 export interface ClubSeed { name: string; pattern: string; primary: string; secondary: string; collar: string; }
 export interface StorageHealth { target_path: string; in_onedrive: boolean; free_gb: number; warning: boolean; steam_launch_arg: string; gamepass_guide: string; }
@@ -254,6 +261,8 @@ export async function callBridge<T>(method: string, ...args: unknown[]): Promise
       method === 'save_adhoc_shirt_template' ||
       method === 'switch_facepack_remix_mode' ||
       method.startsWith('delete_shirt_') ||
+      method === 'delete_saved_face' ||
+      method === 'clear_sample_faces' ||
       method.startsWith('set_active_club_') ||
       method.startsWith('upsert_custom_club') ||
       method === 'update_shirt_template_meta' ||

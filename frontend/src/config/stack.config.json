@@ -2,7 +2,7 @@
   "appName": "DF11 Face Studio",
   "version": "1.6.0",
   "category": "Estudio Modular & Sincronizador DF11 Classic / Pure / Dual",
-  "description": "Arquitectura local sin scroll exterior: interfaz React 19 sobre WebView2 conectada a Python 3.12 con formatos DF11 Classic (260×310), DF11 Pure (220×276) y Dual, captura PerMonitorV2, óptica WGIF/OKLab sin IA, GPU DirectML y SQLite v4.",
+  "description": "Arquitectura local sin scroll exterior: interfaz React 19 sobre WebView2 conectada a Python 3.12 con formatos DF11 Classic (260×310), DF11 Pure (220×276) y Dual en 3 pasos, captura PerMonitorV2, óptica WGIF/OKLab sin IA, GPU DirectML y SQLite v5.",
   "nodes": [
     {
       "id": "desktop_shell", "label": "pywebview 6.2 + WebView2", "version": "6.2.1",
@@ -13,10 +13,10 @@
     },
     {
       "id": "ui_runtime", "label": "React 19 + Vite 6", "version": "19.0.0",
-      "role": "Estudio Modular, Foto Directa y Sincronizador", "category": "local_web_apps", "color": "#f59e0b", "icon": "Atom", "healthType": "runtime",
+      "role": "Estudio Modular en 3 Pasos, Foto Directa y Sincronizador", "category": "local_web_apps", "color": "#f59e0b", "icon": "Atom", "healthType": "runtime",
       "computationalModel": "Árbol declarativo Fiber con encuadre cardinal N/S/E/O, zoom pivotado y carga diferida (React.lazy) TecnoRed.",
       "whyChosen": "Garantiza arrastre fluido, historial Undo/Redo coalescido y cero coste de arranque en modales.",
-      "useCases": ["Paso 1 en Modo Capas o Foto Directa con pad ↑N ↓S ←O →E", "Paso 2 Plantilla/Staff, remix FM y Paso 4 Classic/Pure/Dual"]
+      "useCases": ["Paso 1 con Formato DF11, Modo Capas o Foto Directa (↑N ↓S ←O →E)", "Paso 2 Campo/Portero (GK)/Staff y Paso 3 Exportación Classic/Pure/Dual"]
     },
     {
       "id": "ipc_bridge", "label": "StudioBridge + ScreenClip", "version": "1.6.0",
@@ -30,7 +30,7 @@
       "role": "Inferencia GPU Local (BiRefNet, Selfie, YuNet)", "category": "ai_machine_learning", "color": "#f97316", "icon": "Cpu", "healthType": "hardware",
       "computationalModel": "Ejecución bajo demanda FP16/FP32 sobre DirectX 12 exclusivamente al recortar capas o fondos.",
       "whyChosen": "Ofrece recorte de cabello y aislamiento textil 2× SSAA gratis y 100% local.",
-      "useCases": ["Extracción limpia de cabeza/cuello y desmontaje DF11", "Extracción 2× SSAA de camisetas Plantilla y Staff"]
+      "useCases": ["Extracción limpia de cabeza/cuello y desmontaje DF11", "Extracción 2× SSAA de camisetas Campo, Portero (GK) y Staff"]
     },
     {
       "id": "compositor_engine", "label": "Pillow 13 + Compositor DF11", "version": "13.0.0",
@@ -47,11 +47,11 @@
       "useCases": ["Limpieza de contorno DF11 Pure (0% IA) y Ficha Classic → Pure", "Calidad óptica final (0–100%) y luz OKLab sin halos"]
     },
     {
-      "id": "local_storage", "label": "SQLite v4 WAL + NTFS XML", "version": "ACID WAL",
-      "role": "Catálogo Plantilla/Staff y Fusión de config.xml", "category": "local_persistence", "color": "#06b6d4", "icon": "Database", "healthType": "storage",
-      "computationalModel": "Base SQLite v4 WAL junto a reemplazo atómico NTFS con preservación de portrait/icon y defusedxml.",
-      "whyChosen": "Aísla plantillas por partida FM y actualiza carpetas de creaciones o Megapacks sin corromper XML.",
-      "useCases": ["Catálogo multi-temporada por #ID de club (Plantilla / Staff)", "Guardado atómico en creaciones o Pack de Faces FM"]
+      "id": "local_storage", "label": "SQLite v5 WAL + NTFS XML", "version": "ACID WAL",
+      "role": "Catálogo Campo/Portero (GK)/Staff y Fusión de config.xml", "category": "local_persistence", "color": "#06b6d4", "icon": "Database", "healthType": "storage",
+      "computationalModel": "Base SQLite v5 WAL junto a reemplazo atómico NTFS con preservación de portrait/icon y defusedxml.",
+      "whyChosen": "Aísla plantillas por club, temporada y rol (Campo/Portero/Staff) sin corromper XML.",
+      "useCases": ["Catálogo multi-temporada por #ID de club (Campo / Portero GK / Staff)", "Guardado atómico en creaciones o Pack de Faces FM"]
     }
   ],
   "links": [
@@ -70,7 +70,7 @@
       "summary": "Genera la silueta DF11 Pure sin marco (Alfa = 0) o guarda Classic + Pure a la vez en carpetas separadas.",
       "explanation": "Compone el sujeto una sola vez y deriva Classic (260×310) y Pure (220×276) con guardado atómico en 2 fases.",
       "steps": [
-        { "nodeId": "ui_runtime", "role": "Elige Classic, DF11 Pure o Dual en el Lienzo o Paso 4 y sus carpetas" },
+        { "nodeId": "ui_runtime", "role": "Elige Classic, DF11 Pure o Dual en el Paso 1, Lienzo o Paso 3 y sus carpetas" },
         { "nodeId": "ipc_bridge", "role": "Valida carpetas independientes y avisa si ambas cuelgan de graphics/" },
         { "nodeId": "dsp_pure_optics", "role": "Aplica realce óptico WGIF en OKLab una única vez sobre el sujeto" },
         { "nodeId": "compositor_engine", "role": "Deriva Classic (260×310 con marco) y Pure (220×276 transparente)" },
@@ -78,14 +78,14 @@
       ]
     },
     {
-      "id": "studio_4step_modular", "title": "🖼️ Montaje Modular en 4 Pasos (Cara → Equipación → Fondo → Export)", "category": "graphics_multimedia",
-      "summary": "Construye fichas DF11 combinando retratos, plantillas reales Plantilla/Staff y calidad óptica.",
-      "explanation": "Une encuadre preciso, engrosamiento real del cuello en OKLab, realce WGIF y guardado Classic/Pure/Dual.",
+      "id": "studio_4step_modular", "title": "🖼️ Montaje Modular en 3 Pasos (Cara/Formato → Equipación → Export)", "category": "graphics_multimedia",
+      "summary": "Construye fichas DF11 combinando retratos, plantillas reales Campo/Portero (GK)/Staff y calidad óptica.",
+      "explanation": "Une encuadre preciso, cuello cilíndrico anatómico en OKLab, realce WGIF y guardado Classic/Pure/Dual.",
       "steps": [
-        { "nodeId": "ui_runtime", "role": "Ajusta posición, Zoom, Cuello y Calidad óptica" },
+        { "nodeId": "ui_runtime", "role": "Ajusta Formato DF11, posición, Zoom, Cuello y Calidad óptica" },
         { "nodeId": "ipc_bridge", "role": "Valida rutas, #UID y coordina la sesión modular" },
         { "nodeId": "onnx_dml", "role": "Extrae cabeza/cuello y plantillas 2× SSAA en GPU DirectML" },
-        { "nodeId": "compositor_engine", "role": "Engarza cuello progresivo, camiseta y salida Classic o Pure" },
+        { "nodeId": "compositor_engine", "role": "Engarza cuello cilíndrico, camiseta y salida Classic o Pure" },
         { "nodeId": "dsp_pure_optics", "role": "Refina micro-contraste WGIF en OKLab (0% IA)" },
         { "nodeId": "local_storage", "role": "Guarda en Nuestras creaciones o en el Pack de Faces FM" }
       ]

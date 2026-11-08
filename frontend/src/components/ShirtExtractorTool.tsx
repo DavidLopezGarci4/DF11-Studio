@@ -28,6 +28,7 @@ import {
   TemplateCategory,
   callBridge,
   isTextEntryTarget,
+  normalizeCategory,
   resolveDroppedImageTransfer,
 } from '../lib/ipc';
 
@@ -71,7 +72,33 @@ export interface ShirtHistoryState {
 }
 
 type SliderField = 'zoom' | 'shoulderBoost' | 'detailCrispness';
-type CatalogFilter = 'all' | 'player' | 'staff' | 'active' | 'history' | 'unassigned';
+type CatalogFilter = 'all' | 'player' | 'goalkeeper' | 'staff' | 'active' | 'history' | 'unassigned';
+
+function parseSeasonKey(season?: string): [number, number] {
+  const s = (season || '').trim();
+  if (!s) return [-1, -1];
+  const m = s.match(/(\d{2,4})\D+(\d{2,4})/);
+  if (m) {
+    let y1 = parseInt(m[1], 10);
+    let y2 = parseInt(m[2], 10);
+    if (y1 < 100) y1 += 2000;
+    if (y2 < 100) y2 += Math.floor(y1 / 100) * 100;
+    if (y2 < y1) y2 += 100;
+    return [y1, y2];
+  }
+  const mSingle = s.match(/(\d{4})/);
+  if (mSingle) {
+    const y = parseInt(mSingle[1], 10);
+    return [y, y];
+  }
+  return [-1, -1];
+}
+
+function getRoleLabel(cat: TemplateCategory): string {
+  if (cat === 'goalkeeper') return 'Portero (GK)';
+  if (cat === 'staff') return 'Staff';
+  return 'Campo';
+}
 
 interface EditDraft {
   templateId: string;
@@ -159,7 +186,13 @@ export function pushStagedShirtToHistory(
     cleanUrl: '',
     collarMetrics: null,
     extractedKey: '',
-    displayName: res.suggestedName || (cur.category === 'staff' ? 'Prenda_Staff' : 'Camiseta_Club'),
+    displayName:
+      res.suggestedName ||
+      (cur.category === 'staff'
+        ? 'Prenda_Staff'
+        : cur.category === 'goalkeeper'
+        ? 'Portero_Club'
+        : 'Camiseta_Club'),
     category: cur.category,
     clubId: cur.clubId,
     clubName: cur.clubName,
@@ -271,6 +304,14 @@ export default function ShirtExtractorTool({
   const sliderStartRef = useRef<{ field: SliderField; snap: ShirtSnapshot } | null>(null);
   const wheelBurstTsRef = useRef(0);
   const extractSeqRef = useRef(0);
+  const lastSavedMetaRef = useRef<{
+    paramKey: string;
+    displayName: string;
+    clubId: string;
+    season: string;
+    category: TemplateCategory;
+    templateId: string;
+  } | null>(null);
 
   const sortedClubs = useMemo(
     () => Object.entries(clubs).sort((a, b) => a[1].name.localeCompare(b[1].name, 'es')),
@@ -286,7 +327,7 @@ export default function ShirtExtractorTool({
   const existingClubTemplates = useMemo(
     () =>
       snap.clubId
-        ? templates.filter((t) => t.clubId === snap.clubId && (t.category ?? 'player') === snap.category)
+        ? templates.filter((t) => t.clubId === snap.clubId && normalizeCategory(t.category) === snap.category)
         : [],
     [templates, snap.clubId, snap.category],
   );
@@ -296,19 +337,23 @@ export default function ShirtExtractorTool({
     let historyCount = 0;
     let unassigned = 0;
     let player = 0;
+    let goalkeeper = 0;
     let staff = 0;
     for (const t of templates) {
-      if ((t.category ?? 'player') === 'staff') staff += 1;
+      const cat = normalizeCategory(t.category);
+      if (cat === 'staff') staff += 1;
+      else if (cat === 'goalkeeper') goalkeeper += 1;
       else player += 1;
       if (!t.clubId) unassigned += 1;
       else if (t.isActiveForClub !== false) active += 1;
       else historyCount += 1;
     }
-    return { all: templates.length, player, staff, active, history: historyCount, unassigned };
+    return { all: templates.length, player, goalkeeper, staff, active, history: historyCount, unassigned };
   }, [templates]);
 
   const effectiveCatalogFilter: CatalogFilter =
     (catalogFilter === 'history' && catalogCounts.history === 0) ||
+    (catalogFilter === 'goalkeeper' && catalogCounts.goalkeeper === 0) ||
     (catalogFilter === 'staff' && catalogCounts.staff === 0)
       ? 'all'
       : catalogFilter;
@@ -316,17 +361,19 @@ export default function ShirtExtractorTool({
   useEffect(() => {
     if (
       (catalogFilter === 'history' && catalogCounts.history === 0) ||
+      (catalogFilter === 'goalkeeper' && catalogCounts.goalkeeper === 0) ||
       (catalogFilter === 'staff' && catalogCounts.staff === 0)
     ) {
       setCatalogFilter('all');
     }
-  }, [catalogFilter, catalogCounts.history, catalogCounts.staff]);
+  }, [catalogFilter, catalogCounts.history, catalogCounts.goalkeeper, catalogCounts.staff]);
 
   const filteredTemplates = useMemo(() => {
     const q = catalogSearch.trim().toLowerCase().replace(/^#/, '');
-    return templates.filter((t) => {
-      const cat = t.category ?? 'player';
+    const list = templates.filter((t) => {
+      const cat = normalizeCategory(t.category);
       if (effectiveCatalogFilter === 'player' && cat !== 'player') return false;
+      if (effectiveCatalogFilter === 'goalkeeper' && cat !== 'goalkeeper') return false;
       if (effectiveCatalogFilter === 'staff' && cat !== 'staff') return false;
       if (effectiveCatalogFilter === 'active' && (!t.clubId || t.isActiveForClub === false)) return false;
       if (effectiveCatalogFilter === 'history' && (!t.clubId || t.isActiveForClub !== false)) return false;
@@ -339,8 +386,19 @@ export default function ShirtExtractorTool({
         t.clubId.toLowerCase().includes(q) ||
         resolvedClubName.includes(q) ||
         (t.season || '').toLowerCase().includes(q) ||
+        (cat === 'goalkeeper' && ('portero'.includes(q) || 'gk'.includes(q))) ||
         (cat === 'staff' && 'staff'.includes(q))
       );
+    });
+    return [...list].sort((a, b) => {
+      const actA = a.clubId && a.isActiveForClub !== false ? 1 : 0;
+      const actB = b.clubId && b.isActiveForClub !== false ? 1 : 0;
+      if (actA !== actB) return actB - actA;
+      const [ay1, ay2] = parseSeasonKey(a.season);
+      const [by1, by2] = parseSeasonKey(b.season);
+      if (ay1 !== by1) return by1 - ay1;
+      if (ay2 !== by2) return by2 - ay2;
+      return a.displayName.localeCompare(b.displayName, 'es');
     });
   }, [templates, effectiveCatalogFilter, catalogSearch, clubs]);
 
@@ -482,7 +540,13 @@ export default function ShirtExtractorTool({
         cleanUrl: '',
         collarMetrics: null,
         extractedKey: '',
-        displayName: res.suggestedName || (cur.category === 'staff' ? 'Prenda_Staff' : 'Camiseta_Club'),
+        displayName:
+      res.suggestedName ||
+      (cur.category === 'staff'
+        ? 'Prenda_Staff'
+        : cur.category === 'goalkeeper'
+        ? 'Portero_Club'
+        : 'Camiseta_Club'),
         category: cur.category,
         clubId: cur.clubId,
         clubName: cur.clubName,
@@ -636,6 +700,25 @@ export default function ShirtExtractorTool({
     setBusy(true);
     setErr('');
     setMsg('');
+    const resolvedDisplayName =
+      snap.displayName.trim() ||
+      (snap.category === 'staff'
+        ? 'Prenda Staff'
+        : snap.category === 'goalkeeper'
+        ? 'Portero Club'
+        : 'Camiseta Club');
+    const resolvedClubId = snap.clubId.trim();
+    const resolvedSeason = snap.season.trim();
+    const lastSaved = lastSavedMetaRef.current;
+    const reuseTemplateId =
+      lastSaved &&
+      lastSaved.paramKey === currentKey &&
+      lastSaved.displayName === resolvedDisplayName &&
+      lastSaved.clubId === resolvedClubId &&
+      lastSaved.season === resolvedSeason &&
+      lastSaved.category === snap.category
+        ? lastSaved.templateId
+        : '';
     try {
       const res = await callBridge<{
         savedTemplateId: string;
@@ -643,14 +726,14 @@ export default function ShirtExtractorTool({
         clubs?: Record<string, ClubSeed>;
       }>('save_shirt_template', {
         shirtSourceId: snap.staged.shirtSourceId,
-        displayName: snap.displayName.trim() || (snap.category === 'staff' ? 'Prenda Staff' : 'Camiseta Club'),
+        displayName: resolvedDisplayName,
         category: snap.category,
-        clubId: snap.clubId.trim(),
+        clubId: resolvedClubId,
         clubName: snap.clubName.trim(),
-        season: snap.season.trim(),
+        season: resolvedSeason,
         isActiveForClub: snap.isActiveForClub,
         replacePreviousForClub: snap.replacePreviousForClub,
-        templateId: '',
+        templateId: reuseTemplateId,
         symmetrizeShoulders: snap.symmetrize,
         shoulderBoost: snap.shoulderBoost,
         detailCrispness: snap.detailCrispness,
@@ -658,6 +741,16 @@ export default function ShirtExtractorTool({
         panX: snap.panX,
         panY: snap.panY,
       });
+      if (res?.savedTemplateId) {
+        lastSavedMetaRef.current = {
+          paramKey: currentKey,
+          displayName: resolvedDisplayName,
+          clubId: resolvedClubId,
+          season: resolvedSeason,
+          category: snap.category,
+          templateId: res.savedTemplateId,
+        };
+      }
       if (res?.clubs) onClubsUpdated?.(res.clubs);
       if (Array.isArray(res?.templates)) onTemplatesUpdated(res.templates);
       setMsg(`Plantilla guardada en tshirt_templates: ${res.savedTemplateId}.png`);
@@ -720,7 +813,7 @@ export default function ShirtExtractorTool({
     setEditDraft({
       templateId: t.templateId,
       displayName: t.displayName,
-      category: t.category === 'staff' ? 'staff' : 'player',
+      category: normalizeCategory(t.category),
       clubId: t.clubId || '',
       clubName: t.clubName || (t.clubId ? clubs[t.clubId]?.name ?? '' : ''),
       season: t.season || '',
@@ -788,6 +881,7 @@ export default function ShirtExtractorTool({
       );
       if (Array.isArray(res?.templates)) onTemplatesUpdated(res.templates);
       if (editDraft?.templateId === templateId) setEditDraft(null);
+      if (lastSavedMetaRef.current?.templateId === templateId) lastSavedMetaRef.current = null;
       setConfirmDeleteId(null);
       setMsg(`Plantilla eliminada de tshirt_templates: ${res?.deletedTemplateId ?? templateId}`);
     } catch (e) {
@@ -1224,11 +1318,11 @@ export default function ShirtExtractorTool({
           </div>
         </div>
 
-        {/* 2. Asignación de Categoría (Plantilla / Staff), Club (#ID), Temporada y Guardado */}
+        {/* 2. Asignación de Categoría (Campo / Portero / Staff), Club (#ID), Temporada y Guardado */}
         <div className="p-4 space-y-3 bg-slate-50/60 dark:bg-slate-950/35">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="font-semibold text-slate-800 dark:text-slate-200">
-              Identificación, Tipo (Plantilla / Staff), #ID de Club FM y Temporada
+              Identificación, Tipo (Campo / Portero / Staff), #ID de Club FM y Temporada
             </span>
             <div className="flex items-center gap-2">
               <button
@@ -1260,7 +1354,14 @@ export default function ShirtExtractorTool({
                 onClick={() => replacePresent((s) => ({ ...s, category: 'player', replacePreviousForClub: false }))}
                 className={segBtn(snap.category === 'player')}
               >
-                Plantilla
+                Campo
+              </button>
+              <button
+                type="button"
+                onClick={() => replacePresent((s) => ({ ...s, category: 'goalkeeper', replacePreviousForClub: false }))}
+                className={segBtn(snap.category === 'goalkeeper')}
+              >
+                Portero (GK)
               </button>
               <button
                 type="button"
@@ -1396,7 +1497,9 @@ export default function ShirtExtractorTool({
                   onChange={(e) => replacePresent((s) => ({ ...s, isActiveForClub: e.target.checked }))}
                   className="accent-emerald-600"
                 />
-                <span>Marcar como ★ Camiseta Titular Activa de #{snap.clubId}</span>
+                <span>
+                  Marcar como ★ Camiseta Titular Activa de {getRoleLabel(snap.category)} (#{snap.clubId})
+                </span>
               </label>
               {existingClubTemplates.length > 0 && (
                 <label className="inline-flex items-center gap-1.5 text-amber-800 dark:text-amber-300 text-[11px]">
@@ -1413,7 +1516,7 @@ export default function ShirtExtractorTool({
                     className="accent-amber-600"
                   />
                   <span>
-                    Reemplazar {existingClubTemplates.length} anterior(es) de #{snap.clubId} (sin conservar histórico)
+                    Reemplazar {existingClubTemplates.length} anterior(es) de {getRoleLabel(snap.category)} en #{snap.clubId} (conserva otros roles)
                   </span>
                 </label>
               )}
@@ -1454,23 +1557,32 @@ export default function ShirtExtractorTool({
               >
                 Todas ({catalogCounts.all})
               </button>
+              {(catalogCounts.goalkeeper > 0 || catalogCounts.staff > 0) && (
+                <button
+                  type="button"
+                  onClick={() => setCatalogFilter('player')}
+                  className={segBtn(effectiveCatalogFilter === 'player')}
+                >
+                  Campo ({catalogCounts.player})
+                </button>
+              )}
+              {catalogCounts.goalkeeper > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setCatalogFilter('goalkeeper')}
+                  className={segBtn(effectiveCatalogFilter === 'goalkeeper')}
+                >
+                  Portero ({catalogCounts.goalkeeper})
+                </button>
+              )}
               {catalogCounts.staff > 0 && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setCatalogFilter('player')}
-                    className={segBtn(effectiveCatalogFilter === 'player')}
-                  >
-                    Plantilla ({catalogCounts.player})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCatalogFilter('staff')}
-                    className={segBtn(effectiveCatalogFilter === 'staff')}
-                  >
-                    Staff ({catalogCounts.staff})
-                  </button>
-                </>
+                <button
+                  type="button"
+                  onClick={() => setCatalogFilter('staff')}
+                  className={segBtn(effectiveCatalogFilter === 'staff')}
+                >
+                  Staff ({catalogCounts.staff})
+                </button>
               )}
               <button
                 type="button"
@@ -1584,7 +1696,14 @@ export default function ShirtExtractorTool({
                       onClick={() => setEditDraft((d) => (d ? { ...d, category: 'player' } : d))}
                       className={segBtn(editDraft.category === 'player')}
                     >
-                      Plantilla
+                      Campo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditDraft((d) => (d ? { ...d, category: 'goalkeeper' } : d))}
+                      className={segBtn(editDraft.category === 'goalkeeper')}
+                    >
+                      Portero (GK)
                     </button>
                     <button
                       type="button"
@@ -1637,7 +1756,9 @@ export default function ShirtExtractorTool({
               {filteredTemplates.map((t) => {
                 const resolvedClubLabel = t.clubId ? t.clubName || clubs[t.clubId]?.name || `Club #${t.clubId}` : '';
                 const isActiveClubKit = Boolean(t.clubId) && t.isActiveForClub !== false;
-                const isStaffKit = (t.category ?? 'player') === 'staff';
+                const cat = normalizeCategory(t.category);
+                const isStaffKit = cat === 'staff';
+                const isGoalkeeperKit = cat === 'goalkeeper';
                 const isConfirmingDelete = confirmDeleteId === t.templateId;
                 return (
                   <div
@@ -1655,6 +1776,11 @@ export default function ShirtExtractorTool({
                           alt={t.displayName}
                           className="w-16 h-16 object-contain rounded bg-[repeating-conic-gradient(#334155_0%_25%,#0f172a_0%_50%)] bg-[length:10px_10px]"
                         />
+                        {isGoalkeeperKit && (
+                          <span className="absolute -top-1 -left-1 text-[9px] px-1 py-0.2 rounded font-semibold bg-amber-500 text-slate-950">
+                            GK
+                          </span>
+                        )}
                         {isStaffKit && (
                           <span className="absolute -top-1 -left-1 text-[9px] px-1 py-0.2 rounded font-semibold bg-amber-600 text-white">
                             Staff

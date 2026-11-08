@@ -9,7 +9,7 @@ describe('FAQ and About human metadata modals', () => {
   it('renders adaptive FAQ split-view with DF11 Pure/Dual expanded by default and auto-expands matching items on search', () => {
     render(<FaqModal onClose={() => {}} />);
     expect(screen.getByText(/Centro de Ayuda & FAQ/i)).toBeInTheDocument();
-    expect(screen.getByText(/3 accesos directos/i)).toBeInTheDocument();
+    expect(screen.getByText(/4 accesos directos/i)).toBeInTheDocument();
     const search = screen.getByPlaceholderText(/Buscar dudas/i);
     fireEvent.change(search, { target: { value: 'OneDrive' } });
     expect(screen.getByText(/Game Pass/i)).toBeInTheDocument();
@@ -25,6 +25,8 @@ describe('FAQ and About human metadata modals', () => {
     expect(screen.getAllByText(/portapapeles/i).length).toBeGreaterThanOrEqual(1);
     fireEvent.change(search, { target: { value: 'DF11 Pure' } });
     expect(screen.getAllByText(/220 × 276/i).length).toBeGreaterThanOrEqual(1);
+    fireEvent.change(search, { target: { value: 'Portero' } });
+    expect(screen.getAllByText(/Portero \(GK\)/i).length).toBeGreaterThanOrEqual(1);
     fireEvent.change(search, { target: { value: 'nodos' } });
     expect(screen.getByText(/Inspeccionar Salud de la Arquitectura/i)).toBeInTheDocument();
   });
@@ -33,7 +35,7 @@ describe('FAQ and About human metadata modals', () => {
     render(<AboutModal onClose={() => {}} onOpenGraph={() => {}} />);
     expect(screen.getAllByText(/v1\.6\.0/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/Build 10600/i)).toBeInTheDocument();
-    expect(screen.getByText(/Selector directo Classic \| DF11 Pure \| Dual/i)).toBeInTheDocument();
+    expect(screen.getByText(/Camisetas de Campo, Portero \(GK\) y Staff por club y temporada/i)).toBeInTheDocument();
     expect(screen.getAllByText(/100% Local/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/Historial de versiones anteriores/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Inspeccionar Salud de la Arquitectura/i })).toBeInTheDocument();
@@ -69,7 +71,7 @@ describe('FAQ and About human metadata modals', () => {
       expect(screen.getByText(/Árbol declarativo Fiber/i)).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('button', { name: /Rutas de Flujo/i }));
-      expect(screen.getByText(/Paso 1/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/Paso 1/i).length).toBeGreaterThanOrEqual(1);
       expect(screen.getByRole('button', { name: /Formato DF11 Pure \(220×276\) y Exportación Dual/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Foto Directa \+ Marco DF11/i })).toBeInTheDocument();
 

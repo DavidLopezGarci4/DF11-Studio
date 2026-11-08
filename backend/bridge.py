@@ -1189,6 +1189,12 @@ class StudioBridge:
     def save_extracted_face(self, head_asset_id: str, name: str) -> dict[str, Any]:
         return self._mod().save_face_to_library(head_asset_id, name)
 
+    def delete_saved_face(self, face_id: str) -> dict[str, Any]:
+        return self._mod().delete_face_from_library(str(face_id or ""))
+
+    def clear_sample_faces(self) -> dict[str, Any]:
+        return self._mod().clear_sample_faces()
+
     def list_shirt_templates(self) -> list[dict[str, Any]]:
         return self._mod().list_templates()
 
@@ -1316,6 +1322,8 @@ class StudioBridge:
 
     def pick_facepack_card_for_pure(self, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Pick an existing FM Facepack card (260x310 Classic or Pure) and convert to DF11 Pure with 0% AI."""
+        from backend.core.fm_config import detect_fm_graphics_collision
+
         chosen = self._pick_image_file(
             "last_facepack_dir",
             fallback_dir=self._facepack_dir or self._export_dir,
@@ -1340,12 +1348,14 @@ class StudioBridge:
             **out,
             "directory": str(parent_dir),
             "facepackDir": str(self._facepack_dir) if self._facepack_dir else "",
-            "fmFacepackCollision": _share_fm_graphics_ancestor(self._facepack_dir, self._facepack_pure_dir),
+            "fmFacepackCollision": detect_fm_graphics_collision(self._facepack_dir, self._facepack_pure_dir),
         }
 
     def load_facepack_card_for_pure(
         self, data_url: str, file_name: str = "", params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
+        from backend.core.fm_config import detect_fm_graphics_collision
+
         out = self._mod().load_facepack_card_for_pure(
             _decode_b64(data_url),
             file_name=file_name,
@@ -1355,7 +1365,7 @@ class StudioBridge:
         return {
             **out,
             "facepackDir": str(self._facepack_dir) if self._facepack_dir else "",
-            "fmFacepackCollision": _share_fm_graphics_ancestor(self._facepack_dir, self._facepack_pure_dir),
+            "fmFacepackCollision": detect_fm_graphics_collision(self._facepack_dir, self._facepack_pure_dir),
         }
 
     def switch_facepack_remix_mode(

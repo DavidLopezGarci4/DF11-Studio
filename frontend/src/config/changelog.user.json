@@ -1,21 +1,21 @@
 {
   "currentVersion": "1.6.0",
   "buildNumber": 10600,
-  "lastUpdated": "2026-11-07",
+  "lastUpdated": "2026-11-08",
   "appName": "DF11 Face Studio",
-  "appDescription": "Estudio en una sola vista con formatos DF11 Classic (260 × 310), DF11 Pure (220 × 276 sin marco, contorno 0% IA) y exportación Dual simultánea, captura en caliente, foto directa, extractores y sincronizador para Football Manager.",
+  "appDescription": "Estudio modular en 3 pasos con formatos DF11 Classic (260 × 310), DF11 Pure (220 × 276 sin marco, contorno 0% IA) y exportación Dual simultánea, camisetas de Campo / Portero (GK) / Staff por temporada, captura en caliente y sincronizador para Football Manager.",
   "privacyPolicy": "Tus fotos y partidas nunca salen de tu PC: procesamiento 100% local, privado y sin suscripciones ni claves API.",
   "versions": [
     {
       "version": "1.6.0",
       "build": 10600,
       "date": "2026-11-08",
-      "title": "Formato Oficial DF11 Pure (220 × 276), Exportación Dual, Captura en 2 Pasos (Seleccionar → Intro / Esc), Cuello Cilíndrico Anatómico y Extractor Textil 2× SSAA Refinado",
+      "title": "Estudio Simplificado en 3 Pasos, Equipaciones de Portero (GK) por Temporada, Borrado Ágil de Caras/Camisetas de Prueba y Captura en 2 Pasos",
       "highlights": [
-        "✂️ **Captura en 2 pasos (Seleccionar → Reencuadrar → Intro / Esc):** Al soltar el ratón el recuadro queda fijado en pantalla con 4 escuadras esmeralda; vuelve a arrastrar si quieres reencuadrar, pulsa «Intro» para llevar la imagen a la app o «Esc» para cancelar con una sola mano.",
-        "🧑 **Cuello cilíndrico anatómico sin estirar trapecios y Extractor de Camisetas 2× SSAA impecable:** Al elevar la cabeza sobre cualquier camiseta el cuello mantiene su grosor cilíndrico natural sin deformar los trapecios, y el extractor textil 2× SSAA recorta hombros, mangas y pechos blancos sin restos de fondo.",
-        "💎 **Selector directo Classic | DF11 Pure | Dual y guardado en carpetas independientes:** Elige entre «Classic» (260 × 310 con marco), «DF11 Pure» (220 × 276 transparente) o «Dual» enviando cada versión a su carpeta y alternando entre «Fondo original» y «Capa Blanca DF11».",
-        "🩺 **Salud de la Arquitectura, conexión de nodos y ventana única limpia:** El visor interactivo desde «Acerca de» muestra en vivo el estado de tu tarjeta gráfica, modelos, catálogo y las conexiones entre nodos en una interfaz unificada sin barras flotantes redundantes."
+        "🧤 **Camisetas de Campo, Portero (GK) y Staff por club y temporada:** Cada club puede tener simultáneamente su camiseta ★ Titular activa de Campo, de Portero (GK) y de Staff en cada temporada sin pisarse entre sí, manteniendo por defecto la de Campo.",
+        "🗑️ **Eliminación rápida de caras y camisetas de prueba:** Borra en 2 clics cualquier cara guardada o de prueba desde la tira del Paso 1 o la Biblioteca (incluyendo «Limpiar prueba (N)») y elimina camisetas desde las tarjetas del Paso 2 sin romper Deshacer (Ctrl+Z).",
+        "⚡ **Flujo directo en 3 pasos (Cara/Formato → Camiseta → Exportación):** Elige el formato Classic, Pure o Dual y la Capa Blanca DF11 directamente desde el Paso 1, sin pasos intermedios redundantes, y exporta en el Paso 3.",
+        "✂️ **Captura en 2 pasos (Seleccionar → Intro / Esc) y Cuello Cilíndrico Anatómico:** Enmarca y reencuadra libremente en pantalla antes de pulsar Intro, eleva la cabeza sin estirar los trapecios y recorta camisetas con motor 2× SSAA."
       ]
     },
     {
