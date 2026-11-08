@@ -1,6 +1,6 @@
 # DF11 Face Studio (`v1.6.0`)
 
-Estudio fotográfico en **una sola vista sin scroll exterior (`100vh`)** con soporte nativo para **DF11 Classic (`260 × 310 px` con marco)**, **DF11 Pure (`220 × 276 px` sin marco, `Alpha = 0`)** y **Exportación Dual simultánea en carpetas independientes**, **captura nativa de pantalla en caliente (`✂ Capturar` + Mini-Capturador flotante cero-portapapeles)**, modo instantáneo **Foto Directa + Marco DF11**, mejora de **Calidad óptica 100% offline y 0% IA**, edición `1:1` de fichas de **Packs de Faces FM** y sincronizador no destructivo `NG_Regens` para **Football Manager (FM24 / FM27)** en Windows PC.
+Estudio fotográfico en **una sola vista sin scroll exterior (`100vh`)** con soporte nativo para **DF11 Classic (`260 × 310 px` con marco)**, **DF11 Pure (`220 × 276 px` sin marco, `Alpha = 0`)** y **Exportación Dual simultánea en carpetas independientes**, **captura nativa de pantalla en 2 pasos (`Seleccionar -> Reencuadrar -> Intro / Esc` cero-portapapeles)**, modo instantáneo **Foto Directa + Marco DF11**, mejora de **Calidad óptica 100% offline**, edición `1:1` de fichas de **Packs de Faces FM** y sincronizador no destructivo `NG_Regens` para **Football Manager (FM24 / FM27)** en Windows PC.
 
 ---
 

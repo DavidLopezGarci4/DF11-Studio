@@ -240,7 +240,7 @@ export async function callBridge<T>(method: string, ...args: unknown[]): Promise
   }
   if (window.pywebview?.api?.[method]) return (await window.pywebview.api[method](...args)) as T;
   if (method === 'get_bootstrap_state') return FALLBACK_BOOT as unknown as T;
-  if (method === 'probe_architecture_health' || method === 'consume_addon_capture') return null as unknown as T;
+  if (method === 'probe_architecture_health') return null as unknown as T;
   if (method === 'list_shirt_templates' || method === 'list_saved_faces') return [] as unknown as T;
   if (
     !window.pywebview?.api &&
@@ -259,8 +259,6 @@ export async function callBridge<T>(method: string, ...args: unknown[]): Promise
       method === 'update_shirt_template_meta' ||
       method === 'import_clubs_from_fm_graphics' ||
       method === 'capture_screen_region' ||
-      method === 'open_capture_addon' ||
-      method === 'capture_from_addon' ||
       method === 'cutout_direct_photo_for_pure' ||
       method === 'promote_staged_crop_to_direct_photo' ||
       method.startsWith('extract_face_'))

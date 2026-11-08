@@ -77,8 +77,6 @@ export default function App() {
   const [liveWatching, setLiveWatching] = useState(false);
   const [studioJump, setStudioJump] = useState<StudioJumpPayload | null>(null);
   const [captureHotkey, setCaptureHotkey] = useState(false);
-  const [captureTargetHint, setCaptureTargetHint] = useState<CaptureTarget>('direct_photo');
-  const [captureBgReplaceHint, setCaptureBgReplaceHint] = useState(false);
   const [capMenuOpen, setCapMenuOpen] = useState(false);
   const capMenuRef = useRef<HTMLDivElement>(null);
   const capSeqRef = useRef(0);
@@ -136,24 +134,6 @@ export default function App() {
     setTab('studio');
     const nextSeq = ++capSeqRef.current;
     setExternalCaptureReq({ seq: nextSeq, target, explicit, directBgReplace });
-  }, []);
-
-  const handleOpenCaptureAddon = useCallback(() => {
-    setCapMenuOpen(false);
-    const effTarget: CaptureTarget = tab === 'studio' ? captureTargetHint : 'direct_photo';
-    const args: unknown[] = [effTarget, dark ? 'dark' : 'light'];
-    if (effTarget === 'direct_photo' && tab === 'studio' && captureBgReplaceHint) {
-      args.push(true);
-    }
-    void callBridge('open_capture_addon', ...args).catch(() => {});
-  }, [tab, captureTargetHint, captureBgReplaceHint, dark]);
-
-  useEffect(() => {
-    const onAddonCapture = () => {
-      setTab('studio');
-    };
-    window.addEventListener('df11:addon-capture', onAddonCapture);
-    return () => window.removeEventListener('df11:addon-capture', onAddonCapture);
   }, []);
 
   useEffect(() => {
@@ -256,7 +236,7 @@ export default function App() {
                 type="button"
                 aria-label="Capturar pantalla"
                 onClick={() => triggerGlobalCapture()}
-                title="Recorte nativo de pantalla en caliente (oculta la app automáticamente; Shift bloquea 260×310)"
+                title="Recorte nativo de pantalla en 2 pasos (Seleccionar -> Reencuadrar -> Intro / Esc; oculta la app automáticamente; Shift bloquea 260×310)"
                 className="px-2.5 py-1.5 text-xs font-medium rounded-l-lg bg-emerald-600 hover:bg-emerald-500 text-white inline-flex items-center gap-1.5 transition"
               >
                 <Scissors className="w-3.5 h-3.5" /> Capturar
@@ -268,21 +248,9 @@ export default function App() {
                 aria-expanded={capMenuOpen}
                 onClick={() => setCapMenuOpen((o) => !o)}
                 title="Elegir destino de captura o abrir menú"
-                className="px-1.5 py-1.5 text-xs font-medium border-l border-emerald-700/60 bg-emerald-600 hover:bg-emerald-500 text-white inline-flex items-center transition"
+                className="px-1.5 py-1.5 text-xs font-medium rounded-r-lg border-l border-emerald-700/60 bg-emerald-600 hover:bg-emerald-500 text-white inline-flex items-center transition"
               >
                 <ChevronDown className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                aria-label="Abrir Mini-Capturador flotante"
-                onClick={handleOpenCaptureAddon}
-                title="Mini-Capturador flotante: oculta la ventana principal y deja solo una barra mínima para ver y capturar toda tu pantalla"
-                className="px-2 py-1.5 text-xs font-medium rounded-r-lg border-l border-emerald-700/60 bg-emerald-600 hover:bg-emerald-500 text-white inline-flex items-center justify-center transition"
-              >
-                <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" stroke="currentColor" strokeWidth="1.4" strokeOpacity="0.82" />
-                  <rect x="7.75" y="4.5" width="5" height="3.5" rx="0.9" fill="currentColor" />
-                </svg>
               </button>
               {capMenuOpen && (
                 <div
@@ -293,23 +261,11 @@ export default function App() {
                   <button
                     type="button"
                     role="menuitem"
-                    onClick={handleOpenCaptureAddon}
-                    className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between font-medium text-emerald-700 dark:text-emerald-400"
-                  >
-                    <span>Mini-Capturador flotante</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20">
-                      Pantalla libre
-                    </span>
-                  </button>
-                  <div className="my-1 border-t border-slate-100 dark:border-white/5" />
-                  <button
-                    type="button"
-                    role="menuitem"
                     onClick={() => triggerGlobalCapture('direct_photo', true, false)}
                     className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-between"
                   >
                     <span>Foto Directa + Marco DF11</span>
-                    <span className="text-[10px] text-slate-400 dark:text-slate-500">Fondo orig. · 0% IA</span>
+                    <span className="text-[10px] text-slate-400 dark:text-slate-500">Fondo original</span>
                   </button>
                   <button
                     type="button"
@@ -318,7 +274,7 @@ export default function App() {
                     className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between text-emerald-700 dark:text-emerald-400"
                   >
                     <span>Foto Directa · Capa Blanca DF11</span>
-                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400">Blanco · 0% IA</span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400">Capa blanca</span>
                   </button>
                   <button
                     type="button"
@@ -415,8 +371,6 @@ export default function App() {
             hideInternalToolbar
             initialHotkeyEnabled={captureHotkey}
             externalCaptureReq={externalCaptureReq}
-            onCaptureTargetHintChange={setCaptureTargetHint}
-            onCaptureBgReplaceHintChange={setCaptureBgReplaceHint}
           />
         ) : (
           <RegensSyncView

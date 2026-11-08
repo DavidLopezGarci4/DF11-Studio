@@ -91,12 +91,12 @@
       ]
     },
     {
-      "id": "direct_photo_pure_optics", "title": "📷 Foto Directa + Marco DF11 / Capa Blanca y Pure (0% IA)", "category": "graphics_multimedia",
-      "summary": "Conserva el fondo del recorte o aplica la Capa Blanca DF11 y contorno Pure con 0% IA.",
+      "id": "direct_photo_pure_optics", "title": "📷 Foto Directa + Marco DF11 / Capa Blanca y Pure", "category": "graphics_multimedia",
+      "summary": "Conserva el fondo del recorte o aplica la Capa Blanca DF11 y contorno Pure sin IA.",
       "explanation": "Geodésica OKLab + proyección Color-Line y fondo blanco DF11 calibrado sin redes neuronales.",
       "steps": [
-        { "nodeId": "ui_runtime", "role": "Alterna Fondo original | Capa Blanca DF11 (0% IA) y Tolerancia Pure" },
-        { "nodeId": "ipc_bridge", "role": "Cachea el fotograma original y el contorno 0% IA sin invocar ONNX" },
+        { "nodeId": "ui_runtime", "role": "Alterna Fondo original | Capa Blanca DF11 y Tolerancia Pure" },
+        { "nodeId": "ipc_bridge", "role": "Cachea el fotograma original y el contorno sin invocar ONNX" },
         { "nodeId": "dsp_pure_optics", "role": "Ejecuta contorno geodésico + WGIF OKLab y desmezcla bisel Classic" },
         { "nodeId": "compositor_engine", "role": "Deriva marco DF11 Classic (260×310) y/o silueta Pure (220×276)" },
         { "nodeId": "local_storage", "role": "Exporta PNG/JPG y actualiza config.xml de forma atómica" }
@@ -125,12 +125,12 @@
       ]
     },
     {
-      "id": "hot_screen_capture", "title": "✂️ Captura de Pantalla en Caliente Cero-Portapapeles", "category": "desktop_apps",
-      "summary": "Recorta pantalla o Mini-Capturador hacia Foto Directa, Cara, Camiseta o PNG sin borrar el #UID copiado.",
-      "explanation": "Oculta la app antes de capturar en PerMonitorV2 por memoria sin tocar el portapapeles de Windows.",
+      "id": "hot_screen_capture", "title": "✂️ Captura de Pantalla en 2 Pasos (Seleccionar → Intro / Esc)", "category": "desktop_apps",
+      "summary": "Enmarca pantalla, reencuadra si quieres y confirma con Intro o cancela con Esc sin borrar el #UID copiado.",
+      "explanation": "Oculta la app antes de capturar en PerMonitorV2 y mantiene el recuadro seleccionado hasta pulsar Intro.",
       "steps": [
-        { "nodeId": "desktop_shell", "role": "Oculta la ventana o el Mini-Capturador y restaura al terminar" },
-        { "nodeId": "ipc_bridge", "role": "Captura 1:1 por stdout sin tocar el portapapeles" },
+        { "nodeId": "desktop_shell", "role": "Oculta la ventana al iniciar la captura y la restaura tras Intro o Esc" },
+        { "nodeId": "ipc_bridge", "role": "Selecciona, permite reencuadrar y confirma con Intro sin tocar el portapapeles" },
         { "nodeId": "ui_runtime", "role": "Enruta a Foto Directa, Cara, Camiseta o Guardar PNG" }
       ]
     }

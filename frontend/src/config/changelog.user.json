@@ -9,13 +9,13 @@
     {
       "version": "1.6.0",
       "build": 10600,
-      "date": "2026-11-07",
-      "title": "Formato Oficial DF11 Pure (220 × 276) con Limpieza de Contorno 0% IA, Exportación Dual en Carpetas Independientes y Visor de Salud Renovado",
+      "date": "2026-11-08",
+      "title": "Formato Oficial DF11 Pure (220 × 276), Exportación Dual, Captura en 2 Pasos (Seleccionar → Intro / Esc), Cuello Cilíndrico Anatómico y Extractor Textil 2× SSAA Refinado",
       "highlights": [
-        "💎 **Selector directo Classic | DF11 Pure | Dual en el Lienzo y en el Paso 4:** Elige al instante entre «Classic» (260 × 310 con marco), «DF11 Pure» (220 × 276 sin marco y con fondo transparente) o «Dual» tanto arriba en la cabecera del Lienzo Oficial DF11 como justo debajo en el Paso 4.",
-        "📂 **Guardado Dual en carpetas independientes y doble vista previa:** Con un solo clic en «Dual (Ambas)» generas a la vez tu ficha Classic y tu ficha Pure enviando cada versión a la carpeta separada que elijas, y puedes alternar en vivo entre «Vista Classic» y «Vista Pure».",
-        "✨ **Capa Blanca Oficial DF11 o Fondo Original en capturas y contorno Pure 0% IA:** En capturas de pantalla, Mini-Capturador, fotos directas y tarjetas Classic puedes alternar al instante entre mantener el fondo original del recorte o aplicar la Capa Blanca Oficial DF11 (y exportar a DF11 Pure o Dual) mediante un algoritmo gratuito 100% sin IA.",
-        "🩺 **Salud de la Arquitectura, conexión de nodos y arranque limpio:** El visor interactivo desde «Acerca de» muestra en vivo el estado de tu tarjeta gráfica, modelos, catálogo y las conexiones de entrada/salida entre nodos, cerrando además cualquier sesión anterior bloqueada al abrir la app."
+        "✂️ **Captura en 2 pasos (Seleccionar → Reencuadrar → Intro / Esc):** Al soltar el ratón el recuadro queda fijado en pantalla con 4 escuadras esmeralda; vuelve a arrastrar si quieres reencuadrar, pulsa «Intro» para llevar la imagen a la app o «Esc» para cancelar con una sola mano.",
+        "🧑 **Cuello cilíndrico anatómico sin estirar trapecios y Extractor de Camisetas 2× SSAA impecable:** Al elevar la cabeza sobre cualquier camiseta el cuello mantiene su grosor cilíndrico natural sin deformar los trapecios, y el extractor textil 2× SSAA recorta hombros, mangas y pechos blancos sin restos de fondo.",
+        "💎 **Selector directo Classic | DF11 Pure | Dual y guardado en carpetas independientes:** Elige entre «Classic» (260 × 310 con marco), «DF11 Pure» (220 × 276 transparente) o «Dual» enviando cada versión a su carpeta y alternando entre «Fondo original» y «Capa Blanca DF11».",
+        "🩺 **Salud de la Arquitectura, conexión de nodos y ventana única limpia:** El visor interactivo desde «Acerca de» muestra en vivo el estado de tu tarjeta gráfica, modelos, catálogo y las conexiones entre nodos en una interfaz unificada sin barras flotantes redundantes."
       ]
     },
     {
@@ -24,7 +24,7 @@
       "date": "2026-11-05",
       "title": "Captura de Pantalla en Caliente Sin Tocar el Portapapeles, Vista Completa Sin Desplazamiento y Plantillas por Partida FM",
       "highlights": [
-        "✂️ **Captura en caliente y Mini-Capturador flotante:** Pulsa «Capturar» o desacopla el nuevo Mini-Capturador flotante (que oculta la ventana principal dejando toda tu pantalla libre) para recortar un retrato, una cara, una camiseta o guardarlo como PNG sin tocar el #ID copiado en tu portapapeles.",
+        "✂️ **Captura en caliente sin tocar el portapapeles:** Pulsa «Capturar» (que oculta la ventana principal automáticamente dejando toda tu pantalla libre) para recortar un retrato, una cara, una camiseta o guardarlo como PNG sin borrar el #ID copiado en tu portapapeles.",
         "🖥️ **Todo el estudio en una sola vista sin bajar la rueda:** La barra superior unificada y el Paso 4 de Calidad óptica y Exportación justo debajo del lienzo te permiten trabajar y exportar sin desplazarte fuera de la pantalla.",
         "👕 **Encuadre inteligente en camisetas y pegado seguro:** Si recortas solo el pecho de una equipación sin cabeza, el lienzo la sitúa automáticamente en su zona inferior, y Ctrl+V pega fotos sin interferir cuando escribes textos o números.",
         "🏟️ **Lectura más precisa de plantillas y partidas de Football Manager:** El importador de vistas de plantilla distingue con exactitud el club real frente a edades o dorsales y prepara tu biblioteca para gestionar varias partidas independientes."

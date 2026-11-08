@@ -466,3 +466,154 @@ def test_progressive_neck_narrows_already_wide_neck_and_unframes_transparent_wid
     assert px_a == 255 and px_r > 200 and px_g > 200 and px_b > 200
 
 
+def test_raised_head_preserves_cylindrical_neck_without_stretching_trapezius(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test for QA Round 1 Point C: raising the head (offset_y < 0) must keep a cylindrical neck (~1.00-1.08x submandibular width) without flaring trapezius wings above the collar."""
+    from backend.core.compositor import DF11_HEIGHT, DF11_WIDTH
+    from backend.services.head_neck import (
+        HeadFitParams,
+        compose_modular_subject_rgba,
+        extract_clean_head_and_neck,
+        fit_head_to_shirt_template,
+        suggest_safe_crop_viewport,
+    )
+    from backend.services.templates import extract_collar_profile
+    from backend.services.vision import FacePose
+
+    # Build a V-collar shirt (collar rims at x=82, y=206 and x=178, y=206, apex at x=130, y=236)
+    shirt = Image.new("RGBA", (DF11_WIDTH, DF11_HEIGHT), (0, 0, 0, 0))
+    sdraw = ImageDraw.Draw(shirt)
+    sdraw.polygon(
+        [(19, 232), (82, 206), (130, 236), (178, 206), (241, 232), (241, 292), (19, 292)],
+        fill=(22, 24, 30, 255),
+    )
+    collar = extract_collar_profile(shirt)
+
+    # Build a synthetic head with a cylindrical neck (width ~76 px: x=92..168) AND wide native trapezius wings below y=214 (width 136 px: x=62..198)
+    face_im = Image.new("RGBA", (DF11_WIDTH, DF11_HEIGHT), (0, 0, 0, 0))
+    fdraw = ImageDraw.Draw(face_im)
+    fdraw.ellipse([78, 36, 182, 188], fill=(218, 174, 146, 255))
+    # Cylindrical neck waist
+    fdraw.rectangle([92, 168, 168, 214], fill=(212, 168, 140, 255))
+    # Wide native trapezius flare in source portrait (which used to stretch upward when raising head)
+    fdraw.polygon([(92, 206), (168, 206), (198, 248), (62, 248)], fill=(208, 164, 136, 255))
+
+    def _fake_pose(_im: Image.Image, score_thresh: float = 0.55) -> FacePose:
+        return FacePose(
+            right_eye=(106.0, 108.0),
+            left_eye=(154.0, 108.0),
+            nose=(130.0, 134.0),
+            eye_center=(130.0, 108.0),
+            ipd=48.0,
+            yaw=0.0,
+            bbox=(80.0, 42.0, 100.0, 142.0),
+        )
+
+    def _fake_seg(im: Image.Image) -> np.ndarray:
+        arr = np.asarray(im.convert("RGBA"))
+        h, w = arr.shape[:2]
+        probs = np.zeros((h, w, 6), dtype=np.float32)
+        fg = arr[:, :, 3] > 20
+        probs[:, :, 3] = np.where(fg, 0.94, 0.01)
+        probs[:, :, 0] = np.where(~fg, 0.97, 0.02)
+        return probs
+
+    import backend.services.vision as vision_mod
+
+    monkeypatch.setattr(vision_mod, "detect_face_pose", _fake_pose)
+    monkeypatch.setattr(vision_mod, "segment_portrait_classes", _fake_seg)
+
+    vp = suggest_safe_crop_viewport(face_im)
+    head_asset = extract_clean_head_and_neck(face_im, is_pre_cutout=True, crop_viewport=vp)
+    base_fit = fit_head_to_shirt_template(head_asset, collar)
+
+    # Raise head by 16 px (offset_y - 16.0)
+    raised_subj = compose_modular_subject_rgba(
+        head_asset=head_asset,
+        shirt_rgba=shirt,
+        collar=collar,
+        fit=HeadFitParams(
+            scale=base_fit.scale,
+            offset_x=base_fit.offset_x,
+            offset_y=base_fit.offset_y - 16.0,
+            neck_fill=1.0,
+            harmonize=False,
+        ),
+    )
+    subj_arr = np.asarray(raised_subj, dtype=np.uint8)
+    shirt_arr = np.asarray(shirt, dtype=np.uint8)
+
+    # Measure skin width just below the chin (submandibular waist) vs 4 px above the collar rim (y = 200)
+    waist_row = subj_arr[172, :, 3] > 180
+    waist_w = int(waist_row.sum())
+    above_collar_skin = (subj_arr[200, :, 3] > 180) & (shirt_arr[200, :, 3] < 30)
+    above_collar_w = int(above_collar_skin.sum())
+
+    assert waist_w >= 60
+    assert above_collar_w <= int(round(waist_w * 1.08)) + 2, (
+        f"Neck above collar must remain cylindrical (got {above_collar_w}px vs waist {waist_w}px)"
+    )
+
+
+def test_headless_torso_white_shirt_extraction_clears_shoulder_air_and_keeps_white_chest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test for QA Round 1 Point D: headless torso snip (panY=+84) on white background removes shoulder towers while keeping white chest intact."""
+    import backend.services.vision as vision_mod
+    from backend.services.templates import sanitize_shirt_template_rgba
+
+    # Create a 270x140 headless torso crop on a bright white background (252, 252, 252)
+    torso = Image.new("RGBA", (270, 140), (252, 252, 252, 255))
+    tdraw = ImageDraw.Draw(torso)
+    # Neck skin at top-center (y=0..42, x=98..172)
+    tdraw.polygon([(98, 0), (172, 0), (160, 48), (110, 48)], fill=(214, 170, 142, 255))
+    # Black sleeves on outer shoulders + white chest with red diagonal sash in center
+    tdraw.polygon([(12, 52), (88, 18), (135, 52), (182, 18), (258, 52), (264, 139), (6, 139)], fill=(246, 246, 248, 255))
+    tdraw.polygon([(12, 52), (82, 22), (62, 139), (6, 139)], fill=(22, 24, 28, 255))
+    tdraw.polygon([(188, 22), (258, 52), (264, 139), (208, 139)], fill=(22, 24, 28, 255))
+
+    def _fake_seg(im: Image.Image) -> np.ndarray:
+        arr = np.asarray(im.convert("RGBA"))
+        h, w = arr.shape[:2]
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+        x1 = xx / 2.0
+        y1 = yy / 2.0
+        probs = np.zeros((h, w, 6), dtype=np.float32)
+        in_Placed = (y1 >= 160.0) & (y1 <= 292.0)
+        # Simulated slope of shoulders from y=178 at collar to y=210 at x=25/235
+        shoulder_line = 176.0 + 0.36 * np.maximum(0.0, np.abs(x1 - 130.0) - 42.0)
+        is_neck = in_Placed & (np.abs(x1 - 130.0) < 34.0) & (y1 < 208.0)
+        is_shirt = in_Placed & (~is_neck) & (y1 >= shoulder_line)
+        probs[:, :, vision_mod.CLASS_BODY_SKIN] = np.where(is_neck, 0.92, 0.02)
+        probs[:, :, vision_mod.CLASS_CLOTHES] = np.where(is_shirt, 0.90, 0.03)
+        probs[:, :, vision_mod.CLASS_BG] = np.where(~(is_neck | is_shirt), 0.92, 0.04)
+        return probs
+
+    def _fake_biref(im: Image.Image) -> Image.Image:
+        arr = np.asarray(im.convert("RGBA")).copy()
+        h, w = arr.shape[:2]
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+        x1 = xx / 2.0
+        y1 = yy / 2.0
+        shoulder_line = 176.0 + 0.36 * np.maximum(0.0, np.abs(x1 - 130.0) - 42.0)
+        fg = (y1 >= 160.0) & ((y1 >= shoulder_line) | (np.abs(x1 - 130.0) < 34.0))
+        arr[:, :, 3] = np.where(fg, 255, 0).astype(np.uint8)
+        return Image.fromarray(arr, mode="RGBA")
+
+    monkeypatch.setattr(vision_mod, "segment_portrait_classes", _fake_seg)
+    monkeypatch.setattr(vision_mod, "remove_background_birefnet", _fake_biref)
+
+    cleaned = sanitize_shirt_template_rgba(torso, zoom=1.0, pan_x=0.0, pan_y=84.0, symmetrize_shoulders=True)
+    c_arr = np.asarray(cleaned, dtype=np.uint8)
+    alpha = c_arr[:, :, 3]
+
+    # Above outer shoulders (y=162..182, x=25..65 and x=195..235) must have zero white towers
+    left_air = int((alpha[162:182, 25:65] > 24).sum())
+    right_air = int((alpha[162:182, 195:235] > 24).sum())
+    assert left_air == 0 and right_air == 0, f"Expected 0 white tower pixels above shoulders, got L={left_air}, R={right_air}"
+
+    # Central white chest (y=235..275, x=105..155) must remain solid
+    chest_solid = int((alpha[235:275, 105:155] > 220).sum())
+    assert chest_solid >= int(40 * 50 * 0.90), f"White chest must remain solid, got {chest_solid}/{40*50}"
+
+
+

@@ -1349,7 +1349,6 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
     let nextCancelled = false;
     let nextDrm = false;
     let nextLowRes = false;
-    let addonPendingPayload: Record<string, unknown> | null = null;
 
     window.pywebview = {
       api: {
@@ -1435,17 +1434,6 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
             fileName: String(fileName || 'Pasted.png'),
           };
         },
-        open_capture_addon: async (defaultTarget: unknown, theme: unknown) => {
-          calls.push({ fn: 'open_capture_addon', args: [defaultTarget, theme] });
-          return { addonOpen: true, target: defaultTarget };
-        },
-        consume_addon_capture: async () => {
-          calls.push({ fn: 'consume_addon_capture', args: [] });
-          if (!addonPendingPayload) return null;
-          const out = addonPendingPayload;
-          addonPendingPayload = null;
-          return out;
-        },
         export_modular_card: async (payload: unknown) => {
           calls.push({ fn: 'export_modular_card', args: [payload] });
           const p = payload as { uid?: string; fileLabel?: string; fmt?: string };
@@ -1512,30 +1500,14 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       fireEvent.click(screen.getByRole('menuitem', { name: /Guardar PNG como/i }));
       expect(await screen.findByText(/Recorte guardado: D:\\Capturas\\Recorte_DF11\.png/i)).toBeInTheDocument();
 
-      // 7. Mini-Capturador flotante detaches with active tool target and routes incoming addon captures seamlessly
-      fireEvent.click(screen.getByRole('button', { name: /Abrir Mini-Capturador flotante/i }));
-      await waitFor(() => expect(calls.filter((c) => c.fn === 'open_capture_addon')).toHaveLength(1));
-      expect(calls.find((c) => c.fn === 'open_capture_addon')?.args[0]).toBe('raw_face');
-
-      addonPendingPayload = {
-        cancelled: false,
-        target: 'direct_photo',
-        captureWidth: 260,
-        captureHeight: 310,
-        drmWarning: false,
-        lowResWarning: false,
-        directPhotoId: 'direct-addon-99',
-        fileName: 'Captura_Flotante_99.png',
-        label: 'Captura_Flotante_99',
-        width: 260,
-        height: 310,
-        isPreCutout: false,
-        clampPan: true,
-        autoFit: { scale: 1.0, offsetX: 0, offsetY: 0 },
-        previewDataUrl: ONE_PX_PNG,
-      };
-      window.dispatchEvent(new CustomEvent('df11:addon-capture'));
-      expect(await screen.findByText(/Activa: Captura_Flotante_99/i)).toBeInTheDocument();
+      // 7. Mini-Capturador flotante is completely removed; Capturar ▾ -> Foto Directa + Marco DF11 switches back to composer
+      expect(screen.queryByRole('button', { name: /Abrir Mini-Capturador flotante/i })).not.toBeInTheDocument();
+      nextLowRes = false;
+      nextDrm = false;
+      fireEvent.click(screen.getByRole('button', { name: /Opciones de captura de pantalla/i }));
+      expect(screen.queryByRole('menuitem', { name: /Mini-Capturador flotante/i })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('menuitem', { name: /Foto Directa \+ Marco DF11/i }));
+      expect(await screen.findByText(/Activa: Captura_1/i)).toBeInTheDocument();
 
       // 8. Exporting captured Direct Photo to '1. Nuestras creaciones' does NOT require an official FM UID!
       expect(screen.getByLabelText(/ID Football Manager/i)).toHaveValue('');
@@ -1543,13 +1515,13 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
       await waitFor(() => expect(calls.filter((c) => c.fn === 'export_modular_card')).toHaveLength(1));
       expect(calls.find((c) => c.fn === 'export_modular_card')?.args[0]).toMatchObject({
         uid: '',
-        fileLabel: 'Captura_Flotante_99',
+        fileLabel: 'Captura_1',
         exportTarget: 'creations',
         step1Mode: 'direct_photo',
-        directPhotoId: 'direct-addon-99',
+        directPhotoId: 'direct-cap-1',
         updateConfigXml: false,
       });
-      expect(await screen.findByText(/Guardado: D:\\DF11Studio\\Exports\\Captura_Flotante_99\.png/i)).toBeInTheDocument();
+      expect(await screen.findByText(/Guardado: D:\\DF11Studio\\Exports\\Captura_1\.png/i)).toBeInTheDocument();
 
       // Whereas '2. Pack de Faces FM' still requires the official FM UID when empty!
       fireEvent.click(screen.getByRole('button', { name: /Pack de Faces FM/i }));
@@ -1849,7 +1821,7 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
         bgMode: 'white_df11',
       });
 
-      const whiteBtn = screen.getByRole('button', { name: /^Capa Blanca DF11 \(0% IA\)$/i });
+      const whiteBtn = screen.getByRole('button', { name: /^Capa Blanca DF11$/i });
       const origBtn = screen.getByRole('button', { name: /^Fondo original$/i });
       const bgSelect = screen.getByLabelText(/Modo de fondo/i) as HTMLSelectElement;
       expect(whiteBtn).toHaveAttribute('aria-pressed', 'true');
@@ -1882,13 +1854,13 @@ describe('StudioView modular 3-tool & 4-step layer contract', () => {
         ).toBe(true),
       );
 
-      // 3. Rescue a staged crop from Modo Capas to Foto Directa (0% IA) in 1 click
+      // 3. Rescue a staged crop from Modo Capas to Foto Directa in 1 click
       fireEvent.click(screen.getByRole('button', { name: /Modo Capas \(Cara \+ Camiseta\)/i }));
       const fakeFile = new File([new Uint8Array([137, 80, 78, 71])], 'Recorte_En_Zona.png', { type: 'image/png' });
       fireEvent.paste(window, {
         clipboardData: { items: [{ type: 'image/png', getAsFile: () => fakeFile }] },
       });
-      const rescueBtn = await screen.findByRole('button', { name: /Foto Directa \(0% IA\)/i });
+      const rescueBtn = await screen.findByRole('button', { name: /^Foto Directa$/i });
       fireEvent.click(rescueBtn);
       expect(await screen.findByText(/Activa: Recorte_En_Zona/i)).toBeInTheDocument();
       expect(calls.filter((c) => c.fn === 'promote_staged_crop_to_direct_photo')).toHaveLength(1);

@@ -11,7 +11,6 @@ import time
 from pathlib import Path
 
 WINDOW_TITLE = "DF11 Face Studio — FM27 & NG_Regens"
-ADDON_WINDOW_TITLE = "DF11 Mini-Capturador"
 
 
 def _is_webview_lock_held(profile_dir: Path) -> bool:
@@ -37,23 +36,20 @@ def _cleanup_stale_instance(profile_dir: Path) -> None:
         my_pid = os.getpid()
         stale_pids: set[int] = set()
 
-        for title in (WINDOW_TITLE, ADDON_WINDOW_TITLE):
-            hwnd = int(user32.FindWindowW(None, title) or 0)
-            if hwnd > 0:
-                pid_val = ctypes.c_ulong(0)
-                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_val))
-                if pid_val.value and int(pid_val.value) != my_pid:
-                    stale_pids.add(int(pid_val.value))
-                user32.PostMessageW(hwnd, wm_close, 0, 0)
+        hwnd = int(user32.FindWindowW(None, WINDOW_TITLE) or 0)
+        if hwnd > 0:
+            pid_val = ctypes.c_ulong(0)
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_val))
+            if pid_val.value and int(pid_val.value) != my_pid:
+                stale_pids.add(int(pid_val.value))
+            user32.PostMessageW(hwnd, wm_close, 0, 0)
 
         if not stale_pids:
             return
 
         deadline = time.perf_counter() + 0.55
         while time.perf_counter() < deadline:
-            if not _is_webview_lock_held(profile_dir) and all(
-                int(user32.FindWindowW(None, t) or 0) == 0 for t in (WINDOW_TITLE, ADDON_WINDOW_TITLE)
-            ):
+            if not _is_webview_lock_held(profile_dir) and int(user32.FindWindowW(None, WINDOW_TITLE) or 0) == 0:
                 return
             time.sleep(0.05)
 
@@ -90,7 +86,6 @@ def _bind_win32_app_identity_and_icon(ico_path: Path) -> None:
 
 def main() -> None:
     from backend.bridge import StudioBridge
-    from backend.core.capture_addon_html import CAPTURE_ADDON_HTML
     from backend.core.paths import ASSETS_DIR, WORKSPACE_ROOT, get_webview_profile_dir
 
     if sys.platform == "win32":
@@ -118,32 +113,7 @@ def main() -> None:
         min_size=(980, 680),
         background_color="#090d16",
     )
-    addon_x = 120
-    if sys.platform == "win32":
-        try:
-            addon_x = max(24, int(ctypes.windll.user32.GetSystemMetrics(0)) - 560)
-        except Exception:
-            addon_x = 120
-    addon_win = webview.create_window(
-        title=ADDON_WINDOW_TITLE,
-        html=CAPTURE_ADDON_HTML,
-        js_api=bridge,
-        width=536,
-        height=52,
-        min_size=(340, 48),
-        x=addon_x,
-        y=24,
-        resizable=False,
-        hidden=True,
-        frameless=True,
-        easy_drag=True,
-        shadow=True,
-        on_top=True,
-        background_color="#090d16",
-    )
     bridge._attach_window(win)
-    bridge._attach_addon_window(addon_win)
-    addon_win.events.closing += bridge._on_addon_closing
 
     def _on_main_window_closed() -> None:
         bridge._shutdown_windows()

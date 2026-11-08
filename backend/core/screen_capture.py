@@ -115,9 +115,11 @@ def capture_screen_png(
             cwd=str(WORKSPACE_ROOT),
             stdin=subprocess.DEVNULL,
             capture_output=True,
-            timeout=180,
+            timeout=300,
             check=False,
         )
+    except subprocess.TimeoutExpired:
+        return None
     finally:
         if restore_after:
             _restore_windows_after_capture(hidden_wins)

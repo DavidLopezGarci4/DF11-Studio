@@ -139,9 +139,7 @@ def _build_session(model_path: Path, force_cpu: bool = False) -> ort.InferenceSe
     use_cpu = force_cpu or _DML_DISABLED
     so = ort_mod.SessionOptions()
     so.log_severity_level = 3
-    so.graph_optimization_level = (
-        ort_mod.GraphOptimizationLevel.ORT_ENABLE_ALL if use_cpu else ort_mod.GraphOptimizationLevel.ORT_ENABLE_BASIC
-    )
+    so.graph_optimization_level = ort_mod.GraphOptimizationLevel.ORT_ENABLE_BASIC
     so.intra_op_num_threads = 2 if use_cpu else 8
     so.inter_op_num_threads = 1
     so.enable_mem_pattern = False

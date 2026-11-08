@@ -121,10 +121,8 @@ class StudioBridge:
         self._sample_faces_dir = (sample_faces_dir or get_caras_prueba_dir()).resolve()
         self._approved_dirs: set[Path] = {self._export_dir, self._export_pure_dir}
         self._window: Any = None
-        self._addon_window: Any = None
-        self._addon_open: bool = False
         self._shutting_down: bool = False
-        self._pending_addon_capture: dict[str, Any] | None = None
+        self._capture_busy_lock = threading.Lock()
         self._mod_lock = threading.Lock()
         self._sync_lock = threading.Lock()
         self._mod_session: Any = None
@@ -195,17 +193,6 @@ class StudioBridge:
     def _attach_window(self, window: Any) -> None:
         self._window = window
 
-    def _attach_addon_window(self, addon_win: Any) -> None:
-        self._addon_window = addon_win
-
-    def _on_addon_closing(self) -> bool:
-        # In pywebview Event.set(), returning False cancels window closing (args.Cancel = True),
-        # whereas returning True allows the native Form to close and dispose cleanly.
-        if self._shutting_down:
-            return True
-        self.restore_from_capture_addon()
-        return False
-
     def _shutdown_windows(self) -> None:
         self._shutting_down = True
         if self._hotkey_mgr is not None:
@@ -220,18 +207,6 @@ class StudioBridge:
             except Exception:
                 pass
             self._watcher = None
-        if self._addon_window is not None:
-            try:
-                if hasattr(self._addon_window, "events") and hasattr(self._addon_window.events, "closing"):
-                    self._addon_window.events.closing -= self._on_addon_closing
-            except Exception:
-                pass
-            if hasattr(self._addon_window, "destroy"):
-                try:
-                    self._addon_window.destroy()
-                except Exception:
-                    pass
-            self._addon_window = None
 
     def _require_approved(self, folder: Path) -> Path:
         r = folder.resolve()
@@ -1111,137 +1086,17 @@ class StudioBridge:
         tgt = str(target or "direct_photo").strip().lower()
         if tgt not in ("direct_photo", "raw_face", "raw_shirt", "save_png"):
             raise ValueError(f"Destino de captura no soportado: {target}")
-        res = sc_mod.capture_screen_png(
-            host_window=self._window,
-            extra_windows=[self._addon_window] if self._addon_open else None,
-        )
-        if res is None:
+        if not self._capture_busy_lock.acquire(blocking=False):
             return {"cancelled": True}
-        return self._route_captured_png(res, tgt, params=params, dialog_win=self._window)
-
-    def open_capture_addon(
-        self,
-        default_target: str = "direct_photo",
-        theme: str = "dark",
-        direct_bg_replace: bool | None = None,
-    ) -> dict[str, Any]:
-        tgt = str(default_target or "direct_photo").strip().lower()
-        if tgt not in ("direct_photo", "raw_face", "raw_shirt", "save_png"):
-            tgt = "direct_photo"
-        thm = "light" if str(theme).strip().lower() == "light" else "dark"
-        if self._addon_window is None:
-            return {"addonOpen": False, "target": tgt}
-        if hasattr(self._addon_window, "evaluate_js"):
-            try:
-                bg_arg = f", {json.dumps(bool(direct_bg_replace))}" if direct_bg_replace is not None else ""
-                self._addon_window.evaluate_js(
-                    f"window.__df11SetAddonState && window.__df11SetAddonState({json.dumps(tgt)}, {json.dumps(thm)}{bg_arg})"
-                )
-            except Exception:
-                pass
-        if self._window is not None and hasattr(self._window, "hide"):
-            try:
-                self._window.hide()
-            except Exception:
-                pass
-        if hasattr(self._addon_window, "show"):
-            self._addon_window.show()
-        self._addon_open = True
-        return {"addonOpen": True, "target": tgt}
-
-    def restore_from_capture_addon(self) -> dict[str, Any]:
-        self._addon_open = False
-        if self._addon_window is not None and hasattr(self._addon_window, "hide"):
-            try:
-                self._addon_window.hide()
-            except Exception:
-                pass
-        if self._window is not None:
-            try:
-                if hasattr(self._window, "show"):
-                    self._window.show()
-                if hasattr(self._window, "restore"):
-                    self._window.restore()
-                if self._pending_addon_capture is not None and hasattr(self._window, "evaluate_js"):
-                    self._window.evaluate_js("window.dispatchEvent(new CustomEvent('df11:addon-capture'))")
-            except Exception:
-                pass
-        return {"addonOpen": False}
-
-    def capture_from_addon(
-        self,
-        target: str = "direct_photo",
-        keep_pinned: bool = False,
-        direct_bg_replace: bool | None = None,
-    ) -> dict[str, Any]:
-        import backend.core.screen_capture as sc_mod
-
-        tgt = str(target or "direct_photo").strip().lower()
-        if tgt not in ("direct_photo", "raw_face", "raw_shirt", "save_png"):
-            raise ValueError(f"Destino de captura no soportado: {target}")
-
-        if self._window is not None and hasattr(self._window, "hide"):
-            try:
-                self._window.hide()
-            except Exception:
-                pass
-        if self._addon_window is not None and hasattr(self._addon_window, "hide"):
-            try:
-                self._addon_window.hide()
-            except Exception:
-                pass
-
-        res = sc_mod.capture_screen_png(
-            host_window=self._addon_window,
-            extra_windows=[self._window],
-            restore_after=False,
-        )
-        if res is None:
-            if self._addon_window is not None and hasattr(self._addon_window, "show"):
-                self._addon_window.show()
-            return {"cancelled": True}
-
-        if tgt == "save_png":
-            if self._addon_window is not None and hasattr(self._addon_window, "show"):
-                self._addon_window.show()
-            out = self._route_captured_png(res, tgt, dialog_win=self._addon_window or self._window)
-            if not out.get("cancelled"):
-                self._pending_addon_capture = out
-                if self._window is not None and hasattr(self._window, "evaluate_js"):
-                    try:
-                        self._window.evaluate_js("window.dispatchEvent(new CustomEvent('df11:addon-capture'))")
-                    except Exception:
-                        pass
-            return out
-
-        addon_params: dict[str, Any] | None = None
-        if tgt == "direct_photo" and direct_bg_replace is not None:
-            use_white = bool(direct_bg_replace)
-            addon_params = {
-                "directBgReplace": use_white,
-                **({"bgMode": "white_df11", "bgBlur": 0.0} if use_white else {}),
-            }
-
-        out = self._route_captured_png(res, tgt, params=addon_params)
-        self._pending_addon_capture = out
-        if self._window is not None and hasattr(self._window, "evaluate_js"):
-            try:
-                self._window.evaluate_js("window.dispatchEvent(new CustomEvent('df11:addon-capture'))")
-            except Exception:
-                pass
-
-        if bool(keep_pinned):
-            if self._addon_window is not None and hasattr(self._addon_window, "show"):
-                self._addon_window.show()
-            self._addon_open = True
-        else:
-            self.restore_from_capture_addon()
-        return out
-
-    def consume_addon_capture(self) -> dict[str, Any] | None:
-        payload = self._pending_addon_capture
-        self._pending_addon_capture = None
-        return payload
+        try:
+            res = sc_mod.capture_screen_png(
+                host_window=self._window,
+            )
+            if res is None:
+                return {"cancelled": True}
+            return self._route_captured_png(res, tgt, params=params, dialog_win=self._window)
+        finally:
+            self._capture_busy_lock.release()
 
     def toggle_capture_hotkey(self, enabled: bool) -> dict[str, bool]:
         import backend.core.screen_capture as sc_mod
@@ -1253,14 +1108,8 @@ class StudioBridge:
             return {"hotkeyEnabled": False}
         if self._hotkey_mgr is None:
             def _fire() -> None:
-                if self._addon_open and self._addon_window is not None:
-                    try:
-                        self._addon_window.evaluate_js(
-                            "window.__df11TriggerAddonCapture && window.__df11TriggerAddonCapture()"
-                        )
-                        return
-                    except Exception:
-                        pass
+                if self._capture_busy_lock.locked():
+                    return
                 if self._window is not None:
                     try:
                         self._window.evaluate_js("window.dispatchEvent(new CustomEvent('df11:hotkey-capture'))")

@@ -64,11 +64,11 @@ def test_screen_clip_worker_stdout_self_test_and_df11_aspect_math() -> None:
 def test_screen_capture_sources_contain_zero_av_flagged_apis_or_unsigned_helper_exes() -> None:
     assert not (WORKSPACE_ROOT / "DF11ScreenClip.exe").exists()
     assert not (WORKSPACE_ROOT / "scripts" / "ScreenClip.cs").exists()
+    assert not (WORKSPACE_ROOT / "backend" / "core" / "capture_addon_html.py").exists()
 
     worker_src = (WORKSPACE_ROOT / "backend" / "core" / "screen_clip_worker.py").read_text(encoding="utf-8")
     capture_src = (WORKSPACE_ROOT / "backend" / "core" / "screen_capture.py").read_text(encoding="utf-8")
-    addon_src = (WORKSPACE_ROOT / "backend" / "core" / "capture_addon_html.py").read_text(encoding="utf-8")
-    combined = worker_src + "\n" + capture_src + "\n" + addon_src
+    combined = worker_src + "\n" + capture_src
 
     forbidden_av_triggers = (
         "DF11ScreenClip",
@@ -241,109 +241,58 @@ def test_global_capture_hotkey_toggle_lifecycle(tmp_path: Path) -> None:
     assert off_res == {"hotkeyEnabled": False}
 
 
-def test_floating_capture_addon_lifecycle_hides_main_app_and_routes_payload(tmp_path: Path, monkeypatch) -> None:
-    import backend.core.screen_capture as sc_mod
+def test_two_stage_clip_state_controller_hysteresis_redrag_shift_grace_and_confirm() -> None:
+    from backend.core.screen_clip_worker import _ClipStateController
 
-    assert sc_mod.DWM_HIDE_SETTLE_SECONDS >= 0.24, "DWM fade-out needs >=240ms settle so app never appears in snap"
+    ctrl = _ClipStateController()
+    assert ctrl.committed_sel is None and ctrl.dragging is False
 
-    class _TrackedWin:
-        def __init__(self, name: str) -> None:
-            self.name = name
-            self.visible = name == "main"
-            self.destroyed = False
-            self.js_calls: list[str] = []
+    # 1. Initial drag >= 10 px -> releasing mouse commits selection (SELECTED) without closing overlay
+    ctrl.on_down((100, 120), shift=False, now=1.0)
+    assert ctrl.pending_press is True and ctrl.dragging is False
+    ctrl.on_move((260, 310), shift=False, now=1.05)
+    assert ctrl.dragging is True and ctrl.pending_press is False
+    ctrl.on_up((260, 310), shift=False, now=1.10)
+    assert ctrl.dragging is False and ctrl.closed is False
+    assert ctrl.committed_sel == (100, 120, 160, 190)
 
-        def hide(self) -> None:
-            self.visible = False
+    # 2. Reflex click (< 5 px) while in SELECTED preserves the existing selection!
+    ctrl.on_down((500, 500), shift=False, now=2.0)
+    assert ctrl.pending_press is True
+    assert ctrl.committed_sel == (100, 120, 160, 190)
+    ctrl.on_move((502, 503), shift=False, now=2.02)
+    assert ctrl.dragging is False and ctrl.pending_press is True
+    ctrl.on_up((502, 503), shift=False, now=2.05)
+    assert ctrl.committed_sel == (100, 120, 160, 190)
+    assert ctrl.closed is False
 
-        def show(self) -> None:
-            self.visible = True
+    # 3. Re-dragging (>= 5 px) replaces previous selection, and releasing Shift within 90ms grace preserves 260:310 lock
+    ctrl.on_down((300, 200), shift=True, now=3.00)
+    ctrl.on_move((560, 510), shift=True, now=3.02)
+    assert ctrl.dragging is True
+    # User releases Shift 40ms before releasing mouse button (< 90ms grace window) and moves <= 2px
+    ctrl.on_move((560, 511), shift=False, now=3.06)
+    ctrl.on_up((560, 511), shift=False, now=3.07)
+    assert ctrl.committed_df11_lock is True
+    assert ctrl.committed_sel is not None
+    rx, ry, rw, rh = ctrl.committed_sel
+    assert rx == 300 and ry == 200
+    assert abs((rw / rh) - (260.0 / 310.0)) < 0.01
+    assert ctrl.closed is False
 
-        def restore(self) -> None:
-            self.visible = True
+    # 4. Return / KP_Enter confirms ONLY when committed_sel is present; Escape cancels cleanly
+    assert ctrl.on_key("Return") is True
+    assert ctrl.closed is True and ctrl.cancelled is False and ctrl.accepted == ctrl.committed_sel
 
-        def destroy(self) -> None:
-            self.destroyed = True
-            self.visible = False
-
-        def evaluate_js(self, script: str) -> None:
-            self.js_calls.append(script)
-
-    main_win = _TrackedWin("main")
-    addon_win = _TrackedWin("addon")
-
-    bridge = StudioBridge(
-        vault_dir=tmp_path / "vault",
-        export_dir=tmp_path / "exports",
-        db_path=tmp_path / "state.sqlite3",
-    )
-    bridge._attach_window(main_win)
-    bridge._attach_addon_window(addon_win)
-
-    # 1. Opening Mini-Capturador hides the big Studio window and shows the compact floating add-on
-    opened = bridge.open_capture_addon("raw_face", "dark")
-    assert opened == {"addonOpen": True, "target": "raw_face"}
-    assert main_win.visible is False
-    assert addon_win.visible is True
-    assert any("raw_face" in s for s in addon_win.js_calls)
-
-    # 2. If user presses Esc during snip from add-on, add-on stays open and main stays hidden
-    seen_hidden_during_snap: list[tuple[bool, bool]] = []
-
-    def _mock_cancel(*_a: Any, **_kw: Any) -> None:
-        seen_hidden_during_snap.append((main_win.visible, addon_win.visible))
-        return None
-
-    monkeypatch.setattr(sc_mod, "capture_screen_png", _mock_cancel)
-    esc_res = bridge.capture_from_addon("raw_face", False)
-    assert esc_res == {"cancelled": True}
-    assert seen_hidden_during_snap == [(False, False)], "Both windows must be hidden while snipping screen"
-    assert addon_win.visible is True and main_win.visible is False
-
-    # 3. Successful snip with keep_pinned=True stages capture, notifies main, and keeps floating add-on visible
-    png_bytes = _encode_png(Image.new("RGBA", (220, 260), (40, 120, 200, 255)))
-
-    def _mock_ok(*_a: Any, **_kw: Any) -> sc_mod.ScreenCaptureResult:
-        seen_hidden_during_snap.append((main_win.visible, addon_win.visible))
-        return sc_mod.ScreenCaptureResult(
-            png_bytes=png_bytes, width=220, height=260, drm_black_warning=False, low_res_warning=False
-        )
-
-    monkeypatch.setattr(sc_mod, "capture_screen_png", _mock_ok)
-    pinned_res = bridge.capture_from_addon("direct_photo", True)
-    assert pinned_res["cancelled"] is False and pinned_res["target"] == "direct_photo"
-    assert addon_win.visible is True and main_win.visible is False
-    assert any("df11:addon-capture" in s for s in main_win.js_calls)
-
-    consumed = bridge.consume_addon_capture()
-    assert consumed is not None and consumed["target"] == "direct_photo" and consumed["directPhotoId"].startswith("direct-")
-    assert bridge.consume_addon_capture() is None
-
-    # 4. Successful snip with keep_pinned=False closes floating add-on and restores main Studio window automatically
-    unpinned_res = bridge.capture_from_addon("raw_face", False)
-    assert unpinned_res["cancelled"] is False and unpinned_res["target"] == "raw_face"
-    assert addon_win.visible is False and main_win.visible is True
-    consumed_face = bridge.consume_addon_capture()
-    assert consumed_face is not None and consumed_face["target"] == "raw_face"
-
-    # 5. Closing add-on with Alt+F4 while running cancels disposal (pywebview Event.set() -> should_cancel=True when handler returns False)
-    #    and restores main; app shutdown returns True (should_cancel=False) and destroys add-on cleanly without leaving zombie processes.
-    from webview.event import Event as WebviewEvent
-
-    closing_evt = WebviewEvent(addon_win, should_lock=True)
-    closing_evt += bridge._on_addon_closing
-
-    bridge.open_capture_addon("direct_photo", "light")
-    should_cancel_while_running = closing_evt.set()
-    assert should_cancel_while_running is True
-    assert addon_win.destroyed is False and addon_win.visible is False and main_win.visible is True
-
-    bridge._shutdown_windows()
-    assert bridge._on_addon_closing() is True
-    assert addon_win.destroyed is True
+    ctrl_esc = _ClipStateController()
+    ctrl_esc.on_down((50, 50), shift=False, now=4.0)
+    ctrl_esc.on_move((180, 200), shift=False, now=4.1)
+    ctrl_esc.on_up((180, 200), shift=False, now=4.2)
+    assert ctrl_esc.on_key("Escape") is True
+    assert ctrl_esc.closed is True and ctrl_esc.cancelled is True and ctrl_esc.accepted is None
 
 
-def test_capture_classic_white_layer_addon_and_staged_crop_promotion_zero_ai(
+def test_capture_classic_white_layer_busy_lock_and_staged_crop_promotion_zero_ai(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import backend.core.screen_capture as sc_mod
@@ -352,10 +301,12 @@ def test_capture_classic_white_layer_addon_and_staged_crop_promotion_zero_ai(
     import backend.services.vision as vis_mod
     from backend.bridge import StudioBridge
 
+    assert sc_mod.DWM_HIDE_SETTLE_SECONDS >= 0.24, "DWM fade-out needs >=240ms settle so app never appears in snap"
+
     class _TrackedWin:
         def __init__(self, name: str) -> None:
             self.name = name
-            self.visible = name == "main"
+            self.visible = True
             self.js_calls: list[str] = []
 
         def hide(self) -> None:
@@ -374,50 +325,52 @@ def test_capture_classic_white_layer_addon_and_staged_crop_promotion_zero_ai(
             self.js_calls.append(script)
 
     main_win = _TrackedWin("main")
-    addon_win = _TrackedWin("addon")
     bridge = StudioBridge(
         vault_dir=tmp_path / "vault",
         export_dir=tmp_path / "exports",
         db_path=tmp_path / "state.sqlite3",
     )
     bridge._attach_window(main_win)
-    bridge._attach_addon_window(addon_win)
+    assert not hasattr(bridge, "open_capture_addon"), "Mini-Capturador floating addon must be completely removed"
+    assert not hasattr(bridge, "capture_from_addon"), "Mini-Capturador floating addon must be completely removed"
+    assert not hasattr(bridge, "consume_addon_capture"), "Mini-Capturador floating addon must be completely removed"
+
+    # Re-entrancy guard: if _capture_busy_lock is already held, capture_screen_region returns cancelled cleanly
+    assert bridge._capture_busy_lock.acquire(blocking=False) is True
+    try:
+        busy_res = bridge.capture_screen_region("direct_photo")
+        assert busy_res == {"cancelled": True}
+    finally:
+        bridge._capture_busy_lock.release()
 
     cap_im = Image.new("RGBA", (220, 260), (18, 24, 38, 255))
     arr = np.asarray(cap_im).copy()
     arr[35:255, 55:165] = (212, 168, 142, 255)
     png_bytes = _encode_png(Image.fromarray(arr, mode="RGBA"))
 
-    monkeypatch.setattr(
-        sc_mod,
-        "capture_screen_png",
-        lambda *_a, **_kw: sc_mod.ScreenCaptureResult(
-            png_bytes=png_bytes, width=220, height=260, drm_black_warning=False, low_res_warning=False
-        ),
-    )
+    seen_host_windows: list[Any] = []
 
-    # 1. Add-on capture with Blanco DF11 (direct_bg_replace=True) runs 0% AI and echoes directBgReplace + bgMode
+    def _mock_snap(*, host_window: Any = None, **_kw: Any) -> sc_mod.ScreenCaptureResult:
+        seen_host_windows.append(host_window)
+        return sc_mod.ScreenCaptureResult(
+            png_bytes=png_bytes, width=220, height=260, drm_black_warning=False, low_res_warning=False
+        )
+
+    monkeypatch.setattr(sc_mod, "capture_screen_png", _mock_snap)
+
+    # 1. Direct capture with Capa Blanca DF11 (directBgReplace=True) passes main_win to capture_screen_png and runs 0% AI
     def _forbid_onnx(*_a: object, **_kw: object) -> None:
-        raise AssertionError("ONNX forbidden on Blanco DF11 capture")
+        raise AssertionError("ONNX forbidden on Capa Blanca DF11 capture")
 
     monkeypatch.setattr(vis_mod, "_run_session", _forbid_onnx)
     monkeypatch.setattr(vis_mod, "_get_ort", _forbid_onnx)
     monkeypatch.setattr(vis_mod, "ensure_model", _forbid_onnx)
-    opened = bridge.open_capture_addon("direct_photo", "dark", True)
-    assert opened == {"addonOpen": True, "target": "direct_photo"}
-    assert any("true" in s for s in addon_win.js_calls)
 
-    res = bridge.capture_from_addon("direct_photo", True, True)
+    res = bridge.capture_screen_region("direct_photo", {"directBgReplace": True, "bgMode": "white_df11"})
     assert res["cancelled"] is False
-    # Restoring before consumption re-notifies main window so pending Blanco DF11 capture is never lost
-    main_win.js_calls.clear()
-    bridge.restore_from_capture_addon()
-    assert any("df11:addon-capture" in s for s in main_win.js_calls)
-
-    consumed = bridge.consume_addon_capture()
-    assert consumed is not None
-    assert consumed["directBgReplace"] is True
-    assert consumed["bgMode"] == "white_df11"
+    assert seen_host_windows == [main_win], "Main window must be passed to capture_screen_png to hide/restore"
+    assert res["directBgReplace"] is True
+    assert res["bgMode"] == "white_df11"
 
     # 2. Promoting a staged crop from Modo Capas rescues raw bytes to Foto Directa with 0% AI
     monkeypatch.setattr(sw_mod, "suggest_safe_crop_viewport", lambda *_a, **_kw: hn_mod.CropViewport(1.0, 0.0, 0.0))

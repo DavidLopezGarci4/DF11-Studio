@@ -1,0 +1,111 @@
+3. Paso 1 — Foto Directa + Marco DF11 (Conmutador 0 % IA, Encuadre y Rescate)
+
+3.1 Alternancia instantánea Fondo original <-> Capa Blanca DF11 (0 % IA) y Tolerancia:
+Cómo probar: Con una captura o foto cargada en Foto Directa, alterna entre Fondo original y Capa Blanca DF11 (0 % IA), y mueve el deslizador Tolerancia (0 % a 100 %).
+
+Resultado exacto: Al pulsar Fondo original, reaparece al instante el fondo nativo del archivo/captura sin pérdida; al pulsar Capa Blanca DF11 (0 % IA), se limpia el fondo algorítmicamente sobre blanco oficial DF11. Bajar Tolerancia (25–40 %) protege al máximo camisetas blancas sobre paredes claras; subirla (65–85 %) limpia fondos complejos o degradados intensos.
+
+3.2 Pad cardinal N/S/E/O, Zoom, Ajustar a bordes y 0,0:
+Cómo probar: Arrastra la foto en el lienzo central, usa la rueda del ratón, pulsa las flechas del teclado (y Shift + Flecha para pasos de 5 px), desmarca y vuelve a marcar Ajustar a bordes y pulsa 0,0.
+
+Resultado exacto: Con Ajustar a bordes activo, X: e Y: quedan bloqueados matemáticamente al borde de la ventana interior (224×278) para impedir huecos vacíos bajo el marco blanco. 0,0 devuelve el retrato al centro exacto.
+
+3.3 Botón de rescate Foto Directa (0 % IA) desde Zona de corte:
+Cómo probar: Estando en Modo Capas (Cara + Camiseta), pega (Ctrl+V) o sube un retrato que en realidad ya trae la camiseta que quieres conservar. En la barra esmeralda de Zona de corte, pulsa Foto Directa (0 % IA).
+
+Resultado exacto: Sin ejecutar ningún modelo de IA, los bytes originales pasan intactos a Foto Directa + Marco DF11 (conservando incluso el UID si el nombre de archivo era numérico o r-).
+
+
+4. Paso 1 — Modo Capas (Cara + Camiseta), Cuello y Armonización
+
+4.1 Extracción de Cabeza + Cuello y Biblioteca de Caras:
+Cómo probar: En Modo Capas, sube una foto de un jugador, encuadra el rostro en la Zona de corte y pulsa Confirmar y extraer cara. Escribe un nombre y pulsa Guardar cara.
+Resultado exacto: Se aísla la cabeza y el cuello con base anatómica suave, aparece en la tira de miniaturas de caras guardadas y se auto-acopla (Auto-acoplar al cuello) sobre la camiseta activa.
+
+4.2 Controles Zoom, Cuello (0 %–150 %) y Luz DF11:
+Cómo probar: Varía Cuello del 70 % al 130 % y activa/desactiva Luz DF11.
+
+Resultado exacto: Cuello ensancha o estrecha progresivamente la unión anatómica dentro del escote sin desbordar por fuera de la camiseta; Luz DF11 equilibra luminancia y croma en espacio perceptual OKLab respetando el tono de piel original (protección de melanina).
+
+
+5. Paso 1 — Remix de Fichas Existentes del Pack FM (260×310 o 220×276)
+
+5.1 Cambiar camiseta, Cambiar cara y Ficha -> Pure (0 % IA):
+Cómo probar: Pulsa Ficha FM en Paso 1 y selecciona cualquier PNG 260×310 (Classic) o 220×276 (Pure). Si el archivo se llama p. ej. 29184012.png, observa el campo UID de Paso 4. Alterna los botones Cambiar camiseta, Cambiar cara (y pulsa Guardar camiseta en catálogo) y Ficha -> Pure (0 % IA).
+
+Resultado exacto: El UID 29184012 se autorrellena en Paso 4. Cambiar camiseta conserva la cabeza de la ficha y le viste la plantilla elegida en Paso 2; Cambiar cara aísla el torso de la ficha para ponerle otra cara; Ficha -> Pure (0 % IA) desmezcla el bisel 3D Classic y conmuta la vista a DF11 Pure (220×276) con 0 % IA.
+
+
+6. Paso 2 — Camiseta / Traje (Plantilla, Staff, #ID Club y Temporadas)
+
+6.1 Pestañas Plantilla vs Staff, buscador, edición en línea e insignia ACTIVA:
+Cómo probar: Abre el acordeón Paso 2, alterna entre Plantilla y Staff, filtra por texto o #ID de club (p. ej. 1736), edita temporada (25/26 / 26/27) y marca una equipación como ACTIVA del club. Prueba también la papelera de borrado con confirmación en 2 clics.
+
+Resultado exacto: Solo aparecen las categorías correspondientes (Plantilla o Staff). Marcar una camiseta como ACTIVA para un #ClubID desmarca automáticamente la temporada anterior de ese mismo club para que el sincronizador de Regens use siempre la equipación vigente.
+
+
+7. Paso 3 — Fondos de Estudio, Personalizado, Extraído y Bokeh
+
+7.1 Presets, __keep_original__, Subir fondo, Extraer de foto y Bokeh:
+Cómo probar: Abre Paso 3 estando en Classic o Dual (con Vista Classic seleccionada). Cambia entre Blanco Oficial DF11, Estudio Perla, Estadio Nocturno, Túnel de Vestuarios y Despacho Staff, y mueve Desenfoque (Bokeh) (0–24 px). Si estás en Foto Directa, prueba Subir fondo con cualquier imagen propia.
+
+Resultado exacto: En Foto Directa, elegir cualquier preset o subir un fondo personalizado activa automáticamente la sustitución 0 % IA del fondo del recorte y renderiza el jugador sobre el nuevo fondo con el radio de Bokeh elegido. Elegir «Mantener fondo original de la captura / foto» restaura al instante el fondo nativo del recorte. (Si en Paso 4 eliges Solo Pure, Paso 3 informa que Pure exige Alfa = 0 oficial).
+
+
+8. Paso 4 — Exportación Classic, Pure y Dual (Ambas) + config.xml
+
+8.1 Selector de Formato (Classic 260×310, Pure 220×276, Dual (Ambas)) y Calidad óptica:
+Cómo probar: Abre Paso 4. Conmuta entre Classic 260×310, Pure 220×276 y Dual (Ambas). En Dual, pulsa el conmutador superior del lienzo (Vista Classic 260×310 <-> Vista Pure 220×276) y sube Calidad óptica al 45 %.
+
+Resultado exacto: En Pure, el formato se bloquea automáticamente a PNG sin pérdida y el lienzo muestra el damero de transparencia 220×276 sin marco. Al alternar entre Vista Classic y Vista Pure en Dual, el rostro y los hombros permanecen geométricamente clavados al sub-píxel (cero saltos de escala) y el realce óptico WGIF limpia macrobloques sin halos blancos.
+
+8.2 Destino 1. Nuestras creaciones vs 2. Pack de Faces FM en modo Dual (Ambas):
+Cómo probar:
+Elige 1. Nuestras creaciones + Dual (Ambas), deja el nombre vacío o escribe Mi Jugador Estrella y pulsa Guardar Dual (Classic + Pure).
+Cambia a 2. Pack de Faces FM + Dual (Ambas), selecciona dos carpetas temporales distintas (Carpeta Classic y Carpeta Pure), prueba primero un UID inválido (abc) y luego un UID válido (29184012 o r-2000123456) y exporta. (Prueba también a poner la misma carpeta en ambos campos).
+
+Resultado exacto:
+En 1. Nuestras creaciones, exporta libremente sin config.xml: en la carpeta Classic se guarda <nombre>.png (260×310, 72 DPI) y en la carpeta Pure <nombre>.png (220×276, 72 DPI, Alfa = 0, borde exterior 0, feather 1 px).
+En 2. Pack de Faces FM, rechaza abc y la misma carpeta en ambos destinos con aviso claro; con 29184012 escribe 29184012.png en cada carpeta y crea/fusiona atómicamente el config.xml de ambas carpetas añadiendo <record from="29184012" to="graphics/pictures/person/29184012/portrait"/> sin duplicar ni borrar iconos/entradas previas.
+
+
+9. Herramienta Superior 2 — Extraer Cara (Biblioteca Dedicada)
+Cómo probar: Cambia a la pestaña Extraer Cara de la barra de herramientas del Estudio, carga una foto, ajusta el zoom con la rueda en la mirilla, extrae y guarda con nombre en la biblioteca; luego pulsa Usar en Estudio sobre cualquier miniatura guardada.
+
+*Resultado exacto: El PNG limpio de cabeza y cuello queda persistido en vault/extracted_faces/ y al pulsar Usar en Estudio salta automáticamente a Montaje Paso a Paso -> Paso 1 acoplado sobre la camiseta actual.
+
+
+10. Herramienta Superior 3 — Extraer Camiseta (2× SSAA y Simetrización)
+Cómo probar: Cambia a Extraer Camiseta, sube una foto de equipación o ficha DF11, encuadra el torso hacia la guía verde inferior, ajusta Simetrizar hombros, Realce de hombros y Nitidez textil, pulsa Extraer vista previa de camiseta, rellena Nombre / #ID Club / Categoría (Plantilla o Staff) / Temporada y pulsa Guardar en catálogo.
+
+*Resultado exacto: Se elimina cabeza, cuello y piel dejando el escote limpio en alpha = 0 con antialiasing 2× SSAA, se detectan ancho y vértice del cuello (apexY) y la nueva plantilla aparece inmediatamente en Paso 2.
+
+
+11. Vista Superior — Sincronizador NG_Regens (Lote + Live Sync + Shrink Guard)
+Cómo probar: Pulsa Sincronizador NG_Regens en la cabecera superior. Selecciona una carpeta origen con retratos r-<UID>.png (o estándar <UID>.png), elige modo Classic, Pure o Dual (configurando carpetas destino separadas en Dual), revisa la tabla de emparejamiento por #ClubID y:
+Pulsa Editar en Estudio en una fila para saltar al Estudio con ese Regen precargado.
+Ejecuta Sincronizar lote y comprueba los contadores (renderizados, en caché incremental, config.xml). Vuelve a pulsarlo sin tocar archivos.
+Activa Live Disk Sync y borra de golpe > 20 % de imágenes en el origen (o selecciona una ruta dentro de OneDrive).
+
+*Resultado exacto:
+En la segunda pasada sin cambios, el motor incremental SQLite (sync_state.sqlite3) salta el 100 % en caché en milisegundos sin re-renderizar.
+Si la carpeta está bajo OneDrive, muestra banner preventivo ámbar sobre archivos bajo demanda.
+Al caer más del 20 % del origen, Shrink Guard bloquea la purga masiva accidental del config.xml hasta confirmación explícita.
+
+
+12. Historial No Destructivo (Ctrl+Z / Ctrl+Y / Supr / Ctrl+V)
+Cómo probar: Haz varios cambios de posición, fondo (Fondo original <-> Capa Blanca DF11), camiseta y deslizador (arrastrando de principio a fin). Pulsa Ctrl+Z repetidamente, luego Ctrl+Y, después Supr (vaciar lienzo) y de nuevo Ctrl+Z. Prueba Ctrl+V con el foco dentro de un campo de texto vs fuera de campos de texto.
+
+*Resultado exacto: Un arrastre completo de deslizador o escritura seguida cuenta como 1 único paso de Deshacer. Supr limpia el lienzo de forma reversible (Ctrl+Z recupera la composición exacta). Ctrl+V pega texto normalmente si estás escribiendo en un <input>, y pega imagen al lienzo cuando no hay ningún campo de texto enfocado.
+
+
+13. Tema Claro/Oscuro, FAQ, Acerca de y Salud de Nodos TecnoRed
+Cómo probar:
+Conmuta el botón Sol / Luna en la cabecera, cierra la app y vuelve a abrirla.
+Abre Preguntas Frecuentes (FAQ): filtra en el buscador por Capa Blanca o Pure y abre las preguntas de Exportación y Formatos y Captura.
+Abre Acerca de (v1.6.0): revisa la pestaña Novedades y entra en Arquitectura y Salud (TecnoRed) -> haz clic sobre cada nodo del grafo y pulsa Actualizar diagnóstico.
+
+*Resultado exacto:
+El tema Claro/Oscuro persiste entre reinicios gracias al perfil estable WebView2 (private_mode=False).
+El FAQ (Split-View en escritorio) documenta los dos modos de fondo en captura (Fondo original vs Capa Blanca DF11 0 % IA), DF11 Pure y Dual.
+En TecnoRed, los 6 nodos aparecen interconectados y con telemetría real en verde (Salud global: 100 %, latencia en vivo y desglose de motor 0 % IA, puente IPC, SQLite v4 y modelos ONNX en disco).

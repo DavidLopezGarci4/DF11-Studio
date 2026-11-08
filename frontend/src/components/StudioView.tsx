@@ -82,8 +82,6 @@ interface Props {
   hideInternalToolbar?: boolean;
   initialHotkeyEnabled?: boolean;
   externalCaptureReq?: { seq: number; target?: CaptureTarget; explicit?: boolean; directBgReplace?: boolean } | null;
-  onCaptureTargetHintChange?: (target: CaptureTarget) => void;
-  onCaptureBgReplaceHintChange?: (directBgReplace: boolean) => void;
 }
 
 const UID_RE = /^(?:r-)?[0-9]{1,12}$/;
@@ -416,8 +414,6 @@ export default function StudioView({
   hideInternalToolbar = false,
   initialHotkeyEnabled = false,
   externalCaptureReq = null,
-  onCaptureTargetHintChange,
-  onCaptureBgReplaceHintChange,
 }: Props) {
   const [internalToolTab, setInternalToolTab] = useState<ToolTab>('composer');
   const toolTab = controlledToolTab ?? internalToolTab;
@@ -1775,14 +1771,6 @@ export default function StudioView({
       ? 'direct_photo'
       : 'raw_face';
 
-  useEffect(() => {
-    onCaptureTargetHintChange?.(defaultCaptureTarget);
-  }, [defaultCaptureTarget, onCaptureTargetHintChange]);
-
-  useEffect(() => {
-    onCaptureBgReplaceHintChange?.(Boolean(isDirectMode && !snap.directPhotoIsPreCutout && snap.directBgReplace));
-  }, [isDirectMode, snap.directPhotoIsPreCutout, snap.directBgReplace, onCaptureBgReplaceHintChange]);
-
   const applyCapturedPayload = useCallback(
     (res: ScreenCapturePayload, fromExplicitMenu: boolean, matchesComposePayload: boolean) => {
       if (!res || res.cancelled) return;
@@ -1887,41 +1875,6 @@ export default function StudioView({
     },
     [busy, defaultCaptureTarget, composePayload, snap.directBgReplace, snap.bgMode, applyCapturedPayload],
   );
-
-  const consumeAddonCapture = useCallback(async () => {
-    try {
-      const pending = await callBridge<ScreenCapturePayload | null>('consume_addon_capture');
-      if (pending && !pending.cancelled) {
-        applyCapturedPayload(pending, true, false);
-      }
-    } catch {
-      /* ignore outside pywebview */
-    }
-  }, [applyCapturedPayload]);
-
-  useEffect(() => {
-    void consumeAddonCapture();
-    const onAddonCapture = () => {
-      void consumeAddonCapture();
-    };
-    window.addEventListener('df11:addon-capture', onAddonCapture);
-    return () => window.removeEventListener('df11:addon-capture', onAddonCapture);
-  }, [consumeAddonCapture]);
-
-  const handleOpenCaptureAddon = useCallback(async () => {
-    setCaptureMenuOpen(false);
-    setErrorMsg('');
-    try {
-      const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-      const args: unknown[] = [defaultCaptureTarget, theme];
-      if (defaultCaptureTarget === 'direct_photo' && isDirectMode && !snap.directPhotoIsPreCutout && snap.directBgReplace) {
-        args.push(true);
-      }
-      await callBridge('open_capture_addon', ...args);
-    } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'No se pudo abrir el Mini-Capturador flotante.');
-    }
-  }, [defaultCaptureTarget, isDirectMode, snap.directPhotoIsPreCutout, snap.directBgReplace]);
 
   const handleToggleHotkey = useCallback(async () => {
     const next = !captureHotkey;
@@ -2299,7 +2252,7 @@ export default function StudioView({
                 aria-label="Capturar pantalla"
                 disabled={busy}
                 onClick={() => void handleScreenCapture()}
-                title="Recorte nativo de pantalla en caliente (oculta la app automáticamente; Shift bloquea 260×310)"
+                title="Recorte nativo de pantalla en 2 pasos (Seleccionar -> Reencuadrar -> Intro / Esc; oculta la app automáticamente; Shift bloquea 260×310)"
                 className="px-3 py-1.5 text-xs font-medium rounded-l-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white inline-flex items-center gap-1.5 transition"
               >
                 <Scissors className="w-3.5 h-3.5" /> Capturar
@@ -2312,22 +2265,9 @@ export default function StudioView({
                 disabled={busy}
                 onClick={() => setCaptureMenuOpen((o) => !o)}
                 title="Elegir destino de captura o abrir menú"
-                className="px-2 py-1.5 text-xs font-medium border-l border-emerald-700/60 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white inline-flex items-center transition"
+                className="px-2 py-1.5 text-xs font-medium rounded-r-lg border-l border-emerald-700/60 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white inline-flex items-center transition"
               >
                 <ChevronDown className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                aria-label="Abrir Mini-Capturador flotante"
-                disabled={busy}
-                onClick={() => void handleOpenCaptureAddon()}
-                title="Mini-Capturador flotante: oculta la ventana principal y deja solo una barra mínima para ver y capturar toda tu pantalla"
-                className="px-2 py-1.5 text-xs font-medium rounded-r-lg border-l border-emerald-700/60 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white inline-flex items-center justify-center transition"
-              >
-                <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" stroke="currentColor" strokeWidth="1.4" strokeOpacity="0.82" />
-                  <rect x="7.75" y="4.5" width="5" height="3.5" rx="0.9" fill="currentColor" />
-                </svg>
               </button>
 
               {captureMenuOpen && (
@@ -2339,23 +2279,11 @@ export default function StudioView({
                   <button
                     type="button"
                     role="menuitem"
-                    onClick={() => void handleOpenCaptureAddon()}
-                    className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between gap-2 font-medium text-emerald-700 dark:text-emerald-400"
-                  >
-                    <span>Mini-Capturador flotante</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20">
-                      Pantalla libre
-                    </span>
-                  </button>
-                  <div className="my-1 border-t border-slate-200 dark:border-slate-800" />
-                  <button
-                    type="button"
-                    role="menuitem"
                     onClick={() => void handleScreenCapture('direct_photo', true, false)}
                     className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between gap-2"
                   >
                     <span>Foto Directa + Marco DF11</span>
-                    <span className="text-[10px] text-slate-400">Fondo orig. · 0% IA</span>
+                    <span className="text-[10px] text-slate-400">Fondo original</span>
                   </button>
                   <button
                     type="button"
@@ -2364,7 +2292,7 @@ export default function StudioView({
                     className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between gap-2 text-emerald-700 dark:text-emerald-400"
                   >
                     <span>Foto Directa · Capa Blanca DF11</span>
-                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400">Blanco · 0% IA</span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400">Capa blanca</span>
                   </button>
                   <button
                     type="button"
@@ -2811,11 +2739,11 @@ export default function StudioView({
                   <button
                     type="button"
                     disabled={busy}
-                    title="Enmarcar este recorte directamente en DF11 sin extraer capas ni usar IA (0% IA)"
+                    title="Enmarcar este recorte directamente en DF11 sin extraer capas"
                     onClick={() => void handlePromoteStagedCropToDirectPhoto(false)}
                     className="px-2 py-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 font-medium whitespace-nowrap transition"
                   >
-                    Foto Directa (0% IA)
+                    Foto Directa
                   </button>
                   <button
                     type="button"
@@ -3124,18 +3052,18 @@ export default function StudioView({
                           <button
                             type="button"
                             aria-pressed={snap.directBgReplace && snap.bgMode === 'white_df11'}
-                            title="Limpia el contorno del jugador con 0% IA y aplica la Capa Blanca Oficial DF11"
+                            title="Limpia fondos suaves o de estudio y aplica la Capa Blanca Oficial DF11"
                             onClick={() => {
                               if (activeExportVariant === 'dual') setDualPreviewSide('classic');
                               commitSnap((s) => ({ ...s, directBgReplace: true, bgMode: 'white_df11', bgBlur: 0 }));
                             }}
                             className={segBtn(snap.directBgReplace && snap.bgMode === 'white_df11')}
                           >
-                            Capa Blanca DF11 (0% IA)
+                            Capa Blanca DF11
                           </button>
                           {snap.directBgReplace && snap.bgMode !== 'white_df11' && (
                             <span className="px-1.5 py-0.5 rounded bg-emerald-600/15 text-emerald-800 dark:text-emerald-300 text-[10px] font-medium">
-                              Fondo Paso 3 (0% IA)
+                              Fondo Paso 3
                             </span>
                           )}
                         </>
@@ -3143,7 +3071,7 @@ export default function StudioView({
                     </div>
                   ) : (
                     <span className="text-emerald-900 dark:text-emerald-200 font-medium inline-flex items-center gap-1.5">
-                      <Scissors className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Contorno Pure (0% IA):
+                      <Scissors className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Contorno Pure:
                     </span>
                   )}
                   {!snap.directPhotoIsPreCutout && (activeExportVariant !== 'classic' || snap.directBgReplace) && (
@@ -3198,10 +3126,10 @@ export default function StudioView({
                           type="button"
                           disabled={busy}
                           onClick={() => void handlePickFacepackForPure()}
-                          title="Desmezcla el bisel DF11 Classic 260×310 y limpia el contorno para DF11 Pure con 0% IA"
+                          title="Desmezcla el bisel DF11 Classic 260×310 y limpia el contorno para DF11 Pure"
                           className="px-2 py-1 rounded-md border border-emerald-500/40 bg-white dark:bg-slate-900 hover:border-emerald-500 text-emerald-700 dark:text-emerald-300 font-medium transition"
                         >
-                          Ficha → Pure (0% IA)
+                          Ficha → Pure
                         </button>
                       </div>
                     </div>
@@ -3686,7 +3614,7 @@ export default function StudioView({
                         }}
                         className="accent-emerald-600"
                       />
-                      Sustituir fondo en Classic (0% IA)
+                      Sustituir fondo en Classic
                     </label>
                   )}
                 </div>
@@ -3819,7 +3747,7 @@ export default function StudioView({
                     ? 'Pure 220×276 · Alfa = 0'
                     : activeExportVariant === 'dual'
                     ? 'Dual: 260×310 + 220×276'
-                    : 'Alpha = 0 · 0% IA'}
+                    : 'Alpha = 0 · Opaco'}
                 </span>
               </div>
 

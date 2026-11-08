@@ -25,6 +25,7 @@ from backend.core.compositor import (
     pad_pure_to_df11_canvas,
 )
 from backend.core.dsp import (
+    _wgif_single_channel,
     fast_tent_f32,
     linear_to_srgb_u8,
     oklab_to_srgb,
@@ -147,6 +148,107 @@ def _frame_to_df11_stage(
     return stage
 
 
+def _flood_fill_mask_np(domain: np.ndarray, seeds: np.ndarray, eight_conn: bool = True) -> np.ndarray:
+    """Pure-NumPy O(N) barrier-scanline flood fill inside `domain` from `seeds` (zero scipy dependency)."""
+    dom = np.asarray(domain, dtype=bool)
+    cur = np.asarray(seeds, dtype=bool) & dom
+    if not np.any(cur):
+        return cur
+    bar = (~dom).astype(np.int32)
+    bh = np.cumsum(bar, axis=1)
+    bv = np.cumsum(bar, axis=0)
+    inf_val = np.int32(1 << 29)
+    neg_inf = np.int32(-1)
+    for _ in range(18):
+        prev = cur
+        # Left-to-right (bh non-decreasing: minimum.accumulate) & right-to-left (maximum.accumulate)
+        s_h_min = np.where(cur, bh, inf_val)
+        s_h_max = np.where(cur, bh, neg_inf)
+        cur = cur | ((np.minimum.accumulate(s_h_min, axis=1) == bh) & dom)
+        cur = cur | ((np.maximum.accumulate(s_h_max[:, ::-1], axis=1)[:, ::-1] == bh) & dom)
+        # Top-to-bottom (bv non-decreasing: minimum.accumulate) & bottom-to-top (maximum.accumulate)
+        s_v_min = np.where(cur, bv, inf_val)
+        s_v_max = np.where(cur, bv, neg_inf)
+        cur = cur | ((np.minimum.accumulate(s_v_min, axis=0) == bv) & dom)
+        cur = cur | ((np.maximum.accumulate(s_v_max[::-1, :], axis=0)[::-1, :] == bv) & dom)
+        if eight_conn:
+            p = np.pad(cur, 1, mode="constant", constant_values=False)
+            diag = p[:-2, :-2] | p[:-2, 2:] | p[2:, :-2] | p[2:, 2:]
+            cur = cur | (diag & dom)
+        if np.array_equal(cur, prev):
+            break
+    return cur
+
+
+def _erode_3x3_bool_np(mask: np.ndarray) -> np.ndarray:
+    p = np.pad(np.asarray(mask, dtype=bool), 1, mode="edge")
+    return (
+        p[1:-1, 1:-1]
+        & p[:-2, 1:-1]
+        & p[2:, 1:-1]
+        & p[1:-1, :-2]
+        & p[1:-1, 2:]
+        & p[:-2, :-2]
+        & p[:-2, 2:]
+        & p[2:, :-2]
+        & p[2:, 2:]
+    )
+
+
+def _build_corner_bridged_vision_card(arr_2x: np.ndarray) -> Image.Image:
+    """Extrapolate canvas background from top-left/top-right corners so torso crops never form a synthetic card box."""
+    h2, w2 = arr_2x.shape[:2]
+    alpha_u8 = arr_2x[:, :, 3]
+    if int(alpha_u8.min()) == 255:
+        return Image.fromarray(arr_2x, mode="RGBA")
+    ys_op, xs_op = np.where(alpha_u8 > 200)
+    if len(ys_op) < 32:
+        bg = Image.new("RGBA", (w2, h2), (242, 244, 248, 255))
+        bg.alpha_composite(Image.fromarray(arr_2x, mode="RGBA"))
+        return bg
+
+    y0, y1 = int(ys_op.min()), int(ys_op.max())
+    x0, x1 = int(xs_op.min()), int(xs_op.max())
+    rgb = arr_2x[:, :, :3].astype(np.float32)
+
+    y_band1 = min(y1 + 1, y0 + max(10, min(28, (y1 - y0) // 4)))
+    span_w = max(1, x1 - x0 + 1)
+    side_w = max(8, min(52, span_w // 5))
+
+    tl_patch = rgb[y0:y_band1, x0 : min(x1 + 1, x0 + side_w)]
+    tr_patch = rgb[y0:y_band1, max(x0, x1 + 1 - side_w) : x1 + 1]
+    tl_med = np.median(tl_patch.reshape(-1, 3), axis=0) if tl_patch.size else np.array([244.0, 245.0, 247.0], dtype=np.float32)
+    tr_med = np.median(tr_patch.reshape(-1, 3), axis=0) if tr_patch.size else tl_med
+
+    # Smooth horizontal gradient bridging left corner to right corner across the central neck opening
+    t_x = np.linspace(0.0, 1.0, w2, dtype=np.float32)[:, None]
+    top_bridge_row = (1.0 - t_x) * tl_med[None, :] + t_x * tr_med[None, :]
+
+    canvas = np.empty((h2, w2, 3), dtype=np.float32)
+    canvas[:, :, :] = top_bridge_row[None, :, :]
+
+    # Replicate actual left/right border columns of the placed rectangle outward on rows [y0:y1+1]
+    for y in range(y0, y1 + 1):
+        row_a = alpha_u8[y] > 200
+        if np.any(row_a):
+            rx0 = int(np.argmax(row_a))
+            rx1 = int(w2 - 1 - np.argmax(row_a[::-1]))
+            l_col = np.median(rgb[y, rx0 : min(w2, rx0 + 6)], axis=0)
+            r_col = np.median(rgb[y, max(0, rx1 - 5) : rx1 + 1], axis=0)
+            canvas[y, :rx0] = l_col
+            canvas[y, rx1 + 1 :] = r_col
+            canvas[y, rx0 : rx1 + 1] = rgb[y, rx0 : rx1 + 1]
+
+    if y1 + 1 < h2:
+        canvas[y1 + 1 :, :] = canvas[y1 : y1 + 1, :]
+
+    # Blend semi-transparent edge pixels of arr_2x smoothly over extrapolated canvas
+    a_f = (alpha_u8.astype(np.float32) / 255.0)[:, :, None]
+    comp_rgb = np.clip(np.round(rgb * a_f + canvas * (1.0 - a_f)), 0.0, 255.0).astype(np.uint8)
+    out_rgba = np.concatenate([comp_rgb, np.full((h2, w2, 1), 255, dtype=np.uint8)], axis=-1)
+    return Image.fromarray(out_rgba, mode="RGBA")
+
+
 def _apply_oklab_textile_crispness(rgb_2x: np.ndarray, fg_mask: np.ndarray, amount: float) -> np.ndarray:
     """Enhance micro-contrast of crests, sponsors, and stitching strictly in float32 OKLab Lightness."""
     amt = float(np.clip(amount, 0.0, 1.0)) if math.isfinite(float(amount)) else 0.35
@@ -173,7 +275,7 @@ def sanitize_shirt_template_rgba(
     pan_y: float = 0.0,
     detail_crispness: float = 0.35,
 ) -> Image.Image:
-    """2x super-sampled (520x620) shirt extractor with Guided Collar Matting and OKLab L micro-sharpening."""
+    """2x super-sampled (520x620) shirt extractor with Corner-Bridged Vision, WGIF Matting, and Pure-NumPy Topology."""
     zoom_c, px_c, py_c = _sanitize_viewport(zoom, pan_x, pan_y)
     raw_src_rgba = raw_rgba.convert("RGBA")
     raw_src_a = np.asarray(raw_src_rgba, dtype=np.uint8)[:, :, 3]
@@ -215,14 +317,12 @@ def sanitize_shirt_template_rgba(
     rgb_f = arr[:, :, :3].astype(np.float32)
     raw_a = arr[:, :, 3].astype(np.float32) / 255.0
 
-    if int(arr[:, :, 3].min()) < 255:
-        vision_card = Image.new("RGBA", (w2, h2), (136, 138, 142, 255))
-        vision_card.alpha_composite(card_2x)
-    else:
-        vision_card = card_2x
+    vision_card = _build_corner_bridged_vision_card(arr) if int(arr[:, :, 3].min()) < 255 else card_2x
 
     probs = vision_mod.segment_portrait_classes(vision_card)
+    p_bg = probs[:, :, vision_mod.CLASS_BG]
     p_clothes = probs[:, :, vision_mod.CLASS_CLOTHES]
+    p_others = probs[:, :, vision_mod.CLASS_OTHERS]
     p_skin_hair = (
         probs[:, :, vision_mod.CLASS_FACE_SKIN]
         + probs[:, :, vision_mod.CLASS_BODY_SKIN]
@@ -239,11 +339,23 @@ def sanitize_shirt_template_rgba(
     xx = (xx2 + 0.5) / ss
     yy = (yy2 + 0.5) / ss
 
-    # Edge-Guided Collar Matting: prevent coarse 256x256 MediaPipe blur from chewing crisp colored/white collar ribs
+    # Unify clothes + lower-torso accessories (ties/lapels/zippers for Staff templates) below y > 182
+    tie_ramp = np.clip((yy - 182.0) / 14.0, 0.0, 1.0)
+    p_garment = np.clip(p_clothes + p_others * tie_ramp * np.clip((0.35 - p_skin_hair) / 0.25, 0.0, 1.0), 0.0, 1.0)
+
+    # Edge-Guided Collar Matting (expanded down to yy <= 220 so headless torso crops with neck skin at y=168..215 are covered)
     p_skin_eff = p_skin_hair
-    neck_seed = (np.abs(xx - 130.0) < 34.0) & (yy >= 135.0) & (yy <= 198.0) & (p_skin_hair > 0.78) & (p_clothes < 0.15) & (raw_a > 0.85)
-    if int(neck_seed.sum()) >= 80:
-        band_y0, band_y1 = 166 * ss, min(h2, 238 * ss)
+    neck_seed = (
+        (np.abs(xx - 130.0) < 38.0)
+        & (yy >= 135.0)
+        & (yy <= 220.0)
+        & (p_skin_hair > 0.72)
+        & (p_garment < 0.18)
+        & (raw_a > 0.85)
+    )
+    skin_px_count = int(neck_seed.sum())
+    if skin_px_count >= 50:
+        band_y0, band_y1 = 162 * ss, min(h2, 242 * ss)
         lab_neck = vision_mod.srgb_to_oklab(np.clip(rgb_f[neck_seed] / 255.0, 0.0, 1.0).reshape(-1, 1, 3))[:, 0, :]
         skin_med = np.median(lab_neck, axis=0)
         lab_band = vision_mod.srgb_to_oklab(np.clip(rgb_f[band_y0:band_y1] / 255.0, 0.0, 1.0))
@@ -251,38 +363,106 @@ def sanitize_shirt_template_rgba(
         d_ab = np.hypot(lab_band[:, :, 1] - float(skin_med[1]), lab_band[:, :, 2] - float(skin_med[2])) * 2.6
         d_skin = np.hypot(d_l, d_ab)
         ps_band = p_skin_hair[band_y0:band_y1]
-        pc_band = p_clothes[band_y0:band_y1]
+        pc_band = p_garment[band_y0:band_y1]
         fabric_snap = (
-            np.clip((d_skin - 0.15) / 0.11, 0.0, 1.0)
-            * np.clip((0.72 - ps_band) / 0.34, 0.0, 1.0)
-            * np.clip((pc_band - 0.06) / 0.22, 0.25, 1.0)
+            np.clip((d_skin - 0.14) / 0.11, 0.0, 1.0)
+            * np.clip((0.74 - ps_band) / 0.34, 0.0, 1.0)
+            * np.clip((pc_band - 0.05) / 0.22, 0.25, 1.0)
         )
         p_skin_eff = p_skin_hair.copy()
-        p_skin_eff[band_y0:band_y1] = ps_band * (1.0 - 0.82 * fabric_snap)
+        p_skin_eff[band_y0:band_y1] = ps_band * (1.0 - 0.84 * fabric_snap)
+
+    # Exterior Background Color Suppression in OKLab (strictly seeded outside central neck channel |x-130| >= 44)
+    lab_2x = srgb_to_oklab(np.clip(rgb_f / 255.0, 0.0, 1.0))
+    bg_ext_mask = np.zeros((h2, w2), dtype=bool)
+    if not is_pre_cut:
+        ys_r, xs_r = np.where(raw_a > 0.85)
+        if len(ys_r) >= 64:
+            ry0 = float(ys_r.min()) / ss
+            rx0 = float(xs_r.min()) / ss
+            rx1 = float(xs_r.max()) / ss
+            outer_x = np.abs(xx - 130.0) >= 44.0
+            # Seed background from upper exterior air above shoulders ONLY where BiRefNet is genuinely low (< 0.35)
+            # AND MediaPipe also sees background (p_bg > 0.45) rather than garment (p_garment < 0.25)
+            upper_air_seed = (
+                outer_x
+                & (yy >= max(12.0, ry0))
+                & (yy <= min(192.0, max(186.0, ry0 + 36.0)))
+                & (raw_a > 0.85)
+                & (biref_a < 0.35)
+                & (p_bg > 0.45)
+                & (p_garment < 0.25)
+                & (p_skin_eff < 0.32)
+            )
+            # Only seed lateral margins where BiRefNet is genuinely low (< 0.30) above y <= 212 so sleeves at x=19..241 are never sampled
+            lat_margin_seed = (
+                ((xx <= max(24.0, rx0 + 6.0)) | (xx >= min(236.0, rx1 - 6.0)))
+                & (yy >= max(168.0, ry0))
+                & (yy <= 212.0)
+                & (raw_a > 0.85)
+                & (biref_a < 0.30)
+                & (p_bg > 0.50)
+                & (p_garment < 0.22)
+                & (p_skin_eff < 0.32)
+            )
+            bg_seeds = upper_air_seed | lat_margin_seed
+            if int(bg_seeds.sum()) >= 20:
+                bg_med = np.median(lab_2x[bg_seeds], axis=0)
+                d_bg = np.hypot(
+                    (lab_2x[:, :, 0] - float(bg_med[0])) * 0.85,
+                    np.hypot(lab_2x[:, :, 1] - float(bg_med[1]), lab_2x[:, :, 2] - float(bg_med[2])) * 2.3,
+                )
+                # Only suppress exterior background where BiRefNet is NOT confident (< 0.55) OR in the upper shoulder air (yy < 204)
+                # where MediaPipe has zero garment confidence (p_garment < 0.28 and p_bg > 0.52)
+                bg_domain = (
+                    (raw_a > 0.1)
+                    & (d_bg < 0.048)
+                    & (p_garment < 0.28)
+                    & ((biref_a < 0.48) | ((yy < 204.0) & (p_bg > 0.55)))
+                )
+                bg_ext_mask = _flood_fill_mask_np(bg_domain, bg_seeds, eight_conn=True)
 
     non_skin_gate = np.clip((0.36 - p_skin_eff) / 0.24, 0.0, 1.0)
-    cloth_soft = np.where(yy >= 176.0, np.clip((p_clothes - 0.30) / 0.28, 0.0, 1.0) * non_skin_gate * raw_a, 0.0)
-
-    x_mir = np.clip(w2 - 1 - np.arange(w2, dtype=np.int32), 0, w2 - 1)
-    outer_shoulder_zone = (np.abs(xx - 130.0) >= 45.0) & (yy >= 188.0)
-
-    collar_neck_zone = np.clip((52.0 - np.abs(xx - 130.0)) / 10.0, 0.0, 1.0) * np.clip((232.0 - yy) / 14.0, 0.0, 1.0)
-    collar_cloth_gate = np.clip((p_clothes - 0.90 * p_skin_eff - 0.12) / 0.42, 0.0, 1.0)
+    w_has_skin = float(np.clip(skin_px_count / 120.0, 0.15, 1.0))
+    collar_neck_zone = (
+        np.clip((52.0 - np.abs(xx - 130.0)) / 10.0, 0.0, 1.0)
+        * np.clip((232.0 - yy) / 14.0, 0.0, 1.0)
+        * w_has_skin
+    )
+    collar_cloth_gate = np.clip((p_garment - 0.90 * p_skin_eff - 0.10) / 0.40, 0.0, 1.0)
     effective_gate = collar_neck_zone * collar_cloth_gate + (1.0 - collar_neck_zone) * non_skin_gate
     effective_gate = np.where(yy < 162.0, 0.0, effective_gate)
 
-    fg_shirt = np.maximum(biref_a, cloth_soft) * effective_gate
+    cloth_conf = np.where(
+        yy >= 170.0,
+        np.clip((p_garment - 0.24) / 0.32, 0.0, 1.0) * np.clip((0.68 - p_bg) / 0.42, 0.0, 1.0) * non_skin_gate * raw_a,
+        0.0,
+    )
+    # Trust BiRefNet across the shirt body (so white-on-white sleeves where MediaPipe p_clothes drops to 0.03 stay at 1.0!),
+    # while bg_ext_mask and effective_gate cleanly remove exterior background and neck skin
+    biref_gated = biref_a
+    fg_shirt = np.maximum(biref_gated, cloth_conf) * effective_gate
+    fg_shirt = np.where(bg_ext_mask, 0.0, fg_shirt)
+
     sleeve_solid_band = fg_shirt[188 * ss :, :] > 0.65
     has_col_solid = sleeve_solid_band.any(axis=0)
     first_solid_y = np.where(has_col_solid, 188 * ss + sleeve_solid_band.argmax(axis=0), h2 - 1)
     ref_col_rgb = rgb_f[np.minimum(first_solid_y + 4, h2 - 1), np.arange(w2)]
 
+    x_mir = np.clip(w2 - 1 - np.arange(w2, dtype=np.int32), 0, w2 - 1)
+    outer_shoulder_zone = (np.abs(xx - 130.0) >= 45.0) & (yy >= 188.0)
+
     if symmetrize_shoulders:
         fg_mirror = fg_shirt[:, x_mir]
         diff_mir = np.abs(rgb_f - rgb_f[:, x_mir, :]).max(axis=-1) / 255.0
         diff_col = np.abs(rgb_f - ref_col_rgb[None, :, :]).max(axis=-1) / 255.0
-        not_bg_over_dark_sleeve = ~(has_col_solid[None, :] & (diff_col > 0.30) & (p_clothes < 0.35))
-        cloth_coherent = ((diff_mir < 0.22) | (has_col_solid[None, :] & (diff_col < 0.18))) & not_bg_over_dark_sleeve
+        not_bg_over_dark_sleeve = ~(has_col_solid[None, :] & (diff_col > 0.28) & (p_garment < 0.38))
+        cloth_coherent = (
+            ((diff_mir < 0.20) | (has_col_solid[None, :] & (diff_col < 0.16)))
+            & not_bg_over_dark_sleeve
+            & ((~bg_ext_mask) | (diff_mir < 0.08))
+            & ((biref_a[:, x_mir] > 0.65) | (p_garment > 0.28))
+        )
         need_sym = (
             outer_shoulder_zone
             & (raw_a > 0.5)
@@ -292,11 +472,6 @@ def sanitize_shirt_template_rgba(
             & cloth_coherent
         )
         fg_shirt = np.where(need_sym, np.maximum(fg_shirt, fg_mirror * 0.98), fg_shirt)
-
-    sleeve_cols = (np.abs(xx - 130.0) >= 46.0) & (yy >= 196.0) & (raw_a > 0.5) & (non_skin_gate > 0.80)
-    solid_seed = np.where(sleeve_cols & (fg_shirt > 0.58), fg_shirt, 0.0)
-    downward_solid = np.maximum.accumulate(solid_seed, axis=0)
-    fg_shirt = np.where(sleeve_cols & (yy >= 206.0), np.maximum(fg_shirt, downward_solid), fg_shirt)
 
     if shoulder_boost > 0.01:
         fg_pre_boost = fg_shirt.copy()
@@ -314,34 +489,23 @@ def sanitize_shirt_template_rgba(
                     x0_s, x1_s = 19 * ss, x_ref
                     xs_1x = (np.arange(x0_s, x1_s, dtype=np.float32) + 0.5) / ss
                     y_curve = y_anchor + slope * (float(x_ref_1x) - xs_1x)
-                    fill_zone = (
-                        (yy[:, x0_s:x1_s] >= y_curve[None, :])
-                        & (raw_a[:, x0_s:x1_s] > 0.5)
-                        & (non_skin_gate[:, x0_s:x1_s] > 0.85)
-                    )
-                    fg_shirt[:, x0_s:x1_s] = np.where(fill_zone, np.maximum(fg_shirt[:, x0_s:x1_s], 0.98), fg_shirt[:, x0_s:x1_s])
-                    last_rgb = anchor_rgb
-                    for xc in range(x1_s - 1, x0_s - 1, -1):
-                        if has_col_solid[xc]:
-                            last_rgb = fill_ref_rgb[xc]
-                        else:
-                            fill_ref_rgb[xc] = last_rgb
                 else:
                     x0_s, x1_s = x_ref + 1, 242 * ss
                     xs_1x = (np.arange(x0_s, x1_s, dtype=np.float32) + 0.5) / ss
                     y_curve = y_anchor + slope * (xs_1x - float(x_ref_1x))
-                    fill_zone = (
-                        (yy[:, x0_s:x1_s] >= y_curve[None, :])
-                        & (raw_a[:, x0_s:x1_s] > 0.5)
-                        & (non_skin_gate[:, x0_s:x1_s] > 0.85)
-                    )
-                    fg_shirt[:, x0_s:x1_s] = np.where(fill_zone, np.maximum(fg_shirt[:, x0_s:x1_s], 0.98), fg_shirt[:, x0_s:x1_s])
-                    last_rgb = anchor_rgb
-                    for xc in range(x0_s, x1_s):
-                        if has_col_solid[xc]:
-                            last_rgb = fill_ref_rgb[xc]
-                        else:
-                            fill_ref_rgb[xc] = last_rgb
+                fill_zone = (
+                    (yy[:, x0_s:x1_s] >= y_curve[None, :])
+                    & (raw_a[:, x0_s:x1_s] > 0.5)
+                    & (non_skin_gate[:, x0_s:x1_s] > 0.85)
+                )
+                fg_shirt[:, x0_s:x1_s] = np.where(fill_zone, np.maximum(fg_shirt[:, x0_s:x1_s], 0.98), fg_shirt[:, x0_s:x1_s])
+                last_rgb = anchor_rgb
+                col_iter = range(x1_s - 1, x0_s - 1, -1) if side_sign < 0 else range(x0_s, x1_s)
+                for xc in col_iter:
+                    if has_col_solid[xc]:
+                        last_rgb = fill_ref_rgb[xc]
+                    else:
+                        fill_ref_rgb[xc] = last_rgb
         boost_fill_t = np.where(
             fg_shirt > fg_pre_boost + 0.05,
             np.clip((0.40 - fg_pre_boost) / 0.40, 0.0, 1.0),
@@ -349,9 +513,41 @@ def sanitize_shirt_template_rgba(
         )[:, :, None]
         rgb_f = rgb_f * (1.0 - boost_fill_t) + fill_ref_rgb[None, :, :] * boost_fill_t
 
+    # Pure-NumPy topological hole healing (heals white crests/umbro/sponsors while keeping neck opening exterior)
+    solid_bin = fg_shirt > 0.52
+    ext_seeds = np.zeros((h2, w2), dtype=bool)
+    ext_seeds[0, :] = True
+    ext_seeds[-1, :] = True
+    ext_seeds[:, 0] = True
+    ext_seeds[:, -1] = True
+    ext_seeds[: 164 * ss, :] = True
+    skin_hole_seed = (np.abs(xx - 130.0) < 48.0) & (yy < 232.0) & (p_skin_hair > 0.35)
+    ext_bg_reach = _flood_fill_mask_np(~solid_bin, ext_seeds | skin_hole_seed, eight_conn=False)
+    enclosed_holes = (~solid_bin) & (~ext_bg_reach) & (yy >= 184.0) & (raw_a > 0.80) & (p_skin_eff < 0.25)
+    fg_shirt = np.where(enclosed_holes, np.maximum(fg_shirt, 0.98), fg_shirt)
+
+    # Keep only foreground connected to the main torso component (eliminates floating shoulder/hair islands)
+    support_bin = fg_shirt > 0.14
+    torso_seeds = support_bin & (np.abs(xx - 130.0) <= 95.0) & (yy >= 205.0) & (yy <= 290.0)
+    if np.any(torso_seeds):
+        connected_torso = _flood_fill_mask_np(support_bin, torso_seeds, eight_conn=True)
+        fg_shirt = np.where(connected_torso, fg_shirt, 0.0)
+
+    # Edge-Guided Alpha Refinement (r=2 preserves thin sleeve stripes while snapping silhouette to textile edges)
+    core_solid = _erode_3x3_bool_np(fg_shirt > 0.90)
+    guided_a, _ = _wgif_single_channel(
+        lab_2x[:, :, 0].astype(np.float32),
+        fg_shirt.astype(np.float32),
+        r=2,
+        eps_base=0.0004,
+        edge_pivot=0.045,
+    )
+    fg_shirt = np.clip(np.where(core_solid, np.maximum(guided_a, 0.99), guided_a), 0.0, 1.0) * raw_a
+    fg_shirt = np.where((bg_ext_mask & (fg_shirt < 0.75)) | (yy < 162.0), 0.0, fg_shirt)
+
     # Boundary-only RGB decontamination: 100% untouched original pixels inside opaque fabric (fg_shirt >= 0.93)
     w_pure = (fg_shirt > 0.90).astype(np.float32) * np.clip((0.06 - p_skin_eff) / 0.06, 0.0, 1.0)
-    w_pure[: 182 * ss, :] *= np.clip((p_clothes[: 182 * ss, :] - 0.65) / 0.25, 0.0, 1.0)
+    w_pure[: 182 * ss, :] *= np.clip((p_garment[: 182 * ss, :] - 0.60) / 0.25, 0.0, 1.0)
     premul_dec = np.concatenate([rgb_f * w_pure[:, :, None], w_pure[:, :, None] * 255.0], axis=-1).clip(0.0, 255.0).round().astype(np.uint8)
     blurred = np.asarray(Image.fromarray(premul_dec, mode="RGBA").filter(ImageFilter.GaussianBlur(3.2)), dtype=np.float32)
     w_blur = blurred[:, :, 3:4] / 255.0
@@ -366,7 +562,7 @@ def sanitize_shirt_template_rgba(
     clean_rgb_2x = _apply_oklab_textile_crispness(clean_rgb_2x, fg_shirt, detail_crispness)
 
     raw_alpha_img = Image.fromarray(np.clip(np.round(fg_shirt * 255.0), 0.0, 255.0).astype(np.uint8), mode="L")
-    smooth_alpha_2x = np.asarray(raw_alpha_img.filter(ImageFilter.GaussianBlur(0.85)), dtype=np.float32) / 255.0
+    smooth_alpha_2x = np.asarray(raw_alpha_img.filter(ImageFilter.GaussianBlur(0.75)), dtype=np.float32) / 255.0
     crisp_alpha_2x = np.where(fg_shirt > 0.88, np.maximum(smooth_alpha_2x, 0.996), smooth_alpha_2x)
 
     # Linear-light single-premultiplied 2x -> 1x Lanczos SSAA downsampling (avoids Pillow RGBA double-premultiply)
@@ -407,7 +603,7 @@ def sanitize_shirt_template_rgba(
 
 
 def extract_collar_profile(clean_shirt_rgba: Image.Image) -> CollarProfile:
-    """Measure exact left/right collar rim peaks, deepest V/U apex, and shoulder curve from shirt alpha."""
+    """Measure exact symmetric inner left/right collar rim peaks, deepest V/U apex, and shoulder curve from shirt alpha."""
     arr = np.asarray(clean_shirt_rgba.convert("RGBA"), dtype=np.uint8)
     alpha = arr[:, :, 3]
     y_top = np.full(DF11_WIDTH, DF11_HEIGHT, dtype=np.int32)
@@ -421,12 +617,24 @@ def extract_collar_profile(clean_shirt_rgba: Image.Image) -> CollarProfile:
         sm[x] = int(np.median(y_top[x - 1 : x + 2]))
 
     left_slice = sm[62:123]
-    x_l = int(62 + np.argmin(left_slice)) if int(left_slice.min()) < DF11_HEIGHT else 92
-    y_l = int(sm[x_l]) if int(sm[x_l]) < DF11_HEIGHT else 196
+    if int(left_slice.min()) < DF11_HEIGHT:
+        y_min_l = int(left_slice.min())
+        # Pick the innermost (rightmost) point of the left collar crest plateau (+2px tolerance)
+        cand_l = np.where(left_slice <= y_min_l + 2)[0]
+        x_l = int(62 + cand_l[-1]) if len(cand_l) else int(62 + np.argmin(left_slice))
+        y_l = int(sm[x_l])
+    else:
+        x_l, y_l = 92, 196
 
     right_slice = sm[138:199]
-    x_r = int(138 + np.argmin(right_slice)) if int(right_slice.min()) < DF11_HEIGHT else 168
-    y_r = int(sm[x_r]) if int(sm[x_r]) < DF11_HEIGHT else 196
+    if int(right_slice.min()) < DF11_HEIGHT:
+        y_min_r = int(right_slice.min())
+        # Pick the innermost (leftmost) point of the right collar crest plateau (+2px tolerance)
+        cand_r = np.where(right_slice <= y_min_r + 2)[0]
+        x_r = int(138 + cand_r[0]) if len(cand_r) else int(138 + np.argmin(right_slice))
+        y_r = int(sm[x_r])
+    else:
+        x_r, y_r = 168, 196
 
     if x_r - x_l < 36:
         x_l, x_r = 92, 168
