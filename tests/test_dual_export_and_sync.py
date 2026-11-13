@@ -35,7 +35,9 @@ def test_detect_fm_graphics_collision_identifies_shared_fm_graphics_ancestor(tmp
     assert detect_fm_graphics_collision(tmp_path / "Exports" / "Classic", tmp_path / "Exports" / "Pure") is False
 
 
-def test_bridge_dual_export_creations_asymmetric_autoname_facepack_2pc_and_legacy_jump(tmp_path: Path) -> None:
+def test_bridge_dual_export_creations_asymmetric_autoname_and_facepack_atomic_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     vault = tmp_path / "vault"
     classic_exp = tmp_path / "Exports" / "Classic"
     pure_exp = tmp_path / "Exports" / "Pure"
@@ -146,21 +148,37 @@ def test_bridge_dual_export_creations_asymmetric_autoname_facepack_2pc_and_legac
     assert 'from="29184012"' in (fp_pure / "config.xml").read_text(encoding="utf-8")
     assert res_fp["fmGraphicsCollision"] is True
 
-    # Legacy-jump export_studio_card also supports Pure and Dual
-    bridge.upload_studio_image(_png_data_url_rgba(220, 276, (40, 120, 210, 255)), remove_bg=False, harmonize=False)
-    res_legacy = bridge.export_studio_card(
-        {
-            "uid": "r-2002049102",
-            "exportTarget": "facepack",
-            "exportVariant": "dual",
-            "outDir": str(fp_classic),
-            "outPureDir": str(fp_pure),
-            "updateConfigXml": True,
-        }
-    )
-    assert Image.open(fp_classic / "r-2002049102.png").size == (260, 310)
-    assert Image.open(fp_pure / "r-2002049102.png").size == (220, 276)
-    assert res_legacy["savedPurePath"].endswith("r-2002049102.png")
+    # Atomic Dual overwrite rollback: if Pure write fails after Classic replaced an existing PNG, Classic is restored!
+    import backend.core.fm_config as fmc_mod
+
+    orig_classic_bytes = (fp_classic / "29184012.png").read_bytes()
+    real_replace = fmc_mod.safe_ntfs_replace
+    replace_count = 0
+
+    def _fail_on_second_replace(src: Path, dst: Path, retries: int = 8) -> None:
+        nonlocal replace_count
+        replace_count += 1
+        if replace_count == 2:
+            raise PermissionError("Simulated Pure replace failure")
+        real_replace(src, dst, retries=retries)
+
+    did2 = bridge.load_direct_photo_source(_png_data_url_rgba(220, 276, (210, 40, 60, 255)), "overwrite.png")["directPhotoId"]
+    monkeypatch.setattr(fmc_mod, "safe_ntfs_replace", _fail_on_second_replace)
+    with pytest.raises(PermissionError, match="Simulated Pure replace failure"):
+        bridge.export_modular_card(
+            {
+                "step1Mode": "direct_photo",
+                "directPhotoId": did2,
+                "uid": "29184012",
+                "exportTarget": "facepack",
+                "exportVariant": "dual",
+                "outDir": str(fp_classic),
+                "outPureDir": str(fp_pure),
+                "updateConfigXml": True,
+            }
+        )
+    monkeypatch.setattr(fmc_mod, "safe_ntfs_replace", real_replace)
+    assert (fp_classic / "29184012.png").read_bytes() == orig_classic_bytes
 
 
 def test_ng_regens_sync_materializes_missing_pure_on_classic_to_dual_transition(tmp_path: Path) -> None:

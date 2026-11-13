@@ -26,6 +26,7 @@ import {
 import FaceExtractorTool, { FaceToolPersistedState } from './FaceExtractorTool';
 import ShirtExtractorTool, { ShirtHistoryState, pushStagedShirtToHistory } from './ShirtExtractorTool';
 import {
+  CAPTURE_MENU_ITEMS,
   CaptureTarget,
   ClubSeed,
   CropViewportDTO,
@@ -44,7 +45,10 @@ import {
   callBridge,
   isTextEntryTarget,
   normalizeCategory,
+  parseSeasonKey,
+  readImageFileAsDataUrl,
   resolveDroppedImageTransfer,
+  resolveNextClubName,
 } from '../lib/ipc';
 
 export type ToolTab = 'composer' | 'face_tool' | 'shirt_tool';
@@ -55,11 +59,13 @@ export interface StudioJumpPayload {
   clubId?: string;
   headAssetId?: string;
   matchedTemplateId?: string;
+  matchedCategory?: TemplateCategory;
   isPreCutout?: boolean;
   autoFit?: { scale: number; offsetX: number; offsetY: number; neckFill: number };
 }
 
 interface Props {
+  isActive?: boolean;
   clubs: Record<string, ClubSeed>;
   onClubsUpdated?: (clubs: Record<string, ClubSeed>) => void;
   exportDir: string;
@@ -82,19 +88,10 @@ interface Props {
   hideInternalToolbar?: boolean;
   initialHotkeyEnabled?: boolean;
   externalCaptureReq?: { seq: number; target?: CaptureTarget; explicit?: boolean; directBgReplace?: boolean } | null;
+  onConsumeExternalCapture?: () => void;
 }
 
 const UID_RE = /^(?:r-)?[0-9]{1,12}$/;
-
-function parseSeasonSortValue(season?: string): number {
-  const m = /(20\d{2}|\d{2})\s*[-/]\s*(20\d{2}|\d{2})/.exec(season || '');
-  if (m) {
-    const y1 = m[1].length === 2 ? 2000 + Number(m[1]) : Number(m[1]);
-    return y1;
-  }
-  const mSingle = /(20\d{2})/.exec(season || '');
-  return mSingle ? Number(mSingle[1]) : 0;
-}
 
 function compactSeason(season?: string): string {
   const raw = (season || '').trim();
@@ -102,43 +99,16 @@ function compactSeason(season?: string): string {
   return m ? `${m[1]}/${m[2]}` : raw;
 }
 
-function resolveNextClubName(
-  prevCid: string,
-  prevName: string,
-  nextCid: string,
-  clubs: Record<string, ClubSeed>,
-  templates: ShirtTemplateInfo[],
-): string {
-  if (!nextCid) return '';
-  const knownNext = clubs[nextCid]?.name;
-  if (knownNext !== undefined) return knownNext;
-  const tplNext = templates.find((t) => t.clubId === nextCid && t.clubName)?.clubName;
-  if (tplNext) return tplNext;
-  const prevCatalogName =
-    (prevCid ? clubs[prevCid]?.name : undefined) ??
-    (prevCid ? templates.find((t) => t.clubId === prevCid && t.clubName)?.clubName : undefined);
-  if (prevCatalogName !== undefined && prevName === prevCatalogName) return '';
-  if (prevCid && !(nextCid.startsWith(prevCid) || prevCid.startsWith(nextCid))) return '';
-  return prevName;
-}
-
 type WearMode = 'template';
-type BgMode = 'transparent' | 'white_df11' | 'pearl_studio' | 'stadium_bokeh' | 'tunnel_club' | 'office_staff' | 'custom';
+type BgMode = 'transparent' | 'white_df11' | 'custom';
 type ExportTarget = 'creations' | 'facepack';
 
-const VALID_BG_MODES = new Set<BgMode>([
-  'transparent',
-  'white_df11',
-  'pearl_studio',
-  'stadium_bokeh',
-  'tunnel_club',
-  'office_staff',
-  'custom',
-]);
+const VALID_BG_MODES = new Set<BgMode>(['transparent', 'white_df11', 'custom']);
 
 interface LayerSnapshot {
   step1Mode: Step1Mode;
   headAssetId: string;
+  savedFaceId: string;
   faceLabel: string;
   directPhotoId: string;
   directPhotoLabel: string;
@@ -170,6 +140,7 @@ const DIRECT_INNER_H = 278;
 const INITIAL_SNAP: LayerSnapshot = {
   step1Mode: 'modular',
   headAssetId: '',
+  savedFaceId: '',
   faceLabel: '',
   directPhotoId: '',
   directPhotoLabel: '',
@@ -237,7 +208,7 @@ function buildComposePayload(s: LayerSnapshot, previewVariant: 'classic' | 'pure
     enhanceQuality: s.enhanceQuality,
     pureContourTolerance: Number(s.pureContourTolerance.toFixed(3)),
     directBgReplace: s.directBgReplace,
-    headAssetId: s.headAssetId === 'legacy-jump' ? '' : s.headAssetId,
+    headAssetId: s.headAssetId,
     wearMode: 'template' as const,
     templateId: s.templateId,
     clubId: s.clubId || '1736',
@@ -333,6 +304,7 @@ function PercentStepperControl({
         <div className="relative flex items-center">
           <input
             aria-label={inputAriaLabel}
+            data-stepper-input="true"
             type="text"
             inputMode="numeric"
             value={draft}
@@ -408,6 +380,7 @@ function PercentStepperControl({
 }
 
 export default function StudioView({
+  isActive = true,
   clubs,
   onClubsUpdated,
   exportDir,
@@ -430,6 +403,7 @@ export default function StudioView({
   hideInternalToolbar = false,
   initialHotkeyEnabled = false,
   externalCaptureReq = null,
+  onConsumeExternalCapture,
 }: Props) {
   const [internalToolTab, setInternalToolTab] = useState<ToolTab>('composer');
   const toolTab = controlledToolTab ?? internalToolTab;
@@ -444,11 +418,14 @@ export default function StudioView({
   const [step2Category, setStep2Category] = useState<TemplateCategory>('player');
   const [extractorInitCategory, setExtractorInitCategory] = useState<TemplateCategory>('player');
 
+  useEffect(() => {
+    if (toolTab === 'shirt_tool') setExtractorInitCategory(step2Category);
+  }, [toolTab, step2Category]);
+
   const [templates, setTemplates] = useState<ShirtTemplateInfo[]>([]);
   const templatesRef = useRef<ShirtTemplateInfo[]>([]);
   const allowInitialAutoSelectRef = useRef(!initialJump);
   const [faces, setFaces] = useState<SavedFaceInfo[]>([]);
-  const [activeSavedFaceId, setActiveSavedFaceId] = useState('');
   const [confirmDeleteFaceId, setConfirmDeleteFaceId] = useState<string | null>(null);
   const [confirmDeleteStep2Tid, setConfirmDeleteStep2Tid] = useState<string | null>(null);
 
@@ -463,6 +440,10 @@ export default function StudioView({
   const [captureNotice, setCaptureNotice] = useState('');
   const [captureHotkey, setCaptureHotkey] = useState(initialHotkeyEnabled);
 
+  useEffect(() => {
+    setCaptureHotkey(initialHotkeyEnabled);
+  }, [initialHotkeyEnabled]);
+
   const [history, setHistory] = useState<{
     past: LayerSnapshot[];
     present: LayerSnapshot;
@@ -475,9 +456,12 @@ export default function StudioView({
     sessionKey: null,
   });
   const snap = history.present;
+  const activeSavedFaceId = snap.savedFaceId;
 
   // Inline pre-extraction wheel-crop state on the main 260x310 canvas
   const [cropStage, setCropStage] = useState<StagedFaceResponse | null>(null);
+  const cropStageRef = useRef<StagedFaceResponse | null>(null);
+  cropStageRef.current = cropStage;
   const [cropVp, setCropVp] = useState<CropViewportDTO>({ zoom: 1, panX: 0, panY: 0 });
   const [removeBgCrop, setRemoveBgCrop] = useState(true);
 
@@ -609,6 +593,7 @@ export default function StudioView({
   } | null>(null);
   const arrowBurstTsRef = useRef(0);
   const reqSeqRef = useRef(0);
+  const tplSelectSeqRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const directFileInputRef = useRef<HTMLInputElement>(null);
   const facepackInputRef = useRef<HTMLInputElement>(null);
@@ -667,11 +652,14 @@ export default function StudioView({
 
   const handleUndo = useCallback(() => {
     arrowBurstTsRef.current = 0;
-    setCropStage(null);
+    if (cropStageRef.current) {
+      setCropStage(null);
+      return;
+    }
     setHistory((h) => {
       if (h.past.length === 0) return h;
       const prev = h.past[h.past.length - 1];
-      return { past: h.past.slice(0, -1), present: prev, future: [h.present, ...h.future], sessionKey: null };
+      return { past: h.past.slice(0, -1), present: prev, future: [h.present, ...h.future.slice(0, 34)], sessionKey: null };
     });
   }, []);
 
@@ -681,7 +669,7 @@ export default function StudioView({
     setHistory((h) => {
       if (h.future.length === 0) return h;
       const [next, ...rest] = h.future;
-      return { past: [...h.past, h.present], present: next, future: rest, sessionKey: null };
+      return { past: [...h.past.slice(-34), h.present], present: next, future: rest, sessionKey: null };
     });
   }, []);
 
@@ -712,10 +700,10 @@ export default function StudioView({
       reqSeqRef.current += 1;
       updatePreviewUrl('');
     }
-    setActiveSavedFaceId('');
     commitSnap((s) => ({
       ...s,
       headAssetId: '',
+      savedFaceId: '',
       faceLabel: '',
       scale: 1.0,
       offsetX: 0,
@@ -814,28 +802,34 @@ export default function StudioView({
     allowInitialAutoSelectRef.current = false;
     setLoadedFacepackCard(null);
     setLatestAdhocShirtId('');
-    setActiveSavedFaceId('');
     setToolTab('composer');
     setActiveStep(1);
     setCropStage(null);
     setUid(initialJump.uid);
-    updatePreviewUrl(initialJump.previewDataUrl);
     const jumpClubId = (initialJump.clubId ?? '').replace(/[^0-9]/g, '').slice(0, 12);
-    const matchedTpl = initialJump.matchedTemplateId
-      ? templatesRef.current.find((t) => t.templateId === initialJump.matchedTemplateId) ?? {
-          templateId: initialJump.matchedTemplateId,
-          category: 'player' as TemplateCategory,
-        }
-      : jumpClubId
-      ? templates.find(
-          (t) => t.clubId === jumpClubId && normalizeCategory(t.category) === 'player' && t.isActiveForClub !== false,
-        ) || templates.find((t) => t.clubId === jumpClubId && normalizeCategory(t.category) === 'player')
-      : undefined;
-    setStep2Category(normalizeCategory(matchedTpl?.category));
-    commitSnap((s) => ({
+    const explicitCat = initialJump.matchedCategory ? normalizeCategory(initialJump.matchedCategory) : undefined;
+    const matchedTpl =
+      initialJump.matchedTemplateId !== undefined
+        ? initialJump.matchedTemplateId
+          ? templatesRef.current.find((t) => t.templateId === initialJump.matchedTemplateId) ?? {
+              templateId: initialJump.matchedTemplateId,
+              category: explicitCat ?? ('player' as TemplateCategory),
+            }
+          : undefined
+        : jumpClubId
+        ? templates.find(
+            (t) =>
+              t.clubId === jumpClubId &&
+              normalizeCategory(t.category) === (explicitCat ?? 'player') &&
+              t.isActiveForClub !== false,
+          ) || templates.find((t) => t.clubId === jumpClubId && normalizeCategory(t.category) === (explicitCat ?? 'player'))
+        : undefined;
+    setStep2Category(explicitCat ?? normalizeCategory(matchedTpl?.category));
+    const buildJumpSnap = (s: LayerSnapshot): LayerSnapshot => ({
       ...s,
       step1Mode: 'modular',
-      headAssetId: initialJump.headAssetId ?? 'legacy-jump',
+      headAssetId: initialJump.headAssetId ?? '',
+      savedFaceId: '',
       faceLabel: initialJump.uid,
       wearMode: 'template',
       templateId: matchedTpl ? matchedTpl.templateId : '',
@@ -846,9 +840,17 @@ export default function StudioView({
       neckFill: initialJump.autoFit?.neckFill ?? 1.0,
       bgMode: 'white_df11',
       bgBlur: 0,
-    }));
+    });
+    const projected = buildJumpSnap(snap);
+    updatePreviewUrl(
+      initialJump.previewDataUrl,
+      projected.headAssetId && effectivePreviewVariant === 'classic'
+        ? JSON.stringify(buildComposePayload(projected, 'classic'))
+        : '',
+    );
+    commitSnap(buildJumpSnap);
     onConsumeJump?.();
-  }, [initialJump, clubs, templates, commitSnap, onConsumeJump, updatePreviewUrl]);
+  }, [initialJump, clubs, templates, snap, effectivePreviewVariant, commitSnap, onConsumeJump, setToolTab, updatePreviewUrl]);
 
   const hasComposition = isDirectMode ? Boolean(snap.directPhotoId) : Boolean(snap.headAssetId || snap.templateId);
 
@@ -870,20 +872,6 @@ export default function StudioView({
       reqSeqRef.current += 1;
       updatePreviewUrl('');
       return undefined;
-    } else if (snap.headAssetId === 'legacy-jump') {
-      if (!window.pywebview?.api?.render_studio_preview) return undefined;
-      const seq = ++reqSeqRef.current;
-      const t = window.setTimeout(async () => {
-        try {
-          const res = await callBridge<{ previewDataUrl: string }>('render_studio_preview', composePayload);
-          if (seq === reqSeqRef.current && res?.previewDataUrl) {
-            updatePreviewUrl(res.previewDataUrl, 'legacy-jump');
-          }
-        } catch {
-          /* transient drag */
-        }
-      }, 65);
-      return () => window.clearTimeout(t);
     }
     const payloadKey = JSON.stringify(composePayload);
     if (
@@ -1034,20 +1022,11 @@ export default function StudioView({
   const handleDirectFileBlob = useCallback(
     async (file: File) => {
       if (busy) return;
-      if (file.size > 20 * 1024 * 1024) {
-        setErrorMsg('El archivo supera el límite máximo permitido de 20 MB.');
-        return;
-      }
       setErrorMsg('');
       setSavedMsg('');
       setBusy(true);
       try {
-        const dataUrl = await new Promise<string>((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => res(String(r.result));
-          r.onerror = () => rej(new Error('No se pudo leer la imagen.'));
-          r.readAsDataURL(file);
-        });
+        const dataUrl = await readImageFileAsDataUrl(file);
         const { clampPan: _omitClamp, ...loadParams } = composePayload;
         const out = await callBridge<DirectPhotoResponse>('load_direct_photo_source', dataUrl, file.name, {
           ...loadParams,
@@ -1151,20 +1130,11 @@ export default function StudioView({
   const handleFileBlob = useCallback(
     async (file: File) => {
       if (busy) return;
-      if (file.size > 20 * 1024 * 1024) {
-        setErrorMsg('El archivo supera el límite máximo permitido de 20 MB.');
-        return;
-      }
       setErrorMsg('');
       setSavedMsg('');
       setBusy(true);
       try {
-        const dataUrl = await new Promise<string>((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => res(String(r.result));
-          r.onerror = () => rej(new Error('No se pudo leer la imagen.'));
-          r.readAsDataURL(file);
-        });
+        const dataUrl = await readImageFileAsDataUrl(file);
         const staged = await callBridge<StagedFaceResponse>('load_raw_face_source', dataUrl, file.name);
         if (staged?.rawDataUrl) openStagedCrop(staged);
       } catch (e) {
@@ -1192,32 +1162,8 @@ export default function StudioView({
       }
       return;
     }
-    if (window.pywebview?.api?.pick_and_upload_studio_image) {
-      setErrorMsg('');
-      setSavedMsg('');
-      setBusy(true);
-      try {
-        const out = await callBridge<{ previewDataUrl: string; isPreCutout?: boolean } | null>(
-          'pick_and_upload_studio_image',
-          true,
-          snap.harmonize,
-          false,
-          {},
-        );
-        if (out?.previewDataUrl) {
-          setActiveSavedFaceId('');
-          updatePreviewUrl(out.previewDataUrl, 'legacy-jump');
-          commitSnap((s) => ({ ...s, step1Mode: 'modular', headAssetId: 'legacy-jump', faceLabel: 'Retrato' }));
-        }
-      } catch (e) {
-        setErrorMsg(e instanceof Error ? e.message : 'Formato inválido.');
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
     fileInputRef.current?.click();
-  }, [openStagedCrop, snap.harmonize, commitSnap, updatePreviewUrl]);
+  }, [openStagedCrop]);
 
   const handleConfirmCropAndExtract = useCallback(async () => {
     if (!cropStage) return;
@@ -1240,24 +1186,30 @@ export default function StudioView({
       reqSeqRef.current += 1;
       setActiveStep(1);
       setCropStage(null);
-      setActiveSavedFaceId('');
-      if (res.previewDataUrl) updatePreviewUrl(res.previewDataUrl);
-      commitSnap((s) => ({
+      const buildExtractedSnap = (s: LayerSnapshot): LayerSnapshot => ({
         ...s,
         step1Mode: 'modular',
         headAssetId: res.headAssetId,
+        savedFaceId: '',
         faceLabel: res.suggestedName || 'Cara extraída',
         scale: res.autoFit?.scale ?? 1.0,
         offsetX: res.autoFit?.offsetX ?? 0.0,
         offsetY: res.autoFit?.offsetY ?? 0.0,
         neckFill: res.autoFit?.neckFill ?? 1.0,
-      }));
+      });
+      if (res.previewDataUrl) {
+        updatePreviewUrl(
+          res.previewDataUrl,
+          JSON.stringify(buildComposePayload(buildExtractedSnap(snap), effectivePreviewVariant)),
+        );
+      }
+      commitSnap(buildExtractedSnap);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'No se pudo extraer la cabeza y cuello.');
     } finally {
       setBusy(false);
     }
-  }, [cropStage, cropVp, removeBgCrop, snap.templateId, snap.bgMode, snap.bgBlur, snap.harmonize, snap.enhanceQuality, effectivePreviewVariant, commitSnap, updatePreviewUrl]);
+  }, [cropStage, cropVp, removeBgCrop, snap, effectivePreviewVariant, commitSnap, updatePreviewUrl]);
 
   const handlePromoteStagedCropToDirectPhoto = useCallback(
     async (replaceBg = false) => {
@@ -1311,26 +1263,47 @@ export default function StudioView({
           previewDataUrl: string;
         }>('load_saved_face', faceId, snap.templateId, { ...composePayload, step1Mode: 'modular' });
         reqSeqRef.current += 1;
-        setActiveSavedFaceId(faceId);
-        if (res.previewDataUrl) updatePreviewUrl(res.previewDataUrl);
-        commitSnap((s) => ({
+        const buildSavedSnap = (s: LayerSnapshot): LayerSnapshot => ({
           ...s,
           step1Mode: 'modular',
           headAssetId: res.headAssetId,
+          savedFaceId: faceId,
           faceLabel: res.name,
           scale: res.autoFit?.scale ?? 1.0,
           offsetX: res.autoFit?.offsetX ?? 0.0,
           offsetY: res.autoFit?.offsetY ?? 0.0,
           neckFill: res.autoFit?.neckFill ?? 1.0,
-        }));
+        });
+        if (res.previewDataUrl) {
+          updatePreviewUrl(
+            res.previewDataUrl,
+            JSON.stringify(buildComposePayload(buildSavedSnap(snap), effectivePreviewVariant)),
+          );
+        }
+        commitSnap(buildSavedSnap);
       } catch (e) {
         setErrorMsg(e instanceof Error ? e.message : 'No se pudo cargar la cara guardada.');
       } finally {
         setBusy(false);
       }
     },
-    [snap.templateId, composePayload, commitSnap, setToolTab, updatePreviewUrl],
+    [snap, effectivePreviewVariant, composePayload, commitSnap, setToolTab, updatePreviewUrl],
   );
+
+  const stripDeletedFacesFromHistory = useCallback((predicate: (fid: string) => boolean) => {
+    setHistory((h) => {
+      let changed = false;
+      const clean = (sn: LayerSnapshot): LayerSnapshot => {
+        if (!sn.savedFaceId || !predicate(sn.savedFaceId)) return sn;
+        changed = true;
+        return { ...sn, savedFaceId: '' };
+      };
+      const past = h.past.map(clean);
+      const present = clean(h.present);
+      const future = h.future.map(clean);
+      return changed ? { ...h, past, present, future } : h;
+    });
+  }, []);
 
   const handleDeleteSavedFace = useCallback(
     async (faceId: string) => {
@@ -1346,7 +1319,6 @@ export default function StudioView({
         }
         setConfirmDeleteFaceId(null);
         if (activeSavedFaceId === faceId) {
-          setActiveSavedFaceId('');
           if (!snap.templateId) {
             reqSeqRef.current += 1;
             updatePreviewUrl('');
@@ -1354,12 +1326,14 @@ export default function StudioView({
           commitSnap((s) => ({
             ...s,
             headAssetId: '',
+            savedFaceId: '',
             faceLabel: '',
             scale: 1.0,
             offsetX: 0,
             offsetY: 0,
           }));
         }
+        stripDeletedFacesFromHistory((fid) => fid === faceId);
         setSavedMsg(`Cara eliminada: ${res?.deletedFaceId ?? faceId}`);
       } catch (e) {
         setErrorMsg(e instanceof Error ? e.message : 'No se pudo eliminar la cara guardada.');
@@ -1367,7 +1341,7 @@ export default function StudioView({
         setBusy(false);
       }
     },
-    [busy, activeSavedFaceId, snap.templateId, commitSnap, updatePreviewUrl],
+    [busy, activeSavedFaceId, snap.templateId, commitSnap, stripDeletedFacesFromHistory, updatePreviewUrl],
   );
 
   const handleClearSampleFaces = useCallback(async () => {
@@ -1383,7 +1357,6 @@ export default function StudioView({
       }
       setConfirmDeleteFaceId(null);
       if (activeSavedFaceId.startsWith('smp:')) {
-        setActiveSavedFaceId('');
         if (!snap.templateId) {
           reqSeqRef.current += 1;
           updatePreviewUrl('');
@@ -1391,19 +1364,21 @@ export default function StudioView({
         commitSnap((s) => ({
           ...s,
           headAssetId: '',
+          savedFaceId: '',
           faceLabel: '',
           scale: 1.0,
           offsetX: 0,
           offsetY: 0,
         }));
       }
+      stripDeletedFacesFromHistory((fid) => fid.startsWith('smp:'));
       setSavedMsg(`Caras de prueba eliminadas (${res?.deletedCount ?? 0}).`);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'No se pudieron limpiar las caras de prueba.');
     } finally {
       setBusy(false);
     }
-  }, [busy, activeSavedFaceId, snap.templateId, commitSnap, updatePreviewUrl]);
+  }, [busy, activeSavedFaceId, snap.templateId, commitSnap, stripDeletedFacesFromHistory, updatePreviewUrl]);
 
   const applyFacepackRemixResult = useCallback(
     (res: FacepackRemixResponse, isSameCardSwitch: boolean) => {
@@ -1435,8 +1410,7 @@ export default function StudioView({
         };
         setAdhocShirtsById((prev) => ({ ...prev, [entry.id]: entry }));
         setLatestAdhocShirtId(entry.id);
-        if (res.previewDataUrl) updatePreviewUrl(res.previewDataUrl);
-        commitSnap((s) => ({
+        const buildSwapFaceSnap = (s: LayerSnapshot): LayerSnapshot => ({
           ...s,
           step1Mode: 'modular',
           wearMode: 'template',
@@ -1445,7 +1419,14 @@ export default function StudioView({
           offsetX: res.autoFit?.offsetX ?? s.offsetX,
           offsetY: res.autoFit?.offsetY ?? s.offsetY,
           neckFill: res.autoFit?.neckFill ?? s.neckFill,
-        }));
+        });
+        if (res.previewDataUrl) {
+          updatePreviewUrl(
+            res.previewDataUrl,
+            JSON.stringify(buildComposePayload(buildSwapFaceSnap(snap), effectivePreviewVariant)),
+          );
+        }
+        commitSnap(buildSwapFaceSnap);
         setSavedMsg(`Camiseta aislada de ${res.cardLabel}. Elige ahora cualquier cara en el Paso 1.`);
         return;
       }
@@ -1454,29 +1435,35 @@ export default function StudioView({
         setLatestAdhocShirtId('');
       }
       setActiveStep(1);
-      setActiveSavedFaceId('');
-      if (res.previewDataUrl) updatePreviewUrl(res.previewDataUrl);
       const fallbackPrevTid = snap.templateId.startsWith('adhoc:') ? '' : snap.templateId;
       const nextTid = res.templateId !== undefined ? res.templateId : fallbackPrevTid;
       const foundTpl = templatesRef.current.find((t) => t.templateId === nextTid);
       if (foundTpl) {
         setStep2Category(normalizeCategory(foundTpl.category));
       }
-      commitSnap((s) => ({
+      const buildSwapShirtSnap = (s: LayerSnapshot): LayerSnapshot => ({
         ...s,
         step1Mode: 'modular',
         wearMode: 'template',
         headAssetId: res.headAssetId || s.headAssetId,
+        savedFaceId: '',
         faceLabel: `Ficha FM ${res.cardLabel}`,
         templateId: nextTid,
         scale: res.autoFit?.scale ?? 1.0,
         offsetX: res.autoFit?.offsetX ?? 0.0,
         offsetY: res.autoFit?.offsetY ?? 0.0,
         neckFill: res.autoFit?.neckFill ?? 1.0,
-      }));
+      });
+      if (res.previewDataUrl) {
+        updatePreviewUrl(
+          res.previewDataUrl,
+          JSON.stringify(buildComposePayload(buildSwapShirtSnap(snap), effectivePreviewVariant)),
+        );
+      }
+      commitSnap(buildSwapShirtSnap);
       setSavedMsg(`Cabeza y cuello extraídos de ${res.cardLabel}. Elige su nueva equipación en el Paso 2.`);
     },
-    [onFacepackDirChange, snap.templateId, commitSnap, updatePreviewUrl],
+    [onFacepackDirChange, snap, effectivePreviewVariant, commitSnap, updatePreviewUrl],
   );
 
   const handlePickFacepackCard = useCallback(
@@ -1511,20 +1498,11 @@ export default function StudioView({
   const handleFacepackFileBlob = useCallback(
     async (file: File, mode: 'swap_shirt' | 'swap_face' | 'to_pure') => {
       if (busy) return;
-      if (file.size > 20 * 1024 * 1024) {
-        setErrorMsg('El archivo supera el límite máximo permitido de 20 MB.');
-        return;
-      }
       setBusy(true);
       setErrorMsg('');
       setSavedMsg('');
       try {
-        const dataUrl = await new Promise<string>((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => res(String(r.result));
-          r.onerror = () => rej(new Error('No se pudo leer la ficha.'));
-          r.readAsDataURL(file);
-        });
+        const dataUrl = await readImageFileAsDataUrl(file);
         if (mode === 'to_pure') {
           const outPure = await callBridge<DirectPhotoResponse>(
             'load_facepack_card_for_pure',
@@ -1630,19 +1608,21 @@ export default function StudioView({
 
   const handleSelectTemplate = useCallback(
     async (templateId: string) => {
+      const seq = ++tplSelectSeqRef.current;
       setToolTab('composer');
       setErrorMsg('');
       const meta = templatesRef.current.find((t) => t.templateId === templateId);
       if (meta) {
         setStep2Category(normalizeCategory(meta.category));
       }
-      if (snap.headAssetId && snap.headAssetId !== 'legacy-jump') {
+      if (snap.headAssetId) {
         try {
           const fit = await callBridge<{ scale: number; offsetX: number; offsetY: number; neckFill: number }>(
             'auto_fit_head_to_template',
             snap.headAssetId,
             templateId,
           );
+          if (seq !== tplSelectSeqRef.current) return;
           commitSnap((s) => ({
             ...s,
             step1Mode: 'modular',
@@ -1655,7 +1635,7 @@ export default function StudioView({
           }));
           return;
         } catch {
-          /* fall through */
+          if (seq !== tplSelectSeqRef.current) return;
         }
       }
       commitSnap((s) => ({ ...s, step1Mode: 'modular', wearMode: 'template', templateId }));
@@ -1688,9 +1668,10 @@ export default function StudioView({
         const actA = Boolean(a.clubId) && a.isActiveForClub !== false ? 1 : 0;
         const actB = Boolean(b.clubId) && b.isActiveForClub !== false ? 1 : 0;
         if (actA !== actB) return actB - actA;
-        const sA = parseSeasonSortValue(a.season);
-        const sB = parseSeasonSortValue(b.season);
-        if (sA !== sB) return sB - sA;
+        const [ay1, ay2] = parseSeasonKey(a.season);
+        const [by1, by2] = parseSeasonKey(b.season);
+        if (ay1 !== by1) return by1 - ay1;
+        if (ay2 !== by2) return by2 - ay2;
         return a.displayName.localeCompare(b.displayName, 'es');
       });
   }, [templates, step2Category, step2Search, clubs]);
@@ -1753,7 +1734,7 @@ export default function StudioView({
 
   // Keyboard shortcuts: Paso 1 directional arrows, Ctrl+Z (Undo), Ctrl+Y / Ctrl+Shift+Z (Redo), Delete/Suprimir, Enter (Apply Crop)
   useEffect(() => {
-    if (toolTab !== 'composer') return undefined;
+    if (!isActive || toolTab !== 'composer') return undefined;
     const nonTextTypes = new Set(['range', 'checkbox', 'radio', 'button', 'color', 'file']);
     const onKeyDown = (ev: KeyboardEvent) => {
       if (busy || document.querySelector('[role="dialog"]')) return;
@@ -1763,6 +1744,8 @@ export default function StudioView({
       if (tag === 'textarea' || tag === 'select') return;
 
       const inputType = tag === 'input' ? ((el as HTMLInputElement).type || 'text').toLowerCase() : '';
+      const isTextInput = tag === 'input' && !nonTextTypes.has(inputType);
+      const isStepperInput = Boolean(el?.hasAttribute?.('data-stepper-input'));
       const blocksDirectionalArrows =
         tag === 'input' && !['checkbox', 'radio', 'button', 'color', 'file'].includes(inputType);
 
@@ -1841,7 +1824,7 @@ export default function StudioView({
         }
       }
 
-      if (tag === 'input' && !nonTextTypes.has(((el as HTMLInputElement).type || 'text').toLowerCase())) return;
+      if (isTextInput && !isStepperInput) return;
       if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'z') {
         ev.preventDefault();
         if (ev.shiftKey) handleRedo();
@@ -1849,10 +1832,10 @@ export default function StudioView({
       } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'y') {
         ev.preventDefault();
         handleRedo();
-      } else if (ev.key === 'Delete') {
+      } else if (!isTextInput && ev.key === 'Delete') {
         ev.preventDefault();
         handleClearCanvas();
-      } else if (ev.key === 'Enter' && cropStage) {
+      } else if (!isTextInput && ev.key === 'Enter' && cropStage) {
         ev.preventDefault();
         void handleConfirmCropAndExtract();
       }
@@ -1860,6 +1843,7 @@ export default function StudioView({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
+    isActive,
     toolTab,
     activeStep,
     cropStage,
@@ -2013,22 +1997,24 @@ export default function StudioView({
   useEffect(() => {
     if (externalCaptureReq && externalCaptureReq.seq > externalCapSeqRef.current) {
       externalCapSeqRef.current = externalCaptureReq.seq;
+      onConsumeExternalCapture?.();
       void handleScreenCapture(
         externalCaptureReq.target,
         Boolean(externalCaptureReq.explicit),
         externalCaptureReq.directBgReplace,
       );
     }
-  }, [externalCaptureReq, handleScreenCapture]);
+  }, [externalCaptureReq, onConsumeExternalCapture, handleScreenCapture]);
 
   useEffect(() => {
+    if (!isActive) return undefined;
     const onGlobalHotkey = () => {
       if (busy || document.querySelector('[role="dialog"]')) return;
       void handleScreenCapture();
     };
     window.addEventListener('df11:hotkey-capture', onGlobalHotkey);
     return () => window.removeEventListener('df11:hotkey-capture', onGlobalHotkey);
-  }, [busy, handleScreenCapture]);
+  }, [isActive, busy, handleScreenCapture]);
 
   useEffect(() => {
     if (!captureMenuOpen) return undefined;
@@ -2049,7 +2035,7 @@ export default function StudioView({
   }, [captureMenuOpen]);
 
   useEffect(() => {
-    if (toolTab !== 'composer') return undefined;
+    if (!isActive || toolTab !== 'composer') return undefined;
     const onPaste = (ev: ClipboardEvent) => {
       if (busy || document.querySelector('[role="dialog"]') || isTextEntryTarget(ev.target)) return;
       const f = Array.from(ev.clipboardData?.items ?? [])
@@ -2061,78 +2047,48 @@ export default function StudioView({
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
-  }, [toolTab, busy, isDirectMode, handleDirectFileBlob, handleFileBlob]);
+  }, [isActive, toolTab, busy, isDirectMode, handleDirectFileBlob, handleFileBlob]);
 
-  const handleChooseCreationsFolder = async (): Promise<string> => {
+  const chooseStudioFolder = async (
+    role: 'export' | 'export_pure' | 'facepack' | 'facepack_pure',
+    errText: string,
+  ): Promise<string> => {
     try {
-      const p = await callBridge<{ path: string; storageHealth?: StorageHealth; fmGraphicsCollision?: boolean } | null>(
-        'choose_directory',
-        'export',
-      );
-      if (p?.path) {
+      const p = await callBridge<{
+        path: string;
+        storageHealth?: StorageHealth;
+        fmGraphicsCollision?: boolean;
+        fmFacepackCollision?: boolean;
+      } | null>('choose_directory', role);
+      if (!p?.path) return '';
+      if (role === 'export' || role === 'export_pure') {
         if (typeof p.fmGraphicsCollision === 'boolean') setLocalFmGraphicsCollision(p.fmGraphicsCollision);
-        onExportDirChange(p.path, p.storageHealth, p.fmGraphicsCollision);
-        return p.path;
-      }
-    } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'Carpeta no válida.');
-    }
-    return '';
-  };
-
-  const handleChooseCreationsPureFolder = async (): Promise<string> => {
-    try {
-      const p = await callBridge<{ path: string; storageHealth?: StorageHealth; fmGraphicsCollision?: boolean } | null>(
-        'choose_directory',
-        'export_pure',
-      );
-      if (p?.path) {
-        setLocalExportPureDir(p.path);
-        if (typeof p.fmGraphicsCollision === 'boolean') setLocalFmGraphicsCollision(p.fmGraphicsCollision);
-        onExportPureDirChange?.(p.path, p.storageHealth, p.fmGraphicsCollision);
-        return p.path;
-      }
-    } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'Carpeta DF11 Pure no válida.');
-    }
-    return '';
-  };
-
-  const handleChooseFacepackFolder = async (): Promise<string> => {
-    try {
-      const p = await callBridge<{ path: string; storageHealth?: StorageHealth; fmFacepackCollision?: boolean } | null>(
-        'choose_directory',
-        'facepack',
-      );
-      if (p?.path) {
-        setLocalFacepackDir(p.path);
+        if (role === 'export') onExportDirChange(p.path, p.storageHealth, p.fmGraphicsCollision);
+        else {
+          setLocalExportPureDir(p.path);
+          onExportPureDirChange?.(p.path, p.storageHealth, p.fmGraphicsCollision);
+        }
+      } else {
         if (typeof p.fmFacepackCollision === 'boolean') setLocalFmFacepackCollision(p.fmFacepackCollision);
-        onFacepackDirChange?.(p.path, p.fmFacepackCollision);
-        return p.path;
+        if (role === 'facepack') {
+          setLocalFacepackDir(p.path);
+          onFacepackDirChange?.(p.path, p.fmFacepackCollision);
+        } else {
+          setLocalFacepackPureDir(p.path);
+          onFacepackPureDirChange?.(p.path, p.fmFacepackCollision);
+        }
       }
+      return p.path;
     } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'Carpeta de Pack de Faces no válida.');
+      setErrorMsg(e instanceof Error ? e.message : errText);
+      return '';
     }
-    return '';
   };
-
-  const handleChooseFacepackPureFolder = async (): Promise<string> => {
-    try {
-      const p = await callBridge<{ path: string; storageHealth?: StorageHealth; fmFacepackCollision?: boolean } | null>(
-        'choose_directory',
-        'facepack_pure',
-      );
-      if (p?.path) {
-        setLocalFacepackPureDir(p.path);
-        if (typeof p.fmFacepackCollision === 'boolean') setLocalFmFacepackCollision(p.fmFacepackCollision);
-        onFacepackPureDirChange?.(p.path, p.fmFacepackCollision);
-        return p.path;
-      }
-    } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'Carpeta de Pack de Faces DF11 Pure no válida.');
-    }
-    return '';
-  };
+  const handleChooseCreationsFolder = () => chooseStudioFolder('export', 'Carpeta no válida.');
+  const handleChooseCreationsPureFolder = () => chooseStudioFolder('export_pure', 'Carpeta DF11 Pure no válida.');
+  const handleChooseFacepackFolder = () => chooseStudioFolder('facepack', 'Carpeta de Pack de Faces no válida.');
+  const handleChooseFacepackPureFolder = () =>
+    chooseStudioFolder('facepack_pure', 'Carpeta de Pack de Faces DF11 Pure no válida.');
 
   const trimmedUid = uid.trim();
   const hasValidFmUid = UID_RE.test(trimmedUid);
@@ -2175,13 +2131,12 @@ export default function StudioView({
       const effectiveUpdateXml =
         exportTarget === 'facepack' ? updateXml : updateXml && effectiveFmt === 'png' && UID_RE.test(cleanUid);
       const fallbackLabel = isDirectMode ? snap.directPhotoLabel : snap.faceLabel;
-      const method = !isDirectMode && snap.headAssetId === 'legacy-jump' ? 'export_studio_card' : 'export_modular_card';
       const res = await callBridge<{
         savedPath?: string;
         savedPurePath?: string;
         exportVariant?: ExportVariant;
         fmGraphicsCollision?: boolean;
-      }>(method, {
+      }>('export_modular_card', {
         uid: cleanUid,
         fileLabel: fallbackLabel,
         fmt: effectiveFmt,
@@ -2220,7 +2175,7 @@ export default function StudioView({
   const cropDispH = cropStage ? cropStage.height * cropEffScale : 310;
   const cropLeft = (260 - cropDispW) * 0.5 + cropVp.panX;
   const cropTop = (310 - cropDispH) * 0.5 + cropVp.panY;
-  const crownRisk = cropStage !== null && cropTop + cropStage.crownSrcY * cropEffScale < 19;
+  const crownRisk = cropStage !== null && cropTop + cropStage.crownSrcY * cropEffScale < 21;
 
   const stageBgClass =
     stageSkin === 'fm_dark'
@@ -2313,52 +2268,24 @@ export default function StudioView({
                   aria-label="Destinos independientes de captura"
                   className="absolute right-0 top-full mt-1.5 z-40 w-72 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg py-1 text-xs text-slate-800 dark:text-slate-200"
                 >
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => void handleScreenCapture('direct_photo', true, false)}
-                    className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between gap-2"
-                  >
-                    <span>Foto Directa + Marco DF11</span>
-                    <span className="text-[10px] text-slate-400">Fondo original</span>
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => void handleScreenCapture('direct_photo', true, true)}
-                    className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between gap-2 text-emerald-700 dark:text-emerald-400"
-                  >
-                    <span>Foto Directa · Capa Blanca DF11</span>
-                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400">Capa blanca</span>
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => void handleScreenCapture('raw_face', true)}
-                    className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between gap-2"
-                  >
-                    <span>Recortar Cara</span>
-                    <span className="text-[10px] text-slate-400">Extractor</span>
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => void handleScreenCapture('raw_shirt', true)}
-                    className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between gap-2"
-                  >
-                    <span>Extraer Camiseta</span>
-                    <span className="text-[10px] text-slate-400">2× SSAA</span>
-                  </button>
-                  <div className="my-1 border-t border-slate-200 dark:border-slate-800" />
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => void handleScreenCapture('save_png', true)}
-                    className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between gap-2"
-                  >
-                    <span>Guardar PNG como…</span>
-                    <span className="text-[10px] text-slate-400">.png</span>
-                  </button>
+                  {CAPTURE_MENU_ITEMS.map((item) => (
+                    <div key={`${item.target}-${String(item.directBgReplace ?? '')}`}>
+                      {item.dividerBefore && <div className="my-1 border-t border-slate-200 dark:border-slate-800" />}
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => void handleScreenCapture(item.target, true, item.directBgReplace)}
+                        className={`w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between gap-2 ${
+                          item.accent ? 'text-emerald-700 dark:text-emerald-400' : ''
+                        }`}
+                      >
+                        <span>{item.label}</span>
+                        <span className={`text-[10px] ${item.accent ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
+                          {item.hint}
+                        </span>
+                      </button>
+                    </div>
+                  ))}
                   <div className="my-1 border-t border-slate-200 dark:border-slate-800" />
                   <button
                     type="button"
@@ -2397,6 +2324,7 @@ export default function StudioView({
 
       {toolTab === 'face_tool' ? (
         <FaceExtractorTool
+          isActive={isActive}
           faces={faces}
           activeTemplateId={snap.templateId}
           persistedRef={faceToolCacheRef}
@@ -2409,23 +2337,32 @@ export default function StudioView({
             setToolTab('composer');
             setActiveStep(1);
             setCropStage(null);
-            setActiveSavedFaceId('');
-            if (payload.previewDataUrl) setPreviewUrl(payload.previewDataUrl);
-            commitSnap((s) => ({
+            const buildUseSnap = (s: LayerSnapshot): LayerSnapshot => ({
               ...s,
               step1Mode: 'modular',
               headAssetId: payload.headAssetId,
+              savedFaceId: '',
               faceLabel: payload.name,
               scale: payload.autoFit.scale,
               offsetX: payload.autoFit.offsetX,
               offsetY: payload.autoFit.offsetY,
               neckFill: payload.autoFit.neckFill,
-            }));
+            });
+            if (payload.previewDataUrl) {
+              updatePreviewUrl(
+                payload.previewDataUrl,
+                effectivePreviewVariant === 'classic'
+                  ? JSON.stringify(buildComposePayload(buildUseSnap(snap), 'classic'))
+                  : '',
+              );
+            }
+            commitSnap(buildUseSnap);
           }}
           onPickSavedFace={(fid) => void handlePickSavedFace(fid)}
         />
       ) : toolTab === 'shirt_tool' ? (
         <ShirtExtractorTool
+          isActive={isActive}
           clubs={clubs}
           templates={templates}
           initialCategory={extractorInitCategory}
@@ -2600,16 +2537,17 @@ export default function StudioView({
                   e.currentTarget.setPointerCapture?.(e.pointerId);
                 }}
                 onPointerMove={(e) => {
-                  if (!dragRef.current) return;
-                  const dx = Math.round(e.clientX - dragRef.current.sx);
-                  const dy = Math.round(e.clientY - dragRef.current.sy);
-                  if (dragRef.current.mode === 'crop') {
-                    setCropVp((v) => ({ ...v, panX: dragRef.current!.ox + dx, panY: dragRef.current!.oy + dy }));
-                  } else if (dragRef.current.mode === 'direct') {
+                  const d = dragRef.current;
+                  if (!d) return;
+                  const dx = Math.round(e.clientX - d.sx);
+                  const dy = Math.round(e.clientY - d.sy);
+                  if (d.mode === 'crop') {
+                    setCropVp((v) => ({ ...v, panX: d.ox + dx, panY: d.oy + dy }));
+                  } else if (d.mode === 'direct') {
                     replaceLiveSnap((s) => {
                       const clamped = clampDirectOffsets(
-                        dragRef.current!.ox + dx,
-                        dragRef.current!.oy + dy,
+                        d.ox + dx,
+                        d.oy + dy,
                         s.directScale,
                         s.directWidth,
                         s.directHeight,
@@ -2623,12 +2561,13 @@ export default function StudioView({
                       };
                     });
                   } else {
-                    replaceLiveSnap((s) => ({ ...s, offsetX: dragRef.current!.ox + dx, offsetY: dragRef.current!.oy + dy }));
+                    replaceLiveSnap((s) => ({ ...s, offsetX: d.ox + dx, offsetY: d.oy + dy }));
                   }
                 }}
                 onPointerUp={() => {
-                  if (dragRef.current?.baseSnap) {
-                    const prevBase = dragRef.current.baseSnap;
+                  const prevBase = dragRef.current?.baseSnap;
+                  dragRef.current = null;
+                  if (prevBase) {
                     setHistory((h) =>
                       prevBase.offsetX === h.present.offsetX &&
                       prevBase.offsetY === h.present.offsetY &&
@@ -2638,10 +2577,25 @@ export default function StudioView({
                         : { past: [...h.past.slice(-34), prevBase], present: h.present, future: [], sessionKey: null },
                     );
                   }
-                  dragRef.current = null;
                 }}
                 onPointerCancel={() => {
+                  const prevBase = dragRef.current?.baseSnap;
                   dragRef.current = null;
+                  if (prevBase) setHistory((h) => ({ ...h, present: prevBase, sessionKey: null }));
+                }}
+                onLostPointerCapture={() => {
+                  const prevBase = dragRef.current?.baseSnap;
+                  dragRef.current = null;
+                  if (prevBase) {
+                    setHistory((h) =>
+                      prevBase.offsetX === h.present.offsetX &&
+                      prevBase.offsetY === h.present.offsetY &&
+                      prevBase.directOffsetX === h.present.directOffsetX &&
+                      prevBase.directOffsetY === h.present.directOffsetY
+                        ? h
+                        : { past: [...h.past.slice(-34), prevBase], present: h.present, future: [], sessionKey: null },
+                    );
+                  }
                 }}
                 className={`relative w-[260px] h-[310px] overflow-hidden select-none ${
                   cropStage || (isDirectMode ? snap.directPhotoId : snap.headAssetId)

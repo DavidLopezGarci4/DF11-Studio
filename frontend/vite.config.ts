@@ -11,6 +11,7 @@ export default {
   root: __dirname,
   base: './',
   cacheDir: path.join(os.tmpdir(), 'df11-studio-vite-cache'),
+  server: { fs: { allow: ['..'] } },
   plugins: [react(), tailwindcss()],
   resolve: {
     preserveSymlinks: true,

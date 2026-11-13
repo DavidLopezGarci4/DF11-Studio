@@ -8,7 +8,6 @@ import json
 import math
 import os
 import re
-import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +22,7 @@ import backend.services.vision as vision_mod
 from backend.core.compositor import (
     DF11_HEIGHT,
     DF11_WIDTH,
+    has_df11_outer_ring,
     is_df11_pure_size,
     load_df11_assets,
     pad_pure_to_df11_canvas,
@@ -35,7 +35,7 @@ from backend.core.dsp import (
     srgb_to_oklab,
     srgb_u8_to_linear,
 )
-from backend.core.fm_config import safe_ntfs_replace
+from backend.core.fm_config import atomic_write_bytes
 from backend.core.image_guard import load_guarded_image
 from backend.core.paths import get_raw_tshirt_archive_dir, get_state_db_path, get_tshirt_templates_dir
 from backend.services.kits import init_state_db, load_merged_clubs, validate_club_id
@@ -185,12 +185,6 @@ def _needs_shirt_sanitization(im_rgba: Image.Image) -> bool:
     skin_hair = probs[:, :, vision_mod.CLASS_FACE_SKIN] + probs[:, :, vision_mod.CLASS_BODY_SKIN] + probs[:, :, vision_mod.CLASS_HAIR]
     residual_skin_px = int(((skin_hair > 0.45) & (alpha > 48)).sum())
     return residual_skin_px > 40
-
-
-def _has_df11_outer_ring(im_rgba: Image.Image) -> bool:
-    from backend.core.compositor import has_df11_outer_ring
-
-    return has_df11_outer_ring(im_rgba)
 
 
 def _sanitize_viewport(zoom: float = 1.0, pan_x: float = 0.0, pan_y: float = 0.0) -> tuple[float, float, float]:
@@ -380,7 +374,7 @@ def sanitize_shirt_template_rgba(
     inner_mask_f = np.asarray(inner_mask_im, dtype=np.float32) / 255.0
 
     # Un-composite baked DF11 inner-bevel shadow at native 260x310 before 2x super-sampling
-    if _has_df11_outer_ring(raw_src_rgba) and abs(zoom_c - 1.0) < 1e-3 and abs(px_c) < 0.5 and abs(py_c) < 0.5:
+    if has_df11_outer_ring(raw_src_rgba) and abs(zoom_c - 1.0) < 1e-3 and abs(px_c) < 0.5 and abs(py_c) < 0.5:
         src_arr = np.asarray(raw_src_rgba, dtype=np.uint8).copy()
         src_rgb = src_arr[:, :, :3].astype(np.float32)
         ov_arr = np.asarray(frame_ov_im, dtype=np.float32)
@@ -742,17 +736,17 @@ def extract_collar_profile(clean_shirt_rgba: Image.Image) -> CollarProfile:
 
 
 def _atomic_write_png(im_rgba: Image.Image, dst: Path) -> None:
-    dst.parent.mkdir(parents=True, exist_ok=True)
     buf = io.BytesIO()
     im_rgba.save(buf, format="PNG", optimize=True, compress_level=9)
-    fd, tname = tempfile.mkstemp(prefix=f".{dst.stem}_", suffix=".tmp", dir=str(dst.parent))
-    tp = Path(tname)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(buf.getvalue())
-        safe_ntfs_replace(tp, dst)
-    finally:
-        tp.unlink(missing_ok=True)
+    atomic_write_bytes(dst, buf.getvalue(), prefix=f".{dst.stem}_")
+
+
+def _resolve_archive_dir(raw_archive_dir: Path | None, tpl_dir: Path | None) -> Path:
+    if raw_archive_dir is not None:
+        return raw_archive_dir.resolve()
+    if tpl_dir is not None:
+        return (tpl_dir.resolve().parent / "raw_tshirt_sources").resolve()
+    return get_raw_tshirt_archive_dir().resolve()
 
 
 def _is_placeholder_club_name(name: str, club_id: str) -> bool:
@@ -780,7 +774,7 @@ def sync_tshirt_templates_dir(
 ) -> list[ShirtTemplate]:
     """Ensure every image in tshirt_templates is a clean shirt-only PNG, archiving raw originals safely."""
     folder = (tpl_dir or get_tshirt_templates_dir()).resolve()
-    archive = (raw_archive_dir or get_raw_tshirt_archive_dir()).resolve()
+    archive = _resolve_archive_dir(raw_archive_dir, tpl_dir)
     state_db = db_path or get_state_db_path()
 
     with _TEMPLATES_LOCK:
@@ -886,8 +880,6 @@ def sync_tshirt_templates_dir(
                     if not backup_path.is_file():
                         backup_path.write_bytes(raw_bytes)
                 clean_im = sanitize_shirt_template_rgba(im)
-                if p.resolve() == target_png.resolve() and p.name != target_png.name:
-                    p.unlink(missing_ok=True)
                 _atomic_write_png(clean_im, target_png)
                 if p.resolve() != target_png.resolve():
                     p.unlink(missing_ok=True)
@@ -1114,7 +1106,7 @@ def delete_shirt_template(
     if not tid_req or "/" in tid_req or "\\" in tid_req or ".." in tid_req:
         raise ValueError("Identificador de plantilla inválido.")
     folder = (tpl_dir or get_tshirt_templates_dir()).resolve()
-    archive = (raw_archive_dir or get_raw_tshirt_archive_dir()).resolve()
+    archive = _resolve_archive_dir(raw_archive_dir, tpl_dir)
     state_db = db_path or get_state_db_path()
 
     with _TEMPLATES_LOCK:
@@ -1184,7 +1176,7 @@ def save_new_shirt_template(
 ) -> ShirtTemplate:
     """Save a newly extracted shirt-only PNG into tshirt_templates and register its club_id, season, category & active status."""
     folder = (tpl_dir or get_tshirt_templates_dir()).resolve()
-    archive = (raw_archive_dir or get_raw_tshirt_archive_dir()).resolve()
+    archive = _resolve_archive_dir(raw_archive_dir, tpl_dir)
     state_db = db_path or get_state_db_path()
     ext_norm = raw_ext.lower() if raw_ext and raw_ext.lower() in IMAGE_EXTS else ".png"
     clean_cat = normalize_template_category(category)
@@ -1209,24 +1201,47 @@ def save_new_shirt_template(
         )
         clean_disp = display_name.strip()[:80] or template_id.strip()[:80] or default_disp
         season_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", clean_season).strip("_")[:24]
+        role_tag = (
+            "GK"
+            if (clean_cat == "goalkeeper" and not _GK_TOKEN_RE.search(clean_disp))
+            else "STAFF"
+            if (clean_cat == "staff" and not _STAFF_TOKEN_RE.search(clean_disp))
+            else ""
+        )
+        with init_state_db(state_db) as conn:
+            existing_rows = conn.execute(
+                "SELECT template_id, club_id, season, category FROM shirt_templates"
+            ).fetchall()
+        doomed_lower = (
+            {
+                str(r[0]).lower()
+                for r in existing_rows
+                if str(r[1]) == clean_club and normalize_template_category(str(r[3])) == clean_cat
+            }
+            if (clean_club and replace_previous_for_club)
+            else set()
+        )
         explicit_tid = bool(template_id and template_id.strip())
         if explicit_tid:
             tid = slugify_template_id(template_id.strip(), fallback=fallback_lbl)
+            cross_cat_occupied = {
+                str(r[0]).lower()
+                for r in existing_rows
+                if normalize_template_category(str(r[3])) != clean_cat
+                or (clean_club and str(r[1]) and str(r[1]) != clean_club)
+            } - doomed_lower
+            if tid.lower() in cross_cat_occupied:
+                occupied_all = (
+                    {p.stem.lower() for p in folder.iterdir() if p.is_file()}
+                    | {str(r[0]).lower() for r in existing_rows}
+                ) - doomed_lower
+                seq = 2
+                base_tid = tid
+                tid = _compose_bounded_tid(base_tid, role_tag, "", None, fallback_lbl)
+                while tid.lower() in occupied_all:
+                    tid = _compose_bounded_tid(base_tid, role_tag, "", seq, fallback_lbl)
+                    seq += 1
         else:
-            role_tag = "GK" if (clean_cat == "goalkeeper" and not _GK_TOKEN_RE.search(clean_disp)) else ""
-            with init_state_db(state_db) as conn:
-                existing_rows = conn.execute(
-                    "SELECT template_id, club_id, season, category FROM shirt_templates"
-                ).fetchall()
-            doomed_lower = (
-                {
-                    str(r[0]).lower()
-                    for r in existing_rows
-                    if str(r[1]) == clean_club and normalize_template_category(str(r[3])) == clean_cat
-                }
-                if (clean_club and replace_previous_for_club)
-                else set()
-            )
             occupied_lower = (
                 {p.stem.lower() for p in folder.iterdir() if p.is_file()}
                 | {str(r[0]).lower() for r in existing_rows}
@@ -1255,6 +1270,7 @@ def save_new_shirt_template(
         resolved_cname = _resolve_club_display_name(clean_club, club_name, clubs_map)
         act_flag = 1 if (clean_club and is_active_for_club) else 0
 
+        doomed_files: list[tuple[Path, str]] = []
         with init_state_db(state_db) as conn:
             if clean_club and resolved_cname:
                 if not _is_placeholder_club_name(resolved_cname, clean_club) or clean_club not in clubs_map:
@@ -1267,9 +1283,7 @@ def save_new_shirt_template(
                 ).fetchall()
                 for old_tid, old_fname in old_rows:
                     old_fp = (folder / str(old_fname)).resolve()
-                    if old_fp.parent == folder:
-                        safe_ntfs_unlink(old_fp)
-                    _purge_raw_archive_for_tid(archive, str(old_tid))
+                    doomed_files.append((old_fp, str(old_tid)))
                     conn.execute("DELETE FROM shirt_templates WHERE template_id=?", (str(old_tid),))
                 act_flag = 1
             elif clean_club and act_flag == 1:
@@ -1287,6 +1301,11 @@ def save_new_shirt_template(
             )
             if clean_club:
                 _ensure_club_has_one_active(conn, clean_club, clean_cat)
+
+        for old_fp, old_tid in doomed_files:
+            if old_fp.parent == folder:
+                safe_ntfs_unlink(old_fp)
+            _purge_raw_archive_for_tid(archive, old_tid)
 
         refreshed = sync_tshirt_templates_dir(tpl_dir=folder, raw_archive_dir=archive, db_path=state_db)
         return next(

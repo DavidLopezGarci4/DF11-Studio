@@ -48,6 +48,23 @@ export type ScreenCapturePayload = ScreenCaptureMeta &
   Partial<StagedFaceResponse> &
   Partial<StagedShirtResponse>;
 
+export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
+export const CAPTURE_MENU_ITEMS: ReadonlyArray<{
+  label: string;
+  hint: string;
+  target: CaptureTarget;
+  directBgReplace?: boolean;
+  accent?: boolean;
+  dividerBefore?: boolean;
+}> = [
+  { label: 'Foto Directa + Marco DF11', hint: 'Fondo original', target: 'direct_photo', directBgReplace: false },
+  { label: 'Foto Directa · Capa Blanca DF11', hint: 'Capa blanca', target: 'direct_photo', directBgReplace: true, accent: true },
+  { label: 'Recortar Cara', hint: 'Extractor', target: 'raw_face' },
+  { label: 'Extraer Camiseta', hint: '2× SSAA', target: 'raw_shirt' },
+  { label: 'Guardar PNG como…', hint: '.png', target: 'save_png', dividerBefore: true },
+];
+
 const NON_TEXT_INPUT_TYPES = new Set(['range', 'checkbox', 'radio', 'button', 'color', 'file']);
 
 export function isTextEntryTarget(target: EventTarget | null): boolean {
@@ -61,6 +78,58 @@ export function isTextEntryTarget(target: EventTarget | null): boolean {
     return !NON_TEXT_INPUT_TYPES.has(inpType);
   }
   return false;
+}
+
+export function readImageFileAsDataUrl(file: File): Promise<string> {
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return Promise.reject(new Error('El archivo supera el límite máximo permitido de 20 MB.'));
+  }
+  return new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error('No se pudo leer el archivo.'));
+    r.readAsDataURL(file);
+  });
+}
+
+export function parseSeasonKey(season?: string): [number, number] {
+  const s = (season || '').trim();
+  if (!s) return [-1, -1];
+  const m = s.match(/(\d{2,4})\D+(\d{2,4})/);
+  if (m) {
+    let y1 = parseInt(m[1], 10);
+    let y2 = parseInt(m[2], 10);
+    if (y1 < 100) y1 += 2000;
+    if (y2 < 100) y2 += Math.floor(y1 / 100) * 100;
+    if (y2 < y1) y2 += 100;
+    return [y1, y2];
+  }
+  const mSingle = s.match(/(\d{4})/);
+  if (mSingle) {
+    const y = parseInt(mSingle[1], 10);
+    return [y, y];
+  }
+  return [-1, -1];
+}
+
+export function resolveNextClubName(
+  prevCid: string,
+  prevName: string,
+  nextCid: string,
+  clubs: Record<string, ClubSeed>,
+  templates: ShirtTemplateInfo[],
+): string {
+  if (!nextCid) return '';
+  const knownNext = clubs[nextCid]?.name;
+  if (knownNext !== undefined) return knownNext;
+  const tplNext = templates.find((t) => t.clubId === nextCid && t.clubName)?.clubName;
+  if (tplNext) return tplNext;
+  const prevCatalogName =
+    (prevCid ? clubs[prevCid]?.name : undefined) ??
+    (prevCid ? templates.find((t) => t.clubId === prevCid && t.clubName)?.clubName : undefined);
+  if (prevCatalogName !== undefined && prevName === prevCatalogName) return '';
+  if (prevCid && !(nextCid.startsWith(prevCid) || prevCid.startsWith(nextCid))) return '';
+  return prevName;
 }
 
 export function dataUrlToFile(dataUrl: string, fallbackName = 'DragBrowser.png'): File | null {
@@ -195,7 +264,7 @@ declare global {
 }
 
 const FALLBACK_BOOT: BootstrapState = {
-  version: '1.6.0',
+  version: '1.6.1',
   clubs: {
     '1736': { name: 'Real Madrid', pattern: 'solid', primary: '#F7F8FA', secondary: '#1E293B', collar: '#D4AF37' },
     '1708': { name: 'FC Barcelona', pattern: 'stripes', primary: '#004D98', secondary: '#A50044', collar: '#EDBB00' },
@@ -268,8 +337,14 @@ export async function callBridge<T>(method: string, ...args: unknown[]): Promise
       method === 'update_shirt_template_meta' ||
       method === 'import_clubs_from_fm_graphics' ||
       method === 'capture_screen_region' ||
-      method === 'cutout_direct_photo_for_pure' ||
       method === 'promote_staged_crop_to_direct_photo' ||
+      method === 'export_modular_card' ||
+      method === 'load_saved_face' ||
+      method === 'save_extracted_face' ||
+      method === 'load_regen_into_studio' ||
+      method === 'start_regens_sync' ||
+      method === 'tag_my_club' ||
+      method === 'import_squad_text' ||
       method.startsWith('extract_face_'))
   ) {
     throw new Error('Ejecuta DF11FaceStudio.exe para procesar imágenes con el motor nativo.');

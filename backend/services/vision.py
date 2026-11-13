@@ -68,8 +68,7 @@ BIREFNET_SPEC = ModelSpec(
 
 _VERIFIED_FILES: dict[Path, tuple[int, int]] = {}
 _SESSIONS: dict[str, ort.InferenceSession] = {}
-_SPEC_LOCKS: dict[str, threading.RLock] = {}
-_SESSION_INIT_LOCK = threading.Lock()
+_INFER_LOCK = threading.RLock()
 _DML_DISABLED = False
 
 
@@ -86,46 +85,47 @@ def ensure_model(
     models_dir: Path | None = None,
     fetcher: Callable[[str], bytes] | None = None,
 ) -> Path:
-    """Verify local ONNX model SHA-256 or atomically download via .part file."""
-    target_dir = models_dir or get_models_dir()
-    target_dir.mkdir(parents=True, exist_ok=True)
-    dst = target_dir / spec.filename
+    """Verify local ONNX model SHA-256 or atomically download via thread-isolated .part file."""
+    with _INFER_LOCK:
+        target_dir = models_dir or get_models_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        dst = target_dir / spec.filename
 
-    if dst.is_file():
-        st = dst.stat()
-        sig = (st.st_mtime_ns, st.st_size)
-        if _VERIFIED_FILES.get(dst) == sig:
-            return dst
-        if _sha256_file(dst).lower() == spec.sha256.lower():
-            _VERIFIED_FILES[dst] = sig
-            return dst
+        if dst.is_file():
+            st = dst.stat()
+            sig = (st.st_mtime_ns, st.st_size)
+            if _VERIFIED_FILES.get(dst) == sig:
+                return dst
+            if _sha256_file(dst).lower() == spec.sha256.lower():
+                _VERIFIED_FILES[dst] = sig
+                return dst
 
-    part = target_dir / f"{spec.filename}.{os.getpid()}.part"
-    try:
-        h = hashlib.sha256()
-        if fetcher is not None:
-            data = fetcher(spec.url)
-            h.update(data)
-            part.write_bytes(data)
-        else:
-            req = urllib.request.Request(spec.url, headers={"User-Agent": "DF11FaceStudio/1.0"})
-            with urllib.request.urlopen(req, timeout=180) as resp, part.open("wb") as out:
-                while chunk := resp.read(1024 * 256):
-                    h.update(chunk)
-                    out.write(chunk)
-        if h.hexdigest().lower() != spec.sha256.lower():
-            raise ModelIntegrityError(f"SHA-256 inválido para {spec.filename}.")
-        safe_ntfs_replace(part, dst)
-        st = dst.stat()
-        _VERIFIED_FILES[dst] = (st.st_mtime_ns, st.st_size)
-        return dst
-    except ModelIntegrityError:
-        raise
-    except Exception as exc:
-        raise ModelIntegrityError(f"Error aprovisionando {spec.filename}: {exc}") from exc
-    finally:
-        if part.exists():
-            part.unlink(missing_ok=True)
+        part = target_dir / f"{spec.filename}.{os.getpid()}.{threading.get_ident()}.part"
+        try:
+            h = hashlib.sha256()
+            if fetcher is not None:
+                data = fetcher(spec.url)
+                h.update(data)
+                part.write_bytes(data)
+            else:
+                req = urllib.request.Request(spec.url, headers={"User-Agent": "DF11FaceStudio/1.0"})
+                with urllib.request.urlopen(req, timeout=180) as resp, part.open("wb") as out:
+                    while chunk := resp.read(1024 * 256):
+                        h.update(chunk)
+                        out.write(chunk)
+            if h.hexdigest().lower() != spec.sha256.lower():
+                raise ModelIntegrityError(f"SHA-256 inválido para {spec.filename}.")
+            safe_ntfs_replace(part, dst)
+            st = dst.stat()
+            _VERIFIED_FILES[dst] = (st.st_mtime_ns, st.st_size)
+            return dst
+        except ModelIntegrityError:
+            raise
+        except Exception as exc:
+            raise ModelIntegrityError(f"Error aprovisionando {spec.filename}: {exc}") from exc
+        finally:
+            if part.exists():
+                part.unlink(missing_ok=True)
 
 
 def _get_ort() -> Any:
@@ -151,47 +151,33 @@ def _build_session(model_path: Path, force_cpu: bool = False) -> ort.InferenceSe
     return ort_mod.InferenceSession(str(model_path), sess_options=so, providers=providers)
 
 
-def _get_spec_lock(spec: ModelSpec) -> threading.RLock:
-    with _SESSION_INIT_LOCK:
-        lock = _SPEC_LOCKS.get(spec.filename)
-        if lock is None:
-            lock = threading.RLock()
-            _SPEC_LOCKS[spec.filename] = lock
-        return lock
-
-
 def _get_or_create_session_locked(spec: ModelSpec) -> ort.InferenceSession:
-    with _SESSION_INIT_LOCK:
-        sess = _SESSIONS.get(spec.filename)
-        if sess is not None and not (_DML_DISABLED and "DmlExecutionProvider" in sess.get_providers()):
-            return sess
-        if sess is not None:
-            _SESSIONS.pop(spec.filename, None)
+    sess = _SESSIONS.get(spec.filename)
+    if sess is not None and not (_DML_DISABLED and "DmlExecutionProvider" in sess.get_providers()):
+        return sess
+    if sess is not None:
+        _SESSIONS.pop(spec.filename, None)
     new_sess = _build_session(ensure_model(spec), force_cpu=_DML_DISABLED)
-    with _SESSION_INIT_LOCK:
-        _SESSIONS[spec.filename] = new_sess
+    _SESSIONS[spec.filename] = new_sess
     return new_sess
 
 
 def _run_session(spec: ModelSpec, feed: dict[str, np.ndarray]) -> tuple[ort.InferenceSession, list[np.ndarray]]:
-    """Run ONNX inference; on DirectML DXGI_ERROR_DEVICE_RESET / CP1252 error, release ALL D3D12 refs and fall back to CPU."""
+    """Run ONNX inference under unified lock; on DirectML DXGI_ERROR_DEVICE_RESET, release ALL D3D12 refs and fall back to CPU."""
     global _DML_DISABLED
     import gc
 
-    lock = _get_spec_lock(spec)
-    with lock:
+    with _INFER_LOCK:
         sess = _get_or_create_session_locked(spec)
         try:
             return sess, list(sess.run(None, feed))
         except Exception:
-            with _SESSION_INIT_LOCK:
-                _DML_DISABLED = True
-                _SESSIONS.clear()
+            _DML_DISABLED = True
+            _SESSIONS.clear()
             del sess
             gc.collect()
             cpu_sess = _build_session(ensure_model(spec), force_cpu=True)
-            with _SESSION_INIT_LOCK:
-                _SESSIONS[spec.filename] = cpu_sess
+            _SESSIONS[spec.filename] = cpu_sess
             return cpu_sess, list(cpu_sess.run(None, feed))
 
 

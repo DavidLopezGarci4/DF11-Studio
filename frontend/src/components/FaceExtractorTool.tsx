@@ -8,6 +8,7 @@ import {
   StagedFaceResponse,
   callBridge,
   isTextEntryTarget,
+  readImageFileAsDataUrl,
   resolveDroppedImageTransfer,
 } from '../lib/ipc';
 
@@ -21,6 +22,7 @@ export interface FaceToolPersistedState {
 }
 
 interface Props {
+  isActive?: boolean;
   faces: SavedFaceInfo[];
   activeTemplateId: string;
   persistedRef?: MutableRefObject<FaceToolPersistedState | null>;
@@ -40,6 +42,7 @@ interface Props {
 }
 
 export default function FaceExtractorTool({
+  isActive = true,
   faces,
   activeTemplateId,
   persistedRef,
@@ -137,6 +140,7 @@ export default function FaceExtractorTool({
   }, [incomingStage, applyStaged]);
 
   const handlePickNative = useCallback(async () => {
+    if (busy) return;
     if (!window.pywebview?.api?.pick_raw_face_source) {
       fileRef.current?.click();
       return;
@@ -150,17 +154,13 @@ export default function FaceExtractorTool({
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [busy, applyStaged]);
 
   const handleFileBlob = useCallback(async (file: File) => {
+    if (busy) return;
     setBusy(true); setErr('');
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(String(r.result));
-        r.onerror = () => reject(new Error('No se pudo leer el archivo.'));
-        r.readAsDataURL(file);
-      });
+      const dataUrl = await readImageFileAsDataUrl(file);
       const res = await callBridge<StagedFaceResponse>('load_raw_face_source', dataUrl, file.name);
       if (res?.rawDataUrl) applyStaged(res);
     } catch (e) {
@@ -168,9 +168,10 @@ export default function FaceExtractorTool({
     } finally {
       setBusy(false);
     }
-  }, [applyStaged]);
+  }, [busy, applyStaged]);
 
   useEffect(() => {
+    if (!isActive) return undefined;
     const onPaste = (ev: ClipboardEvent) => {
       if (busy || document.querySelector('[role="dialog"]') || isTextEntryTarget(ev.target)) return;
       const f = Array.from(ev.clipboardData?.items ?? [])
@@ -180,7 +181,7 @@ export default function FaceExtractorTool({
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
-  }, [busy, handleFileBlob]);
+  }, [isActive, busy, handleFileBlob]);
 
   const handleExtract = async () => {
     if (!staged) return;
@@ -228,7 +229,7 @@ export default function FaceExtractorTool({
   const imgLeft = (260 - dispW) * 0.5 + viewport.panX;
   const imgTop = (310 - dispH) * 0.5 + viewport.panY;
   const crownCanvasY = staged ? imgTop + staged.crownSrcY * effScale : 24;
-  const crownRisk = staged !== null && viewMode === 'crop' && crownCanvasY < 19;
+  const crownRisk = staged !== null && viewMode === 'crop' && crownCanvasY < 21;
 
   const stageBgClass =
     stageSkin === 'fm_dark'
@@ -257,6 +258,7 @@ export default function FaceExtractorTool({
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
+            if (busy) return;
             const { file, blockedRemoteUrl } = resolveDroppedImageTransfer(e.dataTransfer);
             if (file) void handleFileBlob(file);
             else if (blockedRemoteUrl) setErr('Las webs protegen el arrastre directo: usa el botón «Capturar» o Ctrl+V.');
@@ -276,13 +278,15 @@ export default function FaceExtractorTool({
               e.currentTarget.setPointerCapture?.(e.pointerId);
             }}
             onPointerMove={(e) => {
-              if (!dragRef.current) return;
-              const dx = e.clientX - dragRef.current.sx;
-              const dy = e.clientY - dragRef.current.sy;
-              setViewport((v) => ({ ...v, panX: Math.round(dragRef.current!.ox + dx), panY: Math.round(dragRef.current!.oy + dy) }));
+              const d = dragRef.current;
+              if (!d) return;
+              const nextX = Math.round(d.ox + (e.clientX - d.sx));
+              const nextY = Math.round(d.oy + (e.clientY - d.sy));
+              setViewport((v) => ({ ...v, panX: nextX, panY: nextY }));
             }}
             onPointerUp={() => { dragRef.current = null; }}
             onPointerCancel={() => { dragRef.current = null; }}
+            onLostPointerCapture={() => { dragRef.current = null; }}
             className="relative w-[260px] h-[310px] overflow-hidden rounded-lg border border-emerald-500/40 select-none flex items-center justify-center cursor-grab active:cursor-grabbing"
           >
             {!staged ? (
@@ -415,7 +419,7 @@ export default function FaceExtractorTool({
                 onChange={(e) => setRemoveBg(e.target.checked)}
                 className="accent-emerald-600"
               />
-              Quitar fondo y ropa (BiRefNet + BiSeNet)
+              Quitar fondo y ropa (BiRefNet + Selfie-Seg)
             </label>
             <label className="sm:col-span-7 flex items-center gap-2 min-w-0 text-slate-700 dark:text-slate-300 tabular-nums">
               <span className="shrink-0">Zona</span>

@@ -20,8 +20,8 @@ from backend.core.paths import ASSETS_DIR
 
 DF11_WIDTH = 260
 DF11_HEIGHT = 310
-INNER_X0, INNER_Y0, INNER_X1, INNER_Y1 = 19, 17, 242, 293  # 223x276 incl. AA edge
-CROWN_Y, EYES_Y, SHOULDERS_Y = 24, 112, 292
+INNER_X0, INNER_Y0, INNER_X1, INNER_Y1 = 18, 16, 242, 294  # 224x278 incl. AA edge
+CROWN_Y, EYES_Y, SHOULDERS_Y = 21, 113, 292
 
 DF11_PURE_WIDTH = 220
 DF11_PURE_HEIGHT = 276
@@ -32,15 +32,7 @@ PURE_EDGE_FEATHER_RATIO = 220.0 / 255.0
 CardVariant = Literal["classic", "pure", "dual"]
 SingleCardVariant = Literal["classic", "pure"]
 
-BgMode = Literal[
-    "transparent",
-    "white_df11",
-    "pearl_studio",
-    "stadium_bokeh",
-    "tunnel_club",
-    "office_staff",
-    "custom",
-]
+BgMode = Literal["transparent", "white_df11", "custom"]
 
 
 @lru_cache(maxsize=1)
@@ -67,43 +59,20 @@ def premul_over(bottom: np.ndarray, top: np.ndarray) -> np.ndarray:
     return np.clip(np.round(out * 255.0), 0, 255).astype(np.uint8)
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=4)
 def _build_preset_bg(mode: str) -> np.ndarray:
-    yy, xx = np.mgrid[0:DF11_HEIGHT, 0:DF11_WIDTH].astype(np.float32)
-    nx = (xx - 130.0) / 130.0
-    ny = (yy - 135.0) / 155.0
-    r2 = np.clip(nx * nx + ny * ny, 0.0, 1.6)
     out = np.zeros((DF11_HEIGHT, DF11_WIDTH, 4), dtype=np.uint8)
     if mode == "transparent":
         return out
-    if mode == "white_df11":
-        v_grad = 255.0 - 0.115 * np.clip(yy - 30.0, 0.0, 262.0)
-        dx = np.minimum(np.maximum(xx - 19.0, 0.0), np.maximum(241.0 - xx, 0.0))
-        dy = np.minimum(np.maximum(yy - 17.0, 0.0), np.maximum(292.0 - yy, 0.0))
-        sx = np.clip(1.0 - dx / 28.0, 0.0, 1.0) ** 2
-        sy = np.clip(1.0 - dy / 26.0, 0.0, 1.0) ** 2
-        s_edge = sx + sy - sx * sy
-        lum = np.clip(v_grad - 17.5 * s_edge, 206.0, 255.0)
-        rgb = np.stack([lum, lum, lum], axis=2)
-    elif mode == "pearl_studio":
-        rgb = np.stack([245.0 - 18.0 * r2, 247.0 - 16.0 * r2, 251.0 - 12.0 * r2], axis=2)
-    elif mode == "stadium_bokeh":
-        pitch = np.clip((yy - 190.0) / 120.0, 0.0, 1.0)
-        sky = 1.0 - pitch
-        flare = np.exp(-(((xx - 65.0) / 48.0) ** 2 + ((yy - 68.0) / 42.0) ** 2))
-        flare2 = np.exp(-(((xx - 200.0) / 45.0) ** 2 + ((yy - 74.0) / 40.0) ** 2))
-        glow = 75.0 * (flare + flare2)
-        rgb = np.stack(
-            [22.0 * sky + 28.0 * pitch + glow, 34.0 * sky + 76.0 * pitch + glow, 58.0 * sky + 42.0 * pitch + glow * 0.9],
-            axis=2,
-        )
-    elif mode == "tunnel_club":
-        beam = np.exp(-((nx * 1.4) ** 2 + ((yy - 60.0) / 160.0) ** 2))
-        rgb = np.stack([26.0 + 44.0 * beam, 33.0 + 52.0 * beam, 48.0 + 68.0 * beam], axis=2)
-    else:  # office_staff
-        warm = 1.0 - 0.35 * r2
-        rgb = np.stack([68.0 * warm + 18.0, 56.0 * warm + 16.0, 48.0 * warm + 16.0], axis=2)
-    out[:, :, :3] = np.clip(np.round(rgb), 0, 255).astype(np.uint8)
+    yy, xx = np.mgrid[0:DF11_HEIGHT, 0:DF11_WIDTH].astype(np.float32)
+    v_grad = 255.0 - 0.115 * np.clip(yy - 30.0, 0.0, 262.0)
+    dx = np.minimum(np.maximum(xx - 19.0, 0.0), np.maximum(241.0 - xx, 0.0))
+    dy = np.minimum(np.maximum(yy - 17.0, 0.0), np.maximum(292.0 - yy, 0.0))
+    sx = np.clip(1.0 - dx / 28.0, 0.0, 1.0) ** 2
+    sy = np.clip(1.0 - dy / 26.0, 0.0, 1.0) ** 2
+    s_edge = sx + sy - sx * sy
+    lum = np.clip(v_grad - 17.5 * s_edge, 206.0, 255.0)
+    out[:, :, :3] = np.clip(np.round(np.stack([lum, lum, lum], axis=2)), 0, 255).astype(np.uint8)
     out[:, :, 3] = 255
     return out
 
@@ -232,7 +201,7 @@ def unmix_df11_classic_bevel_rgba(card_260x310: Image.Image) -> tuple[Image.Imag
     rgba = card_260x310 if card_260x310.mode == "RGBA" else card_260x310.convert("RGBA")
     crop_arr = np.asarray(rgba.crop((18, 16, 242, 294)), dtype=np.uint8).copy()
     if not has_df11_outer_ring(rgba):
-        is_pre = bool(float(np.mean(crop_arr[18:276, 20:222, 3] < 250)) >= 0.02)
+        is_pre = bool(float(np.mean(crop_arr[2:276, 2:222, 3] < 250)) >= 0.02)
         return Image.fromarray(crop_arr, mode="RGBA"), is_pre
 
     mask_im, ov_im = load_df11_assets()
@@ -274,7 +243,7 @@ def unmix_df11_classic_bevel_rgba(card_260x310: Image.Image) -> tuple[Image.Imag
             crop_arr[:, :, 3:4],
         )
 
-    interior_a = crop_arr[18:276, 20:222, 3]
+    interior_a = crop_arr[2:276, 2:222, 3]
     is_precut = bool(float(np.mean(interior_a < 250)) >= 0.02)
     if not is_precut:
         dy, dx, ny, nx = _df11_win_dead_ring_lookup()

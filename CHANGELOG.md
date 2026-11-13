@@ -1,5 +1,20 @@
 # Changelog Técnico — DF11 Face Studio
 
+## [1.6.1] - 2026-11-13
+### Fixed
+- **Integridad transaccional Dual/NTFS y sondas sin efectos secundarios (`backend/bridge.py`, `backend/core/fm_config.py`, `backend/services/templates.py`, `backend/services/sync.py`, `backend/services/kits.py`)**:
+  - Rollback con copia previa `prev_bytes` e inclusión de `upsert_fm_config_xml` bajo `_sync_lock` en `_commit_card_exports_atomic` para restaurar archivos sobrescritos ante fallos parciales en modo Dual; `os.chmod(dst, stat.S_IWRITE)` en `safe_ntfs_replace` y mutex `_XML_LOCK` sobre `config.xml`.
+  - Sonda `probe_architecture_health` sobre `:memory:` cuando `studio_state.sqlite3` aún no existe; sentencia `INSERT ... SELECT ... WHERE 1=1 ON CONFLICT` válida en `_switch_active_save_conn`; actualización de `_fired_sig` tras `on_quiescent()` en `QuiescentVaultWatcher` y aislamiento de archivo fuente en `_resolve_archive_dir`.
+- **Geometría DF11 Pure/Classic, concurrencia ONNX y huella de memoria (`backend/core/compositor.py`, `backend/core/image_guard.py`, `backend/services/vision.py`, `backend/services/head_neck.py`, `backend/services/studio_workflow.py`)**:
+  - Corregido el slice superior `crop_arr[2:276, 2:222, 3]` en `unmix_df11_classic_bevel_rgba` y la extensión lateral de mangas (`pad_pure_to_df11_canvas(..., unfeather_edges=True)`) al vestir regens `220 × 276` en `sync.py`; sonda interior `[18:292, 20:240]` en `is_pre_cutout` y activación global de `Image.MAX_IMAGE_PIXELS = MAX_PIXELS`.
+  - Unificado `_INFER_LOCK` (`RLock`) entre `ensure_model` y `_run_session`, eliminados `source_rgba`/`source_fg_alpha` en `HeadNeckAsset` (`~120–150 MB` menos de RAM), acotadas cachés LRU (`MAX_CACHED_HEADS = MAX_CACHED_SHIRTS = 16`) y eliminada la doble inferencia/decodificación en `load_regen_into_studio` y `load_saved_face`.
+- **Ciclo de vida Win32/Captura y coherencia de estado React (`run_desktop.py`, `screen_capture.py`, `screen_clip_worker.py`, `App.tsx`, `StudioView.tsx`, `ShirtExtractorTool.tsx`, `FaceExtractorTool.tsx`, `RegensSyncView.tsx`)**:
+  - Firma `ctypes.wintypes` de 64 bits con `LR_SHARED`, preservación de estado `WS_MAXIMIZE` tras capturar, guardián EOF por `stdin` + temporizador de `300 s` en `screen_clip_worker.py` y bucle `PeekMessageW`/`GetMessageW > 0` en `GlobalCaptureHotkey`.
+  - Montaje persistente entre pestañas con compuertas `isActive`, secuencia monotónica `tplSelectSeqRef`, cobertura completa de `Undo/Redo` (`savedFaceId`, metadatos de equipación y `PercentStepperControl`) y selección explícita obligatoria en `tag_my_club`.
+
+### Changed
+- **Poda neta de código legado y fuente única de FAQ (`backend/bridge.py`, `backend/core/compositor.py`, `FaqModal.tsx`, `docs/FAQ.md`)**: eliminado el pipeline no modular v1.0, los presets procedurales sin uso y la tabla duplicada de `FaqModal.tsx` (ahora alimentada en tiempo de compilación desde `docs/FAQ.md?raw`), reduciendo el tamaño total del repositorio y eliminando 3 archivos residuales de raíz.
+
 ## [1.6.0] - 2026-11-08
 ### Added
 - **Captura de Pantalla en 2 Pasos (`Seleccionar -> Reencuadrar -> Intro / Esc`) y Eliminación de `Mini-Capturador` (`backend/core/screen_clip_worker.py`, `backend/core/screen_capture.py`, `backend/bridge.py`, `run_desktop.py`, `App.tsx`, `StudioView.tsx`)**:

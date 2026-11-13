@@ -1,11 +1,23 @@
 {
-  "currentVersion": "1.6.0",
-  "buildNumber": 10600,
-  "lastUpdated": "2026-11-08",
+  "currentVersion": "1.6.1",
+  "buildNumber": 10601,
+  "lastUpdated": "2026-11-13",
   "appName": "DF11 Face Studio",
   "appDescription": "Estudio modular en 3 pasos con formatos DF11 Classic (260 × 310), DF11 Pure (220 × 276 sin marco, contorno 0% IA) y exportación Dual simultánea, camisetas de Campo / Portero (GK) / Staff por temporada, captura en caliente y sincronizador para Football Manager.",
   "privacyPolicy": "Tus fotos y partidas nunca salen de tu PC: procesamiento 100% local, privado y sin suscripciones ni claves API.",
   "versions": [
+    {
+      "version": "1.6.1",
+      "build": 10601,
+      "date": "2026-11-13",
+      "title": "Trabajo Continuo Entre Pestañas, Guardado Blindado Classic/Pure, Deshacer Completo en Equipaciones y Menor Consumo de Memoria",
+      "highlights": [
+        "🧭 **Cambio de pestaña sin perder tu montaje:** Alterna libremente entre Estudio y Sincronizador NG_Regens conservando tu encuadre, vistas previas e historial de cambios exactamente donde los dejaste.",
+        "🛡️ **Guardado blindado y mangas completas en Classic, DF11 Pure y Dual:** Tus fichas anteriores permanecen intactas si falta espacio al sobrescribir y la conversión de tarjetas mantiene intactos el borde superior y las mangas de tus equipaciones.",
+        "↩️ **Deshacer y Rehacer completo en estudio y camisetas:** Recupera con Ctrl+Z o Ctrl+Y tus cambios de club, temporada, rol (Campo, Portero (GK) o Staff), caras guardadas y valores numéricos sin saltos inesperados.",
+        "🪶 **Aplicación más ligera y precisa al capturar:** Menor consumo de memoria al encadenar recortes, ventanas maximizadas que recuperan su tamaño exacto tras capturar y asignación de club protegida por casillas seleccionadas."
+      ]
+    },
     {
       "version": "1.6.0",
       "build": 10600,

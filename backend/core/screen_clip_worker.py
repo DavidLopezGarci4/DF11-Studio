@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import io
 import sys
+import threading
 import time
 from typing import Any
 
@@ -209,7 +210,7 @@ def _virtual_desktop_bounds(frozen_size: tuple[int, int]) -> tuple[int, int, int
     return (vx, vy, vw, vh, pw)
 
 
-def _run_interactive_clip() -> int:
+def _run_interactive_clip(watch_stdin: bool = False) -> int:
     _enable_per_monitor_v2_dpi()
     from PIL import ImageEnhance, ImageGrab, ImageTk
     import tkinter as tk
@@ -261,6 +262,21 @@ def _run_interactive_clip() -> int:
                 root.quit()
             except Exception:
                 pass
+
+    if watch_stdin and sys.stdin is not None:
+        def _watch_parent_eof() -> None:
+            try:
+                sys.stdin.buffer.read(1)
+            except Exception:
+                pass
+            ctrl.cancelled = True
+            ctrl.closed = True
+            try:
+                root.after(0, _maybe_quit)
+            except Exception:
+                pass
+
+        threading.Thread(target=_watch_parent_eof, daemon=True).start()
 
     def _draw_hud_banner(ly0_sel: int | None, mode_str: str) -> None:
         if mode_str == "SELECTED":
@@ -435,7 +451,7 @@ def main(argv: list[str] | None = None) -> int:
     if any(a.lower() == "--self-test" for a in args):
         return _run_self_test()
     try:
-        return _run_interactive_clip()
+        return _run_interactive_clip(watch_stdin=any(a.lower() == "--watch-stdin" for a in args))
     except Exception:
         return 2
 

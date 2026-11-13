@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover
 MAX_BYTES = 20 * 1024 * 1024  # 20 MB hard cap before bitmap decode
 MAX_PIXELS = 25_000_000       # 25 MP decompression-bomb hard cap
 MAX_SIDE_PX = 1536            # Max proportional dimension for Studio/Vision pipeline
+Image.MAX_IMAGE_PIXELS = MAX_PIXELS
 
 ImageSource = Union[bytes, bytearray, str, Path, BinaryIO]
 
@@ -96,8 +97,6 @@ def load_guarded_image(source: ImageSource, max_side: int = MAX_SIDE_PX) -> Guar
     if not raw:
         raise ImageGuardError("El archivo de imagen está vacío.")
 
-    prev_max = Image.MAX_IMAGE_PIXELS
-    Image.MAX_IMAGE_PIXELS = MAX_PIXELS
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
@@ -112,8 +111,6 @@ def load_guarded_image(source: ImageSource, max_side: int = MAX_SIDE_PX) -> Guar
         raise ImageGuardError("La imagen supera el límite de 25 MP (píxeles).") from exc
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
         raise ImageGuardError("Formato de imagen inválido, corrupto o no soportado.") from exc
-    finally:
-        Image.MAX_IMAGE_PIXELS = prev_max
 
     original_size = (transposed.width, transposed.height)
     rgba = _to_srgb_rgba(transposed)
@@ -125,5 +122,6 @@ def load_guarded_image(source: ImageSource, max_side: int = MAX_SIDE_PX) -> Guar
         rgba = rgba.resize(new_size, Image.Resampling.LANCZOS)
 
     alpha_arr = np.asarray(rgba.getchannel("A"), dtype=np.uint8)
-    is_pre_cutout = bool((alpha_arr < 16).mean() >= 0.03)
+    probe_a = alpha_arr[18:292, 20:240] if rgba.size == (260, 310) else alpha_arr
+    is_pre_cutout = bool((probe_a < 16).mean() >= 0.03)
     return GuardedImage(image=rgba, is_pre_cutout=is_pre_cutout, original_size=original_size)

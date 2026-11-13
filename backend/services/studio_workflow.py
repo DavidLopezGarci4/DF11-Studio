@@ -59,7 +59,6 @@ from backend.services.templates import (
     CollarProfile,
     IMAGE_EXTS,
     ShirtTemplate,
-    _has_df11_outer_ring,
     delete_shirt_template,
     extract_collar_profile,
     normalize_template_category,
@@ -71,8 +70,8 @@ from backend.services.templates import (
     sync_tshirt_templates_dir,
 )
 
-MAX_CACHED_HEADS = 48
-MAX_CACHED_SHIRTS = 48
+MAX_CACHED_HEADS = 16
+MAX_CACHED_SHIRTS = 16
 
 
 def _finite_float(val: Any, default: float, lo: float, hi: float) -> float:
@@ -161,6 +160,7 @@ class ModularWorkflowSession:
         self._direct_seq = 0
         self._direct_photos: OrderedDict[str, tuple[Image.Image, bool, str, tuple[float, float, float]]] = OrderedDict()
         self._pure_zero_ai_cache: OrderedDict[tuple[Any, ...], Image.Image] = OrderedDict()
+        self._tpl_catalog_cache: tuple[tuple[int, int], list[ShirtTemplate]] | None = None
 
     @staticmethod
     def _extract_direct_df11_inner_crop(card_rgba: Image.Image) -> tuple[Image.Image, bool]:
@@ -181,13 +181,6 @@ class ModularWorkflowSession:
             while len(self._direct_photos) > MAX_CACHED_HEADS:
                 self._direct_photos.popitem(last=False)
             return did
-
-    def has_direct_photo(self, direct_photo_id: str) -> bool:
-        did = str(direct_photo_id or "").strip()
-        if not did:
-            return False
-        with self._lock:
-            return did in self._direct_photos
 
     def get_direct_photo(
         self, direct_photo_id: str
@@ -275,43 +268,6 @@ class ModularWorkflowSession:
             out_res["directBgReplace"] = eff_bg_replace
             out_res["bgMode"] = eff_bg_mode
         return out_res
-
-    def cutout_direct_photo_for_pure(
-        self,
-        direct_photo_id: str,
-        extra_params: dict[str, Any] | None = None,
-        custom_bg: Image.Image | None = None,
-    ) -> dict[str, Any]:
-        """100% Zero-AI contour preview helper (preserves lossless Direct Photo source with zero ONNX calls)."""
-        entry = self.get_direct_photo(direct_photo_id)
-        if entry is None:
-            raise ValueError("La foto directa activa ya no está en memoria; vuelve a cargarla.")
-        raw_im, is_precut, label, _harm = entry
-        w, h = raw_im.size
-        prev_scale = _finite_float((extra_params or {}).get("scale", 1.0), 1.0, 0.08, 8.0)
-        prev_ox = _finite_float((extra_params or {}).get("offsetX", 0.0), 0.0, -2000.0, 2000.0)
-        prev_oy = _finite_float((extra_params or {}).get("offsetY", 0.0), 0.0, -2000.0, 2000.0)
-        clamp_pan = bool((extra_params or {}).get("clampPan", not is_precut))
-        comp_params = {
-            **(extra_params or {}),
-            "step1Mode": "direct_photo",
-            "directPhotoId": direct_photo_id,
-            "scale": prev_scale,
-            "offsetX": prev_ox,
-            "offsetY": prev_oy,
-            "clampPan": clamp_pan,
-            "previewVariant": "pure",
-        }
-        return {
-            "directPhotoId": direct_photo_id,
-            "label": label,
-            "width": w,
-            "height": h,
-            "isPreCutout": is_precut,
-            "clampPan": clamp_pan,
-            "autoFit": {"scale": prev_scale, "offsetX": prev_ox, "offsetY": prev_oy, "neckFill": 1.0},
-            "previewDataUrl": _png_data_url(self.compose_step_card(comp_params, custom_bg=custom_bg, variant="pure")),
-        }
 
     def load_facepack_card_for_pure(
         self,
@@ -599,35 +555,56 @@ class ModularWorkflowSession:
 
     def clear_sample_faces(self) -> dict[str, Any]:
         deleted_ids: list[str] = []
+        deleted_norms: set[str] = set()
         root = self.sample_faces_dir.resolve()
-        if root.is_dir():
-            for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
-                if (
-                    entry.is_file()
-                    and not entry.is_symlink()
-                    and entry.resolve().parent == root
-                    and entry.suffix.lower() in IMAGE_EXTS
-                ):
-                    fid = f"smp:{entry.name}"
-                    safe_ntfs_unlink(entry)
-                    deleted_ids.append(fid)
-                    norm_path = os.path.normcase(str(entry.resolve()))
-                    with self._lock:
-                        for k in [k for k in self._thumb_cache if os.path.normcase(k[0]) == norm_path]:
-                            self._thumb_cache.pop(k, None)
-        with self._lock:
-            for k in [k for k in self._disk_face_cache if k[0].casefold().startswith("smp:")]:
-                self._disk_face_cache.pop(k, None)
+        try:
+            if root.is_dir():
+                for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+                    if (
+                        entry.is_file()
+                        and not entry.is_symlink()
+                        and entry.resolve().parent == root
+                        and entry.suffix.lower() in IMAGE_EXTS
+                    ):
+                        resolved = entry.resolve()
+                        safe_ntfs_unlink(entry)
+                        deleted_ids.append(f"smp:{entry.name}")
+                        deleted_norms.add(os.path.normcase(str(resolved)))
+        finally:
+            deleted_cf = {fid.casefold() for fid in deleted_ids}
+            with self._lock:
+                if deleted_norms:
+                    for k in [k for k in self._thumb_cache if os.path.normcase(k[0]) in deleted_norms]:
+                        self._thumb_cache.pop(k, None)
+                if deleted_cf:
+                    for k in [k for k in self._disk_face_cache if k[0].casefold() in deleted_cf]:
+                        self._disk_face_cache.pop(k, None)
         return {"deletedFaceIds": deleted_ids, "deletedCount": len(deleted_ids), "faces": self.list_faces()}
 
     # --- Tool 2: Shirt Template Extractor & Registry ---
 
-    def list_templates(self) -> list[dict[str, Any]]:
+    def _catalog_sig(self) -> tuple[int, int]:
+        dir_m = self.templates_dir.stat().st_mtime_ns if self.templates_dir.is_dir() else 0
+        db_m = self.db_path.stat().st_mtime_ns if self.db_path.is_file() else 0
+        return (dir_m, db_m)
+
+    def _sync_templates_cached(self, force: bool = False) -> list[ShirtTemplate]:
+        if not force:
+            sig = self._catalog_sig()
+            with self._lock:
+                if self._tpl_catalog_cache is not None and self._tpl_catalog_cache[0] == sig:
+                    return self._tpl_catalog_cache[1]
         items = sync_tshirt_templates_dir(
             tpl_dir=self.templates_dir,
             raw_archive_dir=self.raw_archive_dir,
             db_path=self.db_path,
         )
+        with self._lock:
+            self._tpl_catalog_cache = (self._catalog_sig(), items)
+        return items
+
+    def list_templates(self) -> list[dict[str, Any]]:
+        items = self._sync_templates_cached(force=True)
         out: list[dict[str, Any]] = []
         for t in items:
             try:
@@ -653,11 +630,7 @@ class ModularWorkflowSession:
     def _find_template(self, template_id: str) -> ShirtTemplate | None:
         if not template_id or template_id.startswith("adhoc:"):
             return None
-        items = sync_tshirt_templates_dir(
-            tpl_dir=self.templates_dir,
-            raw_archive_dir=self.raw_archive_dir,
-            db_path=self.db_path,
-        )
+        items = self._sync_templates_cached(force=False)
         return next((t for t in items if t.template_id == template_id), None)
 
     def has_shirt_reference(self, template_id: str) -> bool:
@@ -963,9 +936,12 @@ class ModularWorkflowSession:
 
         target_tid = str(active_template_id or "").strip()
         if not target_tid or target_tid.startswith("adhoc:") or not self.has_shirt_reference(target_tid):
-            items = sync_tshirt_templates_dir(tpl_dir=self.templates_dir, raw_archive_dir=self.raw_archive_dir, db_path=self.db_path)
-            first_player = next((t for t in items if t.category == "player"), None)
-            target_tid = first_player.template_id if first_player else ""
+            items = self._sync_templates_cached(force=True)
+            req_cat = normalize_template_category(str(base_params.get("category", "player")))
+            matched = next((t for t in items if t.category == req_cat), None) or next(
+                (t for t in items if t.category == "player"), None
+            )
+            target_tid = matched.template_id if matched else ""
 
         fit_dict = self.compute_auto_fit(aid, target_tid)
         comp_params = {
@@ -1056,7 +1032,6 @@ class ModularWorkflowSession:
         eff_px: float,
         eff_py: float,
         clamp_pan: bool,
-        harmonize: bool,
         pure_tol: float,
     ) -> Image.Image:
         if is_precut:
@@ -1138,7 +1113,6 @@ class ModularWorkflowSession:
                     eff_px=eff_px,
                     eff_py=eff_py,
                     clamp_pan=clamp_pan,
-                    harmonize=harmonize,
                     pure_tol=pure_tol,
                 )
                 if harmonize:
@@ -1157,8 +1131,6 @@ class ModularWorkflowSession:
                         upscale_hint=max(1.0, eff_s),
                     )
                     classic_im = Image.fromarray(enh_arr, mode="RGBA")
-                    if c_src is pure_base and need_pure:
-                        pure_base = classic_im
                 else:
                     classic_im = c_src
 
@@ -1199,7 +1171,7 @@ class ModularWorkflowSession:
             )
             base_im = Image.fromarray(placed_arr, mode="RGBA")
             pure_im = (
-                clean_pure_contour_zero_ai(base_im, pan_x=rel_ox, pan_y=rel_oy, scale=rel_scale, tolerance=pure_tol)
+                clean_pure_contour_zero_ai(base_im, is_known_precut=True)
                 if need_pure
                 else None
             )
@@ -1222,7 +1194,7 @@ class ModularWorkflowSession:
             enhance_quality=enhance_q,
         )
         pure_mod = (
-            clean_pure_contour_zero_ai(mod_subj, pan_x=ox, pan_y=oy, scale=scale, tolerance=pure_tol)
+            clean_pure_contour_zero_ai(mod_subj, is_known_precut=True)
             if (need_pure and mod_subj is not None)
             else mod_subj
         )
@@ -1282,16 +1254,9 @@ class ModularWorkflowSession:
             bg_blur=bg_blur,
             enhance_quality=0.0,
         )
-        pure_already_enhanced = (
-            step1_mode == "direct_photo" and pure_subj is not None and pure_subj is classic_subj and enhance_q > 1e-3
-        )
         pure_im = render_df11_pure_card(
             pure_subj,
-            enhance_quality=(
-                0.0
-                if pure_already_enhanced
-                else (enhance_q if step1_mode in ("direct_photo",) or p.get("wearMode") in ("club", "staff_polo", "staff_suit") else 0.0)
-            ),
+            enhance_quality=(enhance_q if step1_mode in ("direct_photo",) or p.get("wearMode") in ("club", "staff_polo", "staff_suit") else 0.0),
             upscale_hint=up_hint,
         )
         return classic_im, pure_im

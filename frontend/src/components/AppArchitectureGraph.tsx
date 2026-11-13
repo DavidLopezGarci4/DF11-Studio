@@ -70,7 +70,7 @@ function describeNodeHealth(nodeId: string, ht: string, health: HealthProbe | nu
   if (ht === 'storage') {
     return health.sqliteOk === false
       ? 'Base SQLite pendiente de inicialización en disco'
-      : `SQLite v4 WAL operativo · Latencia de lectura: ${health.sqliteLatencyMs} ms`;
+      : `SQLite v5 WAL operativo · Latencia de lectura: ${health.sqliteLatencyMs} ms`;
   }
   return 'Subsistema operativo';
 }

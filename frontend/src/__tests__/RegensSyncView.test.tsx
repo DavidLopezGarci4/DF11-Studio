@@ -123,6 +123,7 @@ describe('RegensSyncView FM27 & NG_Regens contract', () => {
       );
 
       await waitFor(() => expect(screen.getByText('r-2002049102')).toBeInTheDocument());
+      expect(screen.getByRole('button', { name: /Aplicar a selección \(0\)/i })).toBeDisabled();
       fireEvent.click(screen.getByRole('button', { name: /Dual \(Ambas\)/i }));
       await waitFor(() => expect(calls.some((c) => c.fn === 'set_export_variant' && c.args[0] === 'dual')).toBe(true));
 

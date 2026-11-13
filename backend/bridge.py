@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import base64
-import io
-import json
 import os
 import re
 import tempfile
@@ -32,29 +30,22 @@ class CapabilityError(PermissionError):
     """Raised when IPC attempts to write to a directory not approved by native OS dialog or config."""
 
 
-def _to_data_url(img: Any) -> str:
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", compress_level=4)
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
-
-
 _MAX_IMAGE_BYTES = 20 * 1024 * 1024
 _MAX_B64_CHARS = (_MAX_IMAGE_BYTES * 4) // 3 + 4096
-_WIN_RESERVED_NAMES = frozenset(
-    {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
-)
 _INVALID_WIN_FILENAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 _GENERIC_LABELS = frozenset({"", "foto directa", "foto_directa", "retrato", "cara extraída", "cara_extraida"})
 
 
 def _sanitize_creation_stem(raw_text: str) -> str:
+    from backend.services.templates import _WIN_RESERVED
+
     cleaned = str(raw_text or "").strip()
     if cleaned.lower().endswith((".png", ".jpg", ".jpeg")):
         cleaned = Path(cleaned).stem.strip()
     cleaned = _INVALID_WIN_FILENAME_RE.sub("_", cleaned).strip(" .")
     if len(cleaned) > 80:
         cleaned = cleaned[:80].rstrip(" .")
-    if not cleaned or cleaned in {".", ".."} or cleaned.upper() in _WIN_RESERVED_NAMES:
+    if not cleaned or cleaned in {".", ".."} or cleaned.upper() in _WIN_RESERVED:
         return ""
     return cleaned
 
@@ -74,21 +65,9 @@ def _decode_b64(s: str) -> bytes:
 
 
 def _read_guarded_file(path: Path) -> bytes:
-    if not path.is_file():
-        from backend.core.image_guard import ImageGuardError
+    from backend.core.image_guard import _read_bounded_bytes
 
-        raise ImageGuardError(f"No se encontró el archivo de imagen: {path.name}")
-    if path.stat().st_size > _MAX_IMAGE_BYTES:
-        from backend.core.image_guard import ImageGuardError
-
-        raise ImageGuardError("El archivo supera el límite máximo permitido de 20 MB.")
-    with path.open("rb") as fh:
-        data = fh.read(_MAX_IMAGE_BYTES + 1)
-    if len(data) > _MAX_IMAGE_BYTES:
-        from backend.core.image_guard import ImageGuardError
-
-        raise ImageGuardError("El archivo supera el límite máximo permitido de 20 MB.")
-    return data
+    return _read_bounded_bytes(path)
 
 
 def _paths_overlap(a: Path, b: Path) -> bool:
@@ -122,18 +101,11 @@ class StudioBridge:
         self._approved_dirs: set[Path] = {self._export_dir, self._export_pure_dir}
         self._window: Any = None
         self._shutting_down: bool = False
+        self._warmup_started: bool = False
         self._capture_busy_lock = threading.Lock()
         self._mod_lock = threading.Lock()
         self._sync_lock = threading.Lock()
         self._mod_session: Any = None
-        self._raw_img: Any = None
-        self._raw_is_precut: bool = False
-        self._fg_cut_cache: tuple[int, Any] | None = None
-        self._cutout_key: tuple[int, bool, bool] | None = None
-        self._cutout_img: Any = None
-        self._dressed_key: tuple[Any, ...] | None = None
-        self._dressed_img: Any = None
-        self._custom_bg_img: Any = None
         self._cancel_sync = threading.Event()
         self._watcher: Any = None
         self._hotkey_mgr: Any = None
@@ -195,6 +167,7 @@ class StudioBridge:
 
     def _shutdown_windows(self) -> None:
         self._shutting_down = True
+        self._cancel_sync.set()
         if self._hotkey_mgr is not None:
             try:
                 self._hotkey_mgr.stop()
@@ -207,6 +180,8 @@ class StudioBridge:
             except Exception:
                 pass
             self._watcher = None
+        if self._sync_lock.acquire(timeout=1.5):
+            self._sync_lock.release()
 
     def _require_approved(self, folder: Path) -> Path:
         r = folder.resolve()
@@ -255,7 +230,11 @@ class StudioBridge:
                 self._vault_dir = cand_v
                 self._approved_dirs = {d for d in self._approved_dirs if not _paths_overlap(d, self._vault_dir)}
 
-        if cand_export is not None and not _paths_overlap(cand_export, self._vault_dir):
+        if (
+            cand_export is not None
+            and not _paths_overlap(cand_export, self._vault_dir)
+            and not _paths_overlap(cand_export, cand_export_pure or self._export_pure_dir)
+        ):
             self._export_dir = cand_export
             self._approved_dirs.add(self._export_dir)
         if (
@@ -319,6 +298,10 @@ class StudioBridge:
         return {"theme": val}
 
     def warmup_vision_async(self) -> bool:
+        if self._warmup_started:
+            return True
+        self._warmup_started = True
+
         def _w() -> None:
             try:
                 from PIL import Image
@@ -338,64 +321,34 @@ class StudioBridge:
         from backend.core.fm_config import detect_fm_graphics_collision
         from backend.services.sync import check_fm_storage_health
 
-        if role == "vault":
-            pref_key = "last_vault_dir"
-            fallback = self._vault_dir
-        elif role == "facepack":
-            pref_key = "last_facepack_dir"
-            fallback = self._facepack_dir or self._export_dir
-        elif role == "facepack_pure":
-            pref_key = "last_facepack_pure_dir"
-            fallback = self._facepack_pure_dir or self._export_pure_dir
-        elif role == "export_pure":
-            pref_key = "last_export_pure_dir"
-            fallback = self._export_pure_dir
-        else:
-            pref_key = "last_export_dir"
-            fallback = self._export_dir
+        role_map: dict[str, tuple[str, Path | None, str, Path | None, str]] = {
+            "vault": ("last_vault_dir", self._vault_dir, "_vault_dir", None, ""),
+            "facepack": ("last_facepack_dir", self._facepack_dir or self._export_dir, "_facepack_dir", self._facepack_pure_dir, "La carpeta del Pack Classic y la del Pack DF11 Pure deben ser independientes."),
+            "facepack_pure": ("last_facepack_pure_dir", self._facepack_pure_dir or self._export_pure_dir, "_facepack_pure_dir", self._facepack_dir, "La carpeta del Pack DF11 Pure y la del Pack Classic deben ser independientes."),
+            "export_pure": ("last_export_pure_dir", self._export_pure_dir, "_export_pure_dir", self._export_dir, "La carpeta DF11 Pure y la carpeta Classic deben ser independientes."),
+        }
+        pref_key, fallback, attr_name, peer_dir, peer_err = role_map.get(
+            role,
+            ("last_export_dir", self._export_dir, "_export_dir", self._export_pure_dir, "La carpeta Classic y la carpeta DF11 Pure deben ser independientes."),
+        )
         init_dir = self._resolve_dialog_dir(pref_key, fallback)
         res = self._window.create_file_dialog(webview.FOLDER_DIALOG, directory=init_dir) if self._window else None
         if not res:
             return None
         c = Path(res[0]).resolve()
         if role == "vault":
-            if (
-                _paths_overlap(c, self._export_dir)
-                or _paths_overlap(c, self._export_pure_dir)
-                or (self._facepack_dir is not None and _paths_overlap(c, self._facepack_dir))
-                or (self._facepack_pure_dir is not None and _paths_overlap(c, self._facepack_pure_dir))
-            ):
+            outputs = [p for p in (self._export_dir, self._export_pure_dir, self._facepack_dir, self._facepack_pure_dir) if p is not None]
+            if any(_paths_overlap(c, out_p) for out_p in outputs):
                 raise CapabilityError("La bóveda NG_Regens de solo lectura no puede solaparse con la carpeta de salida.")
             self._vault_dir = c
             self._approved_dirs = {d for d in self._approved_dirs if not _paths_overlap(d, c)}
-        elif role == "facepack":
-            if _paths_overlap(c, self._vault_dir):
-                raise CapabilityError("La carpeta del Pack de Faces no puede solaparse con la bóveda NG_Regens de solo lectura.")
-            if self._facepack_pure_dir is not None and _paths_overlap(c, self._facepack_pure_dir):
-                raise CapabilityError("La carpeta del Pack Classic y la del Pack DF11 Pure deben ser independientes.")
-            self._approved_dirs.add(c)
-            self._facepack_dir = c
-        elif role == "facepack_pure":
-            if _paths_overlap(c, self._vault_dir):
-                raise CapabilityError("La carpeta del Pack DF11 Pure no puede solaparse con la bóveda NG_Regens de solo lectura.")
-            if self._facepack_dir is not None and _paths_overlap(c, self._facepack_dir):
-                raise CapabilityError("La carpeta del Pack DF11 Pure y la del Pack Classic deben ser independientes.")
-            self._approved_dirs.add(c)
-            self._facepack_pure_dir = c
-        elif role == "export_pure":
-            if _paths_overlap(c, self._vault_dir):
-                raise CapabilityError("La carpeta de salida Pure no puede solaparse con la bóveda NG_Regens de solo lectura.")
-            if _paths_overlap(c, self._export_dir):
-                raise CapabilityError("La carpeta DF11 Pure y la carpeta Classic deben ser independientes.")
-            self._approved_dirs.add(c)
-            self._export_pure_dir = c
         else:
             if _paths_overlap(c, self._vault_dir):
                 raise CapabilityError("La carpeta de salida no puede solaparse con la bóveda NG_Regens de solo lectura.")
-            if _paths_overlap(c, self._export_pure_dir):
-                raise CapabilityError("La carpeta Classic y la carpeta DF11 Pure deben ser independientes.")
+            if peer_dir is not None and _paths_overlap(c, peer_dir):
+                raise CapabilityError(peer_err)
             self._approved_dirs.add(c)
-            self._export_dir = c
+            setattr(self, attr_name, c)
         self._set_pref(pref_key, str(c))
         return {
             "path": str(c),
@@ -432,49 +385,6 @@ class StudioBridge:
             self._set_pref("last_image_dir", str(chosen.parent))
         return chosen
 
-    def pick_and_upload_studio_image(
-        self, remove_bg: bool = True, harmonize: bool = True, extract_bg: bool = False, params: dict[str, Any] | None = None
-    ) -> dict[str, Any] | None:
-        chosen = self._pick_image_file("last_image_dir")
-        if chosen is None:
-            return None
-        b64 = "data:image/png;base64," + base64.b64encode(_read_guarded_file(chosen)).decode("ascii")
-        out = self.upload_studio_image(b64, remove_bg=remove_bg, harmonize=harmonize, extract_bg=extract_bg, params=params)
-        return {**out, "fileName": chosen.name, "directory": str(chosen.parent)}
-
-    def pick_and_upload_custom_background(self, params: dict[str, Any] | None = None) -> dict[str, str] | None:
-        chosen = self._pick_image_file("last_bg_dir")
-        if chosen is None:
-            return None
-        b64 = "data:image/png;base64," + base64.b64encode(_read_guarded_file(chosen)).decode("ascii")
-        out = self.upload_custom_background(b64, params=params)
-        return {**out, "fileName": chosen.name, "directory": str(chosen.parent)}
-
-    def _get_fg_cutout(self) -> Any:
-        from backend.services.vision import remove_background_birefnet
-
-        if self._raw_img is None:
-            return None
-        if self._raw_is_precut:
-            return self._raw_img
-        raw_id = id(self._raw_img)
-        if self._fg_cut_cache is None or self._fg_cut_cache[0] != raw_id:
-            self._fg_cut_cache = (raw_id, remove_background_birefnet(self._raw_img))
-        return self._fg_cut_cache[1]
-
-    def _ensure_cutout(self, remove_bg: bool, harmonize: bool) -> Any:
-        from backend.services.vision import harmonize_df11_studio_grade
-
-        if self._raw_img is None:
-            return None
-        key = (id(self._raw_img), bool(remove_bg), bool(harmonize))
-        if self._cutout_key != key or self._cutout_img is None:
-            cut = self._get_fg_cutout() if (self._raw_is_precut or remove_bg) else self._raw_img
-            self._cutout_img = harmonize_df11_studio_grade(cut) if harmonize else cut
-            self._cutout_key = key
-            self._dressed_key = None
-        return self._cutout_img
-
     def _resolve_studio_kit(self, cid: str, p: dict[str, Any]) -> Any:
         from backend.services.kits import KitSpec, resolve_club_kit
 
@@ -485,180 +395,6 @@ class StudioBridge:
         sec = str(p.get("customSecondary") or base.secondary)
         pat = str(p.get("customPattern") or base.pattern)
         return KitSpec(base.club_id, base.name, pat, pri, sec, sec, "custom", base.crest_path)
-
-    def _compose_legacy_subject(self, p: dict[str, Any]) -> Any:
-        from PIL import Image
-        from backend.core.compositor import _place_portrait
-        from backend.core.dsp import enhance_df11_pure_optics, resample_linear_subpixel_rgba
-
-        remove_bg = bool(p.get("removeBg", True))
-        harmonize = bool(p.get("harmonize", True))
-        cut = self._ensure_cutout(remove_bg, harmonize)
-        if cut is None:
-            return None
-        kmode, cid = p.get("kitMode", "original"), str(p.get("clubId", "1736"))
-        ox, oy = float(p.get("offsetX", 0.0)), float(p.get("offsetY", 0.0))
-        scale = float(p.get("scale", 1.0))
-        enh = float(p.get("enhanceQuality", 0.0))
-
-        # 100% Zero-AI fast lane when removeBg is False and kitMode is 'original' (never calls YuNet / Selfie-Seg!)
-        if not remove_bg and kmode == "original":
-            fit_m = "contain" if self._raw_is_precut else "cover"
-            placed = resample_linear_subpixel_rgba(
-                cut,
-                zoom=scale,
-                pan_x=ox,
-                pan_y=oy,
-                fit_mode=fit_m,
-                clamp_to_inner=not self._raw_is_precut,
-            )
-            if enh > 1e-3:
-                placed = enhance_df11_pure_optics(placed, amount=enh, upscale_hint=max(1.0, scale))
-            return Image.fromarray(placed, mode="RGBA")
-
-        from backend.services.kits import dress_or_frame_portrait
-
-        kit = self._resolve_studio_kit(cid, p) if kmode != "original" else None
-        dkey = (id(cut), kmode, kit.club_id if kit else "", kit.pattern if kit else "", kit.primary if kit else "", kit.secondary if kit else "", kit.collar if kit else "")
-        if self._dressed_key != dkey or self._dressed_img is None:
-            self._dressed_img = dress_or_frame_portrait(cut, kit_mode=kmode, kit_spec=kit)
-            self._dressed_key = dkey
-        placed = _place_portrait(self._dressed_img, (ox, oy), scale)
-        if enh > 1e-3:
-            placed = enhance_df11_pure_optics(placed, amount=enh, upscale_hint=max(1.0, scale))
-        return Image.fromarray(placed, mode="RGBA")
-
-    def _compose(self, p: dict[str, Any], variant: str | None = None) -> Any:
-        from backend.core.compositor import render_df11_card, render_df11_pure_card
-        from backend.core.dsp import clean_pure_contour_zero_ai
-
-        eff_var = "pure" if str(variant or p.get("previewVariant") or "classic").strip().lower() == "pure" else "classic"
-        subj = self._compose_legacy_subject(p)
-        is_pre = bool(self._raw_is_precut or p.get("removeBg", True))
-        replace_bg = bool(p.get("directBgReplace", False)) and not is_pre
-        pure_subj = (
-            clean_pure_contour_zero_ai(
-                subj,
-                pan_x=float(p.get("offsetX", 0.0)),
-                pan_y=float(p.get("offsetY", 0.0)),
-                scale=float(p.get("scale", 1.0)),
-                tolerance=float(p.get("pureContourTolerance", 0.5)),
-                is_known_precut=is_pre,
-            )
-            if (subj is not None and (eff_var == "pure" or replace_bg))
-            else None
-        )
-        if eff_var == "pure":
-            return render_df11_pure_card(pure_subj)
-        c_subj = pure_subj if (replace_bg and pure_subj is not None) else subj
-        return render_df11_card(
-            portrait_rgba=c_subj,
-            portrait_offset=(0.0, 0.0),
-            portrait_scale=1.0,
-            bg_mode=p.get("bgMode", "white_df11"),
-            bg_custom_rgba=self._custom_bg_img,
-            bg_blur=float(p.get("bgBlur", 0.0)),
-            enhance_quality=0.0,
-        )
-
-    def _compose_dual(self, p: dict[str, Any]) -> tuple[Any, Any]:
-        from backend.core.compositor import render_df11_card, render_df11_pure_card
-        from backend.core.dsp import clean_pure_contour_zero_ai
-
-        subj = self._compose_legacy_subject(p)
-        is_pre = bool(self._raw_is_precut or p.get("removeBg", True))
-        replace_bg = bool(p.get("directBgReplace", False)) and not is_pre
-        pure_subj = (
-            clean_pure_contour_zero_ai(
-                subj,
-                pan_x=float(p.get("offsetX", 0.0)),
-                pan_y=float(p.get("offsetY", 0.0)),
-                scale=float(p.get("scale", 1.0)),
-                tolerance=float(p.get("pureContourTolerance", 0.5)),
-                is_known_precut=is_pre,
-            )
-            if subj is not None
-            else None
-        )
-        c_subj = pure_subj if (replace_bg and pure_subj is not None) else subj
-        classic_im = render_df11_card(
-            portrait_rgba=c_subj,
-            portrait_offset=(0.0, 0.0),
-            portrait_scale=1.0,
-            bg_mode=p.get("bgMode", "white_df11"),
-            bg_custom_rgba=self._custom_bg_img,
-            bg_blur=float(p.get("bgBlur", 0.0)),
-            enhance_quality=0.0,
-        )
-        return classic_im, render_df11_pure_card(pure_subj)
-
-    def upload_studio_image(
-        self, data_url: str, remove_bg: bool = True, harmonize: bool = True, extract_bg: bool = False, params: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        from backend.core.image_guard import load_guarded_image
-        from backend.services.vision import extract_clean_background
-
-        g = load_guarded_image(_decode_b64(data_url))
-        self._raw_img = g.image
-        self._raw_is_precut = g.is_pre_cutout
-        self._fg_cut_cache = None
-        self._cutout_key = None
-        self._dressed_key = None
-        eff_remove = True if extract_bg else bool(remove_bg)
-        bg_url = ""
-        if extract_bg:
-            alpha = self._get_fg_cutout().getchannel("A")
-            self._custom_bg_img = extract_clean_background(g.image, alpha)
-            bg_url = _to_data_url(self._custom_bg_img)
-        merged = {**(params or {}), "removeBg": eff_remove, "harmonize": harmonize}
-        if extract_bg:
-            merged["bgMode"] = "custom"
-        return {"isPreCutout": g.is_pre_cutout, "originalSize": list(g.original_size), "previewDataUrl": _to_data_url(self._compose(merged)), "cleanBgDataUrl": bg_url}
-
-    def extract_studio_background(self, params: dict[str, Any] | None = None) -> dict[str, str]:
-        if str((params or {}).get("step1Mode", "modular")).strip().lower() == "direct_photo":
-            raise ValueError(
-                "En modo Foto Directa el fondo original ya forma parte de la foto; cambia a Modo Capas si deseas aislar el retrato."
-            )
-        from backend.services.vision import extract_clean_background, remove_background_birefnet
-
-        merged = {**(params or {}), "removeBg": True, "bgMode": "custom"}
-        if merged.get("modular"):
-            head_id = str(merged.get("headAssetId", "")).strip()
-            asset = self._mod().get_head_asset(head_id) if head_id else None
-            if asset is not None:
-                if asset.is_pre_cutout or asset.source_rgba is None:
-                    raise ValueError("Esta imagen ya viene recortada sin fondo; elige un fondo de estudio o sube un fondo propio.")
-                alpha = asset.source_fg_alpha or remove_background_birefnet(asset.source_rgba).getchannel("A")
-                self._custom_bg_img = extract_clean_background(asset.source_rgba, alpha)
-            else:
-                if self._raw_img is None:
-                    raise ValueError("Sube o pega primero un retrato en el Estudio para extraer su fondo.")
-                if self._raw_is_precut:
-                    raise ValueError("Esta imagen ya viene recortada sin fondo; elige un fondo de estudio o sube un fondo propio.")
-                alpha = self._get_fg_cutout().getchannel("A")
-                self._custom_bg_img = extract_clean_background(self._raw_img, alpha)
-            card = self._mod().compose_step_card(merged, custom_bg=self._custom_bg_img)
-            return {"cleanBgDataUrl": _to_data_url(self._custom_bg_img), "previewDataUrl": _to_data_url(card)}
-
-        if self._raw_img is None:
-            raise ValueError("Sube o pega primero un retrato en el Estudio para extraer su fondo.")
-        alpha = self._get_fg_cutout().getchannel("A")
-        self._custom_bg_img = extract_clean_background(self._raw_img, alpha)
-        return {"cleanBgDataUrl": _to_data_url(self._custom_bg_img), "previewDataUrl": _to_data_url(self._compose(merged))}
-
-    def upload_custom_background(self, data_url: str, params: dict[str, Any] | None = None) -> dict[str, str]:
-        from backend.core.image_guard import load_guarded_image
-
-        self._custom_bg_img = load_guarded_image(_decode_b64(data_url)).image
-        merged = {**(params or {}), "bgMode": "custom"}
-        if str(merged.get("step1Mode", "")).strip().lower() == "direct_photo" and "directBgReplace" not in (params or {}):
-            merged["directBgReplace"] = True
-        card = self._mod().compose_step_card(merged, custom_bg=self._custom_bg_img) if merged.get("modular") else self._compose(merged)
-        return {"bgDataUrl": _to_data_url(self._custom_bg_img), "previewDataUrl": _to_data_url(card)}
-
-    def render_studio_preview(self, params: dict[str, Any]) -> dict[str, str]:
-        return {"previewDataUrl": _to_data_url(self._compose(params))}
 
     def _resolve_export_dirs(
         self,
@@ -743,10 +479,16 @@ class StudioBridge:
         fm_uid: str | None,
         update_xml: bool,
         export_variant: str,
+        export_target: str,
         classic_target: tuple[Path, str, bytes] | None,
         pure_target: tuple[Path, str, bytes] | None,
     ) -> dict[str, Any]:
-        from backend.core.fm_config import detect_fm_graphics_collision, safe_ntfs_replace, upsert_fm_config_xml
+        from backend.core.fm_config import (
+            atomic_write_bytes,
+            detect_fm_graphics_collision,
+            safe_ntfs_replace,
+            upsert_fm_config_xml,
+        )
 
         plans: list[tuple[str, Path, str, bytes]] = []
         if classic_target is not None:
@@ -754,108 +496,72 @@ class StudioBridge:
         if pure_target is not None:
             plans.append(("pure", pure_target[0], pure_target[1], pure_target[2]))
 
-        staged: list[tuple[str, Path, Path, bool]] = []
-        committed: list[tuple[Path, bool]] = []
-        try:
-            for kind, tdir, ext, payload in plans:
-                tdir.mkdir(parents=True, exist_ok=True)
-                dst = tdir / f"{file_stem}.{ext}"
-                existed_before = dst.exists()
-                fd, tname = tempfile.mkstemp(prefix=f".{file_stem[:24]}_", suffix=".tmp", dir=str(tdir))
-                tp = Path(tname)
-                staged.append((kind, tp, dst, existed_before))
-                with os.fdopen(fd, "wb") as fh:
-                    fh.write(payload)
-                    fh.flush()
-                    os.fsync(fh.fileno())
+        with self._sync_lock:
+            staged: list[tuple[str, Path, Path, bytes | None]] = []
+            committed: list[tuple[Path, bytes | None]] = []
+            xml_committed: list[tuple[Path, bytes | None]] = []
+            try:
+                for kind, tdir, ext, payload in plans:
+                    tdir.mkdir(parents=True, exist_ok=True)
+                    dst = tdir / f"{file_stem}.{ext}"
+                    prev_bytes = dst.read_bytes() if dst.is_file() else None
+                    fd, tname = tempfile.mkstemp(prefix=f".{file_stem[:24]}_", suffix=".tmp", dir=str(tdir))
+                    tp = Path(tname)
+                    staged.append((kind, tp, dst, prev_bytes))
+                    with os.fdopen(fd, "wb") as fh:
+                        fh.write(payload)
+                        fh.flush()
+                        os.fsync(fh.fileno())
 
-            for _kind, tp, dst, existed_before in staged:
-                safe_ntfs_replace(tp, dst)
-                committed.append((dst, existed_before))
-        except Exception:
-            for done_dst, existed_before in committed:
-                if not existed_before:
+                for _kind, tp, dst, prev_bytes in staged:
+                    safe_ntfs_replace(tp, dst)
+                    committed.append((dst, prev_bytes))
+
+                if fm_uid is not None and update_xml:
+                    for _kind, tdir, ext, _payload in plans:
+                        if ext == "png":
+                            xml_path = tdir / "config.xml"
+                            prev_xml = xml_path.read_bytes() if xml_path.is_file() else None
+                            upsert_fm_config_xml(xml_path, [fm_uid])
+                            xml_committed.append((xml_path, prev_xml))
+            except Exception:
+                for xml_path, prev_xml in xml_committed:
                     try:
-                        done_dst.unlink(missing_ok=True)
+                        if prev_xml is not None:
+                            atomic_write_bytes(xml_path, prev_xml, prefix=".rbxml_")
+                        else:
+                            xml_path.unlink(missing_ok=True)
                     except OSError:
                         pass
-            raise
-        finally:
-            for _kind, tp, _dst, _existed in staged:
-                if tp.exists():
-                    tp.unlink(missing_ok=True)
+                for done_dst, prev_bytes in committed:
+                    try:
+                        if prev_bytes is not None:
+                            atomic_write_bytes(done_dst, prev_bytes, prefix=".rb_")
+                        else:
+                            done_dst.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                raise
+            finally:
+                for _kind, tp, _dst, _prev in staged:
+                    if tp.exists():
+                        tp.unlink(missing_ok=True)
 
-        if fm_uid is not None and update_xml:
-            for _kind, tdir, ext, _payload in plans:
-                if ext == "png":
-                    upsert_fm_config_xml(tdir / "config.xml", [fm_uid])
-
-        by_kind = {kind: str(dst) for kind, _tp, dst, _ex in staged}
+        by_kind = {kind: str(dst) for kind, _tp, dst, _prev in staged}
         c_dir = classic_target[0] if classic_target is not None else None
         p_dir = pure_target[0] if pure_target is not None else None
         primary_saved = by_kind.get("classic") or by_kind.get("pure") or ""
+        coll_a, coll_b = (
+            (c_dir or self._facepack_dir, p_dir or self._facepack_pure_dir)
+            if export_target == "facepack"
+            else (c_dir or self._export_dir, p_dir or self._export_pure_dir)
+        )
         return {
             "savedPath": primary_saved,
             "savedPurePath": by_kind.get("pure", ""),
             "exportVariant": export_variant,
-            "fmGraphicsCollision": detect_fm_graphics_collision(c_dir, p_dir) if export_variant == "dual" else False,
+            "fmGraphicsCollision": detect_fm_graphics_collision(coll_a, coll_b) if export_variant == "dual" else False,
         }
-
-    def export_studio_card(self, params: dict[str, Any]) -> dict[str, Any]:
-        from backend.core.compositor import export_df11_bytes
-        from backend.services.kits import save_kit_override
-
-        if self._raw_img is None:
-            raise ValueError("Sube o selecciona un retrato antes de exportar la ficha DF11.")
-        export_target = str(params.get("exportTarget", "creations")).strip().lower()
-        raw_var = str(params.get("exportVariant") or "classic").strip().lower()
-        export_variant = raw_var if raw_var in ("classic", "pure", "dual") else "classic"
-        fmt = "jpg" if str(params.get("fmt", "png")).lower() in ("jpg", "jpeg") else "png"
-        if export_target == "facepack":
-            fmt = "png"
-        elif export_variant in ("pure", "dual") and fmt != "png":
-            raise ValueError("El formato oficial DF11 Pure exige exportación en PNG transparente (32-bit RGBA).")
-
-        classic_dir, pure_dir = self._resolve_export_dirs(params, export_target, export_variant)
-        check_targets: list[tuple[Path, str]] = []
-        if classic_dir is not None:
-            check_targets.append((classic_dir, fmt))
-        if pure_dir is not None:
-            check_targets.append((pure_dir, "png"))
-        file_stem, fm_uid = self._resolve_export_stem_and_uid(
-            str(params.get("uid", "")),
-            export_target,
-            check_targets,
-            str(params.get("fileLabel", "")),
-        )
-        if params.get("customKitDirty") and params.get("kitMode", "original") != "original":
-            kit = self._resolve_studio_kit(str(params.get("clubId", "1736")), params)
-            save_kit_override(kit.club_id, kit.primary, kit.secondary, pattern=kit.pattern, db_path=self._db_path)
-
-        if export_variant == "dual":
-            c_im, p_im = self._compose_dual(params)
-            assert classic_dir is not None and pure_dir is not None
-            c_target = (classic_dir, fmt, export_df11_bytes(c_im, fmt=fmt))  # type: ignore[arg-type]
-            p_target = (pure_dir, "png", export_df11_bytes(p_im, fmt="png"))
-        elif export_variant == "pure":
-            p_im = self._compose(params, variant="pure")
-            assert pure_dir is not None
-            c_target = None
-            p_target = (pure_dir, "png", export_df11_bytes(p_im, fmt="png"))
-        else:
-            c_im = self._compose(params, variant="classic")
-            assert classic_dir is not None
-            c_target = (classic_dir, fmt, export_df11_bytes(c_im, fmt=fmt))  # type: ignore[arg-type]
-            p_target = None
-
-        return self._commit_card_exports_atomic(
-            file_stem=file_stem,
-            fm_uid=fm_uid,
-            update_xml=bool(params.get("updateConfigXml", True)),
-            export_variant=export_variant,
-            classic_target=c_target,
-            pure_target=p_target,
-        )
 
     def scan_vault_summary(self) -> dict[str, Any]:
         from backend.services.kits import init_state_db
@@ -966,7 +672,7 @@ class StudioBridge:
     def load_regen_into_studio(self, uid: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         from backend.services.kits import init_state_db
         from backend.services.sync import scan_ng_regens_vault
-        from backend.services.templates import get_club_shirt_template
+        from backend.services.templates import get_club_shirt_template, normalize_template_category
 
         e = scan_ng_regens_vault(self._vault_dir)
         if uid not in e:
@@ -976,38 +682,43 @@ class StudioBridge:
             with init_state_db(self._db_path) as c:
                 row = c.execute("SELECT club_id FROM squad_map WHERE uid=?", (uid,)).fetchone()
                 club_id = str(row[0]) if row and row[0] else ""
-        matched_tpl = get_club_shirt_template(club_id, tpl_dir=self._templates_dir, db_path=self._db_path) if club_id else None
+        req_cat = normalize_template_category(str((params or {}).get("category", "player")))
+        matched_tpl = (
+            get_club_shirt_template(club_id, tpl_dir=self._templates_dir, db_path=self._db_path, category=req_cat)
+            or (
+                get_club_shirt_template(club_id, tpl_dir=self._templates_dir, db_path=self._db_path, category="player")
+                if req_cat != "player"
+                else None
+            )
+            if club_id
+            else None
+        )
         tpl_id = matched_tpl.template_id if matched_tpl is not None else ""
 
         raw_bytes = _read_guarded_file(e[uid])
-        b64 = "data:image/png;base64," + base64.b64encode(raw_bytes).decode("ascii")
         staged = self._mod().stage_raw_face(raw_bytes, file_name=f"{uid}.png")
         ext_opts = {
+            **(params or {}),
             **staged["suggestedViewport"],
             "templateId": tpl_id,
             "wearMode": "template",
             "clubId": club_id or "1736",
         }
-        extracted = self._mod().extract_staged_face(ext_opts, custom_bg=self._custom_bg_img)
-        legacy = self.upload_studio_image(b64, remove_bg=True, harmonize=True, extract_bg=False, params=params)
+        extracted = self._mod().extract_staged_face(ext_opts)
         return {
-            **legacy,
             "uid": uid,
             "clubId": club_id,
             "matchedTemplateId": tpl_id,
+            "matchedCategory": matched_tpl.category if matched_tpl is not None else req_cat,
+            "isPreCutout": staged["isPreCutout"],
+            "originalSize": [staged["width"], staged["height"]],
             "headAssetId": extracted["headAssetId"],
+            "headPreviewDataUrl": extracted["headPreviewDataUrl"],
             "autoFit": extracted["autoFit"],
             "previewDataUrl": extracted["previewDataUrl"],
         }
 
     # --- Modular 3-Tool & Step-by-Step Layer API ---
-
-    def _sync_legacy_raw(self, raw_img: Any, is_precut: bool) -> None:
-        self._raw_img = raw_img
-        self._raw_is_precut = is_precut
-        self._fg_cut_cache = None
-        self._cutout_key = None
-        self._dressed_key = None
 
     def _route_captured_png(
         self,
@@ -1030,12 +741,10 @@ class StudioBridge:
                 res.png_bytes,
                 file_name=f"Captura_{stamp}.png",
                 extra_params=params,
-                custom_bg=self._custom_bg_img,
             )
             return {**out, **meta}
         if tgt == "raw_face":
             out = self._mod().stage_raw_face(res.png_bytes, file_name=f"Captura_Cara_{stamp}.png")
-            self._sync_legacy_raw(self._mod()._crop_raw_img, self._mod()._crop_is_precut)
             return {**out, **meta}
         if tgt == "raw_shirt":
             out = self._mod().stage_raw_shirt(
@@ -1046,7 +755,7 @@ class StudioBridge:
             return {**out, **meta}
 
         import webview
-        from backend.core.fm_config import safe_ntfs_replace
+        from backend.core.fm_config import atomic_write_bytes
 
         active_dlg_win = dialog_win or self._window
         if not active_dlg_win:
@@ -1066,15 +775,7 @@ class StudioBridge:
             dst = dst.with_suffix(".png")
         if _paths_overlap(dst, self._vault_dir):
             raise CapabilityError("No se permite guardar recortes dentro de la bóveda NG_Regens de solo lectura.")
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        fd, tname = tempfile.mkstemp(prefix=".clip_", suffix=".tmp", dir=str(dst.parent))
-        tp = Path(tname)
-        try:
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(res.png_bytes)
-            safe_ntfs_replace(tp, dst)
-        finally:
-            tp.unlink(missing_ok=True)
+        atomic_write_bytes(dst, res.png_bytes, prefix=".clip_")
         self._set_pref("last_clip_save_dir", str(dst.parent))
         return {**meta, "savedPath": str(dst), "fileName": dst.name}
 
@@ -1125,13 +826,10 @@ class StudioBridge:
         if chosen is None:
             return None
         out = self._mod().stage_raw_face(_read_guarded_file(chosen), file_name=chosen.name)
-        self._sync_legacy_raw(self._mod()._crop_raw_img, self._mod()._crop_is_precut)
         return {**out, "directory": str(chosen.parent)}
 
     def load_raw_face_source(self, data_url: str, file_name: str = "") -> dict[str, Any]:
-        out = self._mod().stage_raw_face(_decode_b64(data_url), file_name=file_name)
-        self._sync_legacy_raw(self._mod()._crop_raw_img, self._mod()._crop_is_precut)
-        return out
+        return self._mod().stage_raw_face(_decode_b64(data_url), file_name=file_name)
 
     def pick_direct_photo_source(self, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         chosen = self._pick_image_file("last_image_dir")
@@ -1141,7 +839,6 @@ class StudioBridge:
             _read_guarded_file(chosen),
             file_name=chosen.name,
             extra_params=params,
-            custom_bg=self._custom_bg_img,
         )
         return {**out, "directory": str(chosen.parent)}
 
@@ -1152,39 +849,19 @@ class StudioBridge:
             _decode_b64(data_url),
             file_name=file_name,
             extra_params=params,
-            custom_bg=self._custom_bg_img,
-        )
-
-    def cutout_direct_photo_for_pure(
-        self, direct_photo_id: str, params: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        return self._mod().cutout_direct_photo_for_pure(
-            direct_photo_id=str(direct_photo_id or ""),
-            extra_params=params,
-            custom_bg=self._custom_bg_img,
         )
 
     def promote_staged_crop_to_direct_photo(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._mod().promote_staged_crop_to_direct_photo(
-            extra_params=params,
-            custom_bg=self._custom_bg_img,
-        )
+        return self._mod().promote_staged_crop_to_direct_photo(extra_params=params)
 
     def extract_face_from_crop(self, opts: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._mod().extract_staged_face(opts or {}, custom_bg=self._custom_bg_img)
+        return self._mod().extract_staged_face(opts or {})
 
     def list_saved_faces(self) -> list[dict[str, str]]:
         return self._mod().list_faces()
 
     def load_saved_face(self, face_id: str, template_id: str = "", params: dict[str, Any] | None = None) -> dict[str, Any]:
-        from backend.core.image_guard import load_guarded_image
-
-        out = self._mod().load_face_from_library(face_id, template_id=template_id, extra_params=params, custom_bg=self._custom_bg_img)
-        src_path = out.get("sourcePath")
-        if src_path and Path(src_path).is_file():
-            g = load_guarded_image(Path(src_path))
-            self._sync_legacy_raw(g.image, g.is_pre_cutout)
-        return out
+        return self._mod().load_face_from_library(face_id, template_id=template_id, extra_params=params)
 
     def save_extracted_face(self, head_asset_id: str, name: str) -> dict[str, Any]:
         return self._mod().save_face_to_library(head_asset_id, name)
@@ -1298,7 +975,6 @@ class StudioBridge:
             remix_mode=remix_mode,
             active_template_id=active_template_id,
             extra_params=params,
-            custom_bg=self._custom_bg_img,
         )
         return {**out, "facepackDir": str(self._facepack_dir) if self._facepack_dir else ""}
 
@@ -1316,7 +992,6 @@ class StudioBridge:
             remix_mode=remix_mode,
             active_template_id=active_template_id,
             extra_params=params,
-            custom_bg=self._custom_bg_img,
         )
         return {**out, "facepackDir": str(self._facepack_dir) if self._facepack_dir else ""}
 
@@ -1342,7 +1017,6 @@ class StudioBridge:
             _read_guarded_file(chosen),
             file_name=chosen.name,
             extra_params=params,
-            custom_bg=self._custom_bg_img,
         )
         return {
             **out,
@@ -1360,7 +1034,6 @@ class StudioBridge:
             _decode_b64(data_url),
             file_name=file_name,
             extra_params=params,
-            custom_bg=self._custom_bg_img,
         )
         return {
             **out,
@@ -1375,7 +1048,6 @@ class StudioBridge:
             remix_mode=remix_mode,
             active_template_id=active_template_id,
             extra_params=params,
-            custom_bg=self._custom_bg_img,
         )
         return {**out, "facepackDir": str(self._facepack_dir) if self._facepack_dir else ""}
 
@@ -1386,7 +1058,9 @@ class StudioBridge:
         return self._mod().compute_auto_fit(head_asset_id, template_id)
 
     def render_modular_preview(self, params: dict[str, Any]) -> dict[str, str]:
-        return {"previewDataUrl": _to_data_url(self._mod().compose_step_card(params, custom_bg=self._custom_bg_img))}
+        from backend.services.studio_workflow import _png_data_url
+
+        return {"previewDataUrl": _png_data_url(self._mod().compose_step_card(params))}
 
     def export_modular_card(self, params: dict[str, Any]) -> dict[str, Any]:
         from backend.core.compositor import export_df11_bytes
@@ -1440,17 +1114,17 @@ class StudioBridge:
             save_kit_override(kit.club_id, kit.primary, kit.secondary, pattern=kit.pattern, db_path=self._db_path)
 
         if export_variant == "dual":
-            c_im, p_im = self._mod().compose_step_dual_cards(params, custom_bg=self._custom_bg_img)
+            c_im, p_im = self._mod().compose_step_dual_cards(params)
             assert classic_dir is not None and pure_dir is not None
             c_target = (classic_dir, fmt, export_df11_bytes(c_im, fmt=fmt))  # type: ignore[arg-type]
             p_target = (pure_dir, "png", export_df11_bytes(p_im, fmt="png"))
         elif export_variant == "pure":
-            p_im = self._mod().compose_step_card(params, custom_bg=self._custom_bg_img, variant="pure")
+            p_im = self._mod().compose_step_card(params, variant="pure")
             assert pure_dir is not None
             c_target = None
             p_target = (pure_dir, "png", export_df11_bytes(p_im, fmt="png"))
         else:
-            c_im = self._mod().compose_step_card(params, custom_bg=self._custom_bg_img, variant="classic")
+            c_im = self._mod().compose_step_card(params, variant="classic")
             assert classic_dir is not None
             c_target = (classic_dir, fmt, export_df11_bytes(c_im, fmt=fmt))  # type: ignore[arg-type]
             p_target = None
@@ -1460,6 +1134,7 @@ class StudioBridge:
             fm_uid=fm_uid,
             update_xml=bool(params.get("updateConfigXml", True)),
             export_variant=export_variant,
+            export_target=export_target,
             classic_target=c_target,
             pure_target=p_target,
         )
@@ -1474,17 +1149,13 @@ class StudioBridge:
             if self._db_path.is_file():
                 uri = f"{self._db_path.resolve().as_uri()}?mode=ro"
                 conn = sqlite3.connect(uri, uri=True, timeout=2.0)
-                try:
-                    conn.execute("SELECT 1").fetchone()
-                    sqlite_ok = True
-                finally:
-                    conn.close()
             else:
-                from backend.services.kits import init_state_db
-
-                with init_state_db(self._db_path) as conn:
-                    conn.execute("SELECT 1").fetchone()
-                    sqlite_ok = True
+                conn = sqlite3.connect(":memory:")
+            try:
+                conn.execute("SELECT 1").fetchone()
+                sqlite_ok = True
+            finally:
+                conn.close()
             sqlite_ms = round((time.perf_counter() - t0) * 1000.0, 2)
         except Exception:
             sqlite_ms = round((time.perf_counter() - t0) * 1000.0, 2)

@@ -1,6 +1,6 @@
 {
   "appName": "DF11 Face Studio",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "category": "Estudio Modular & Sincronizador DF11 Classic / Pure / Dual",
   "description": "Arquitectura local sin scroll exterior: interfaz React 19 sobre WebView2 conectada a Python 3.12 con formatos DF11 Classic (260×310), DF11 Pure (220×276) y Dual en 3 pasos, captura PerMonitorV2, óptica WGIF/OKLab sin IA, GPU DirectML y SQLite v5.",
   "nodes": [
@@ -19,7 +19,7 @@
       "useCases": ["Paso 1 con Formato DF11, Modo Capas o Foto Directa (↑N ↓S ←O →E)", "Paso 2 Campo/Portero (GK)/Staff y Paso 3 Exportación Classic/Pure/Dual"]
     },
     {
-      "id": "ipc_bridge", "label": "StudioBridge + ScreenClip", "version": "1.6.0",
+      "id": "ipc_bridge", "label": "StudioBridge + ScreenClip", "version": "1.6.1",
       "role": "Orquestador IPC, Guardado Dual Atómico y Captura", "category": "server_web_apps", "color": "#8b5cf6", "icon": "Workflow", "healthType": "native_bridge",
       "computationalModel": "Fachada IPC con guardado Dual 2-phase commit, recorte PerMonitorV2 cero-portapapeles y observador de 650 ms.",
       "whyChosen": "Recorta regiones multimonitor sin borrar el #UID copiado y exporta Classic + Pure sin archivos huérfanos.",
@@ -40,7 +40,7 @@
       "useCases": ["Exportación Classic 260×310, Pure 220×276 o Dual simultánea", "Reimportación 1:1 sin pérdida de fichas Classic y Pure"]
     },
     {
-      "id": "dsp_pure_optics", "label": "Óptica Pura WGIF + Geodésica", "version": "1.6.0",
+      "id": "dsp_pure_optics", "label": "Óptica Pura WGIF + Geodésica", "version": "1.6.1",
       "role": "Motor DSP 100% Offline (0% IA): Contorno Pure, WGIF y OKLab", "category": "graphics_multimedia", "color": "#10b981", "icon": "Layers", "healthType": "static",
       "computationalModel": "Geodésica 8D + domo WLS + filtro guiado WGIF O(1) en OKLab y desmezclado algebraico sin IA.",
       "whyChosen": "Limpia el contorno DF11 Pure y realza ojos, pelo y escudos sin usar IA ni modelos ONNX.",

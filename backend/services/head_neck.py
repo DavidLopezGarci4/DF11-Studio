@@ -5,10 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import io
 import math
-import os
 from pathlib import Path
 import re
-import tempfile
 from typing import Literal
 
 import numpy as np
@@ -19,6 +17,7 @@ from backend.core.compositor import (
     BgMode,
     DF11_HEIGHT,
     DF11_WIDTH,
+    has_df11_outer_ring,
     is_df11_pure_size,
     pad_pure_to_df11_canvas,
     premul_over,
@@ -30,9 +29,9 @@ from backend.core.dsp import (
     resample_linear_subpixel_rgba,
     srgb_to_oklab,
 )
-from backend.core.fm_config import safe_ntfs_replace
+from backend.core.fm_config import atomic_write_bytes
 from backend.core.paths import get_caras_prueba_dir, get_extracted_faces_dir
-from backend.services.templates import CollarProfile, IMAGE_EXTS, _has_df11_outer_ring
+from backend.services.templates import CollarProfile, IMAGE_EXTS
 from backend.services.vision import FacePose
 
 CROWN_SAFE_Y = 21.0
@@ -69,8 +68,6 @@ class HeadNeckAsset:
     roi_box: tuple[int, int, int, int] = (0, 0, DF11_WIDTH, DF11_HEIGHT)
     raw_size: tuple[int, int] = (DF11_WIDTH, DF11_HEIGHT)
     is_pre_cutout: bool = True
-    source_rgba: Image.Image | None = None
-    source_fg_alpha: Image.Image | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +86,7 @@ def prepare_facepack_card_for_head_extraction(raw_rgba: Image.Image, default_is_
         p_alpha = np.asarray(im, dtype=np.uint8)[:, :, 3]
         top_clear = int(p_alpha[:55, :20].max()) == 0 and int(p_alpha[:55, -20:].max()) == 0
         return pad_pure_to_df11_canvas(im, unfeather_edges=False), (True if top_clear else default_is_precut)
-    if not _has_df11_outer_ring(im):
+    if not has_df11_outer_ring(im):
         return im, default_is_precut
 
     arr = np.asarray(im, dtype=np.uint8).copy()
@@ -193,9 +190,7 @@ def extract_clean_head_and_neck(
             (max(1, round(roi.width * shrink)), max(1, round(roi.height * shrink))),
             Image.Resampling.LANCZOS,
         )
-    src_scene = None if is_pre_cutout else roi.copy()
     fg_rgba = roi if (is_pre_cutout or not remove_bg) else vision_mod.remove_background_birefnet(roi)
-    src_fg_alpha = fg_rgba.getchannel("A") if (not is_pre_cutout and remove_bg) else None
     arr = np.asarray(fg_rgba.convert("RGBA"), dtype=np.uint8).copy()
     h, w = arr.shape[:2]
 
@@ -285,8 +280,6 @@ def extract_clean_head_and_neck(
         roi_box=(rx0, ry0, rx1, ry1),
         raw_size=raw_rgba.size,
         is_pre_cutout=is_pre_cutout,
-        source_rgba=src_scene,
-        source_fg_alpha=src_fg_alpha,
     )
 
 
@@ -919,13 +912,6 @@ def save_clean_face_to_library(
     slug = slugify_template_id(name, fallback="Cara_Extraida")
     dst = folder / f"{slug}.png"
     buf = io.BytesIO()
-    clean_head_rgba.convert("RGBA").save(buf, format="PNG", compress_level=6)
-    fd, tname = tempfile.mkstemp(prefix=f".{slug}_", suffix=".tmp", dir=str(folder))
-    tp = Path(tname)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(buf.getvalue())
-        safe_ntfs_replace(tp, dst)
-    finally:
-        tp.unlink(missing_ok=True)
+    clean_head_rgba.convert("RGBA").save(buf, format="PNG", optimize=True, compress_level=6)
+    atomic_write_bytes(dst, buf.getvalue(), prefix=f".{slug}_")
     return (f"ext:{dst.name}", slug, dst)

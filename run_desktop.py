@@ -3,14 +3,31 @@
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import os
 import signal
 import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 WINDOW_TITLE = "DF11 Face Studio — FM27 & NG_Regens"
+
+
+def _win32_user32() -> Any:
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user32.FindWindowW.restype = wintypes.HWND
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    user32.PostMessageW.restype = wintypes.BOOL
+    user32.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    user32.LoadImageW.restype = wintypes.HANDLE
+    user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    user32.SendMessageW.restype = wintypes.LPARAM
+    return user32
 
 
 def _is_webview_lock_held(profile_dir: Path) -> bool:
@@ -31,14 +48,14 @@ def _cleanup_stale_instance(profile_dir: Path) -> None:
     if sys.platform != "win32":
         return
     try:
-        user32 = ctypes.windll.user32
+        user32 = _win32_user32()
         wm_close = 0x0010
         my_pid = os.getpid()
         stale_pids: set[int] = set()
 
         hwnd = int(user32.FindWindowW(None, WINDOW_TITLE) or 0)
-        if hwnd > 0:
-            pid_val = ctypes.c_ulong(0)
+        if hwnd:
+            pid_val = wintypes.DWORD(0)
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_val))
             if pid_val.value and int(pid_val.value) != my_pid:
                 stale_pids.add(int(pid_val.value))
@@ -47,7 +64,7 @@ def _cleanup_stale_instance(profile_dir: Path) -> None:
         if not stale_pids:
             return
 
-        deadline = time.perf_counter() + 0.55
+        deadline = time.perf_counter() + 1.8
         while time.perf_counter() < deadline:
             if not _is_webview_lock_held(profile_dir) and int(user32.FindWindowW(None, WINDOW_TITLE) or 0) == 0:
                 return
@@ -70,12 +87,12 @@ def _bind_win32_app_identity_and_icon(ico_path: Path) -> None:
     if sys.platform != "win32" or not ico_path.is_file():
         return
     try:
-        user32 = ctypes.windll.user32
+        user32 = _win32_user32()
         hwnd = user32.FindWindowW(None, WINDOW_TITLE)
         if hwnd:
-            lr_loadfromfile, image_icon, wm_seticon = 0x0010, 1, 0x0080
-            small = user32.LoadImageW(None, str(ico_path), image_icon, 16, 16, lr_loadfromfile)
-            big = user32.LoadImageW(None, str(ico_path), image_icon, 48, 48, lr_loadfromfile)
+            lr_flags, image_icon, wm_seticon = 0x0010 | 0x8000, 1, 0x0080  # LR_LOADFROMFILE | LR_SHARED
+            small = user32.LoadImageW(None, str(ico_path), image_icon, 16, 16, lr_flags)
+            big = user32.LoadImageW(None, str(ico_path), image_icon, 48, 48, lr_flags)
             if small:
                 user32.SendMessageW(hwnd, wm_seticon, 0, small)
             if big:

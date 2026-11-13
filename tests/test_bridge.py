@@ -21,20 +21,39 @@ def _sample_png_data_url() -> str:
 def test_bridge_bootstrap_and_capability_guard_blocks_unapproved_paths(tmp_path: Path) -> None:
     bridge = StudioBridge(vault_dir=tmp_path / "vault", export_dir=tmp_path / "approved_out", db_path=tmp_path / "state.sqlite3")
     boot = bridge.get_bootstrap_state()
-    assert boot["version"] == "1.6.0" and "1736" in boot["clubs"] and "1744" in boot["clubs"]
-    bridge.upload_studio_image(_sample_png_data_url(), remove_bg=False, harmonize=True, extract_bg=False)
+    assert boot["version"] == "1.6.1" and "1736" in boot["clubs"] and "1744" in boot["clubs"]
+    dp = bridge.load_direct_photo_source(_sample_png_data_url(), file_name="sample.png")
     with pytest.raises(CapabilityError):
-        bridge.export_studio_card({"uid": "29184012", "fmt": "png", "outDir": str(tmp_path / "unapproved_evil")})
+        bridge.export_modular_card({
+            "step1Mode": "direct_photo",
+            "directPhotoId": dp["directPhotoId"],
+            "uid": "29184012",
+            "fmt": "png",
+            "outDir": str(tmp_path / "unapproved_evil"),
+        })
 
 
 def test_bridge_studio_upload_render_and_export_with_config_xml(tmp_path: Path) -> None:
     out_dir = tmp_path / "approved_out"
     bridge = StudioBridge(vault_dir=tmp_path / "vault", export_dir=out_dir, db_path=tmp_path / "state.sqlite3")
-    up = bridge.upload_studio_image(_sample_png_data_url(), remove_bg=False, harmonize=True, extract_bg=True)
-    assert up["isPreCutout"] is True and up["previewDataUrl"].startswith("data:image/png;base64,") and up["cleanBgDataUrl"].startswith("data:image/png;base64,")
-    prev = bridge.render_studio_preview({"kitMode": "club", "clubId": "1736", "bgMode": "white_df11", "scale": 1.0, "offsetX": 0, "offsetY": 0})
+    up = bridge.load_direct_photo_source(_sample_png_data_url(), file_name="portrait.png", params={"harmonize": True})
+    assert up["directPhotoId"].startswith("direct-") and up["previewDataUrl"].startswith("data:image/png;base64,")
+    prev = bridge.render_modular_preview({
+        "step1Mode": "direct_photo",
+        "directPhotoId": up["directPhotoId"],
+        "bgMode": "white_df11",
+        "scale": 1.0,
+        "offsetX": 0,
+        "offsetY": 0,
+    })
     assert prev["previewDataUrl"].startswith("data:image/png;base64,")
-    exp = bridge.export_studio_card({"uid": "r-2002049102", "fmt": "png", "updateConfigXml": True})
+    exp = bridge.export_modular_card({
+        "step1Mode": "direct_photo",
+        "directPhotoId": up["directPhotoId"],
+        "uid": "r-2002049102",
+        "fmt": "png",
+        "updateConfigXml": True,
+    })
     assert Path(exp["savedPath"]).is_file() and (out_dir / "config.xml").is_file()
 
 
@@ -46,38 +65,43 @@ def test_bridge_loads_regen_from_vault_into_studio(tmp_path: Path) -> None:
     bridge = StudioBridge(vault_dir=vault, export_dir=tmp_path / "out", db_path=tmp_path / "state.sqlite3")
     assert bridge.scan_vault_summary()["totalFound"] == 1
     jumped = bridge.load_regen_into_studio("r-7788")
-    assert jumped["uid"] == "r-7788" and jumped["previewDataUrl"].startswith("data:image/png;base64,")
+    assert jumped["uid"] == "r-7788" and jumped["headAssetId"].startswith("head-") and jumped["previewDataUrl"].startswith("data:image/png;base64,")
 
 
-def test_bridge_kit_preview_isolation_extract_bg_and_watcher_lifecycle(tmp_path: Path) -> None:
+def test_bridge_kit_preview_isolation_and_watcher_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import numpy as np
+    import backend.services.vision as vision_mod
     from backend.services.kits import resolve_club_kit
+
+    monkeypatch.setattr(vision_mod, "segment_portrait_classes", lambda im: np.zeros((im.height, im.width, 6), dtype=np.float32))
+    monkeypatch.setattr(vision_mod, "remove_background_birefnet", lambda im: im.convert("RGBA"))
+    monkeypatch.setattr(vision_mod, "detect_face_pose", lambda _im, score_thresh=0.55: None)
 
     vault, out_dir, db = tmp_path / "vault_ro", tmp_path / "out_ok", tmp_path / "state.sqlite3"
     vault.mkdir(parents=True)
     bridge = StudioBridge(vault_dir=vault, export_dir=out_dir, db_path=db)
 
     with pytest.raises(ValueError):
-        bridge.export_studio_card({"uid": "29184012"})
+        bridge.export_modular_card({"uid": "29184012", "wearMode": "club"})
 
-    bridge.upload_studio_image(_sample_png_data_url(), remove_bg=False, harmonize=False, params={"kitMode": "club", "clubId": "1736"})
+    bridge.load_raw_face_source(_sample_png_data_url(), file_name="s.png")
+    aid = bridge.extract_face_from_crop({"wearMode": "club", "clubId": "1736"})["headAssetId"]
     # Preview with custom pattern/secondary must NOT mutate SQLite until explicit export
-    bridge.render_studio_preview({
-        "removeBg": False, "harmonize": True, "kitMode": "club", "clubId": "1736",
+    bridge.render_modular_preview({
+        "headAssetId": aid, "harmonize": True, "wearMode": "club", "clubId": "1736",
         "customKitDirty": True, "customPrimary": "#112233", "customSecondary": "#AABBCC", "customPattern": "stripes",
     })
     assert resolve_club_kit("1736", db_path=db).tier == "seed"
 
-    # Extract clean background directly from stored raw portrait (works for paste/drop/jump)
-    ext = bridge.extract_studio_background({"removeBg": False, "harmonize": True})
-    assert ext["cleanBgDataUrl"].startswith("data:image/png;base64,") and ext["previewDataUrl"].startswith("data:image/png;base64,")
-
     # Vault must never be writable as export target
     with pytest.raises(CapabilityError):
-        bridge.export_studio_card({"uid": "29184012", "outDir": str(vault)})
+        bridge.export_modular_card({"uid": "29184012", "headAssetId": aid, "wearMode": "club", "outDir": str(vault)})
 
     # Explicit export persists custom kit override to SQLite
-    bridge.export_studio_card({
-        "uid": "29184012", "kitMode": "club", "clubId": "1736",
+    bridge.export_modular_card({
+        "uid": "29184012", "headAssetId": aid, "wearMode": "club", "clubId": "1736",
         "customKitDirty": True, "customPrimary": "#112233", "customSecondary": "#AABBCC", "customPattern": "stripes",
     })
     saved_kit = resolve_club_kit("1736", db_path=db)
@@ -92,7 +116,7 @@ def test_bridge_kit_preview_isolation_extract_bg_and_watcher_lifecycle(tmp_path:
     assert bridge._watcher is None
 
 
-def test_bridge_extract_bg_on_opaque_portrait_with_remove_bg_false_and_theme_pref(
+def test_bridge_opaque_precutout_detection_readonly_health_and_theme_pref(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import backend.services.vision as vision_mod
@@ -102,11 +126,7 @@ def test_bridge_extract_bg_on_opaque_portrait_with_remove_bg_false_and_theme_pre
     def _fake_birefnet(img: Image.Image) -> Image.Image:
         nonlocal calls
         calls += 1
-        out = img.convert("RGBA").copy()
-        alpha = Image.new("L", out.size, 0)
-        alpha.paste(255, (70, 50, 150, 200))
-        out.putalpha(alpha)
-        return out
+        return img.convert("RGBA")
 
     monkeypatch.setattr(vision_mod, "remove_background_birefnet", _fake_birefnet)
 
@@ -118,14 +138,12 @@ def test_bridge_extract_bg_on_opaque_portrait_with_remove_bg_false_and_theme_pre
 
     db = tmp_path / "prefs.sqlite3"
     bridge = StudioBridge(vault_dir=tmp_path / "v", export_dir=tmp_path / "o", db_path=db)
-    up = bridge.upload_studio_image(opaque_url, remove_bg=False, harmonize=False)
-    assert up["isPreCutout"] is False and calls == 0
+    # Read-only health probe must never materialize an uninitialized state.sqlite3 on disk
+    health = bridge.probe_architecture_health()
+    assert health["sqliteOk"] is True and not db.exists()
 
-    ext = bridge.extract_studio_background({"removeBg": False, "harmonize": False})
-    assert calls == 1  # Cached across both mask extraction and _compose(removeBg=True)
-    bg_img = Image.open(io.BytesIO(base64.b64decode(ext["cleanBgDataUrl"].split(",", 1)[1]))).convert("RGBA")
-    cx_r, cx_g, cx_b, _ = bg_img.getpixel((110, 120))
-    assert cx_b > 150 and cx_r < 80, f"Expected reconstructed blue wall, got {(cx_r, cx_g, cx_b)}"
+    staged = bridge.load_raw_face_source(opaque_url, file_name="opaque.png")
+    assert staged["isPreCutout"] is False and calls == 0
 
     assert bridge.set_ui_theme("light")["theme"] == "light"
     reloaded = StudioBridge(vault_dir=tmp_path / "v", export_dir=tmp_path / "o", db_path=db)
@@ -138,10 +156,10 @@ def test_bridge_native_open_dialog_remembers_last_directory_and_choose_directory
     img_file = img_dir / "cr7.png"
     img_file.write_bytes(base64.b64decode(_sample_png_data_url().split(",", 1)[1]))
 
-    bg_dir = tmp_path / "MyBackgrounds"
-    bg_dir.mkdir(parents=True)
-    bg_file = bg_dir / "stadium.png"
-    bg_file.write_bytes(base64.b64decode(_sample_png_data_url().split(",", 1)[1]))
+    shirt_dir = tmp_path / "MyShirts"
+    shirt_dir.mkdir(parents=True)
+    shirt_file = shirt_dir / "home_kit.png"
+    shirt_file.write_bytes(base64.b64decode(_sample_png_data_url().split(",", 1)[1]))
 
     db = tmp_path / "dialog_prefs.sqlite3"
     seen_calls: list[tuple[int, str, tuple[str, ...]]] = []
@@ -164,27 +182,27 @@ def test_bridge_native_open_dialog_remembers_last_directory_and_choose_directory
     bridge = StudioBridge(vault_dir=tmp_path / "v", export_dir=tmp_path / "o", db_path=db)
     bridge._attach_window(_FakeWin(img_file))
 
-    res = bridge.pick_and_upload_studio_image(remove_bg=False, harmonize=True, extract_bg=False)
+    res = bridge.pick_direct_photo_source()
     assert res is not None and res["previewDataUrl"].startswith("data:image/png;base64,")
     assert seen_calls[-1][2] == ("Imágenes DF11 (*.png;*.jpg;*.jpeg;*.webp;*.avif)",)
 
     # Cancelled dialog returns None without erasing the remembered folder
     bridge._attach_window(_FakeWin(None))
-    assert bridge.pick_and_upload_studio_image() is None
+    assert bridge.pick_direct_photo_source() is None
 
     # New instance reloads remembered portrait directory from SQLite app_prefs
     bridge2 = StudioBridge(vault_dir=tmp_path / "v", export_dir=tmp_path / "o", db_path=db)
     bridge2._attach_window(_FakeWin(img_file))
-    bridge2.pick_and_upload_studio_image(remove_bg=False, harmonize=False)
+    bridge2.pick_direct_photo_source()
     assert Path(seen_calls[-1][1]).resolve() == img_dir.resolve()
 
-    # Custom background picker remembers its last folder too
-    bridge2._attach_window(_FakeWin(bg_file))
-    bg_res = bridge2.pick_and_upload_custom_background({"bgMode": "custom"})
-    assert bg_res is not None and bg_res["previewDataUrl"].startswith("data:image/png;base64,")
-    bridge2._attach_window(_FakeWin(bg_file))
-    bridge2.pick_and_upload_custom_background({"bgMode": "custom"})
-    assert Path(seen_calls[-1][1]).resolve() == bg_dir.resolve()
+    # Raw shirt picker remembers its own last folder independently
+    bridge2._attach_window(_FakeWin(shirt_file))
+    sh_res = bridge2.pick_raw_shirt_source()
+    assert sh_res is not None and sh_res["rawDataUrl"].startswith("data:image/png;base64,")
+    bridge2._attach_window(_FakeWin(shirt_file))
+    bridge2.pick_raw_shirt_source()
+    assert Path(seen_calls[-1][1]).resolve() == shirt_dir.resolve()
 
 
 def test_bridge_modular_face_extractor_shirt_extractor_and_step_composer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -357,10 +375,6 @@ def test_bridge_judgment_day_regressions_highres_modes_corrupt_files_and_caps(
     ext = bridge.extract_face_from_crop({**staged["suggestedViewport"], "templateId": "", "wearMode": "none"})
     assert ext["autoFit"]["scale"] < 0.65
 
-    # Pre-cutout portrait must refuse extract_studio_background instead of synthesizing pitch-black #000000
-    with pytest.raises(ValueError):
-        bridge.extract_studio_background({"modular": True, "headAssetId": ext["headAssetId"]})
-
     # Switching from wearMode='none' to 'club' with the same autoFit scale keeps canonical DF11 head size
     club_prev = bridge.render_modular_preview({
         "headAssetId": ext["headAssetId"],
@@ -393,14 +407,21 @@ def test_shirt_extractor_opaque_pan_eviction_and_df11_bevel_signature(
 ) -> None:
     import numpy as np
     import backend.services.vision as vision_mod
-    from backend.core.compositor import render_df11_card
-    from backend.services.templates import _frame_to_df11_stage, _has_df11_outer_ring
+    from backend.core.compositor import has_df11_outer_ring, render_df11_card, unmix_df11_classic_bevel_rgba
+    from backend.services.templates import _frame_to_df11_stage
 
     # 1. DF11 outer-ring signature: True on genuine DF11 cards, False on opaque photos & clean cutouts
     df11_card = render_df11_card(None, bg_mode="white_df11")
-    assert _has_df11_outer_ring(df11_card) is True
-    assert _has_df11_outer_ring(Image.new("RGBA", (260, 310), (245, 245, 245, 255))) is False
-    assert _has_df11_outer_ring(Image.new("RGBA", (260, 310), (0, 0, 0, 0))) is False
+    assert has_df11_outer_ring(df11_card) is True
+    assert has_df11_outer_ring(Image.new("RGBA", (260, 310), (245, 245, 245, 255))) is False
+    assert has_df11_outer_ring(Image.new("RGBA", (260, 310), (0, 0, 0, 0))) is False
+
+    # 1b. Classic bevel unmixing inspects full [2:276, 2:222] interior (including top rows 2..17 & left cols 2..19)
+    top_cut_subj = Image.new("RGBA", (260, 310), (35, 95, 195, 255))
+    top_cut_subj.paste((0, 0, 0, 0), (0, 0, 260, 30))
+    classic_top_cut = render_df11_card(top_cut_subj, bg_mode="transparent")
+    unmixed_im, is_precut = unmix_df11_classic_bevel_rgba(classic_top_cut)
+    assert is_precut is True and int(np.asarray(unmixed_im)[4, 112, 3]) == 0
 
     # 2. 1:1 scale parity on 1536x1536 image at zoom=0.20 (52px wide, not clamped to 77px)
     big_stage = _frame_to_df11_stage(Image.new("RGBA", (1536, 1536), (30, 90, 200, 255)), zoom=0.20)
@@ -986,18 +1007,21 @@ def test_v130_round1_vault_overlap_adhoc_eviction_and_regen_jump_guards(
     remix_staff_only = bridge.load_facepack_card(s_url, "29184012.png", "swap_shirt", "", {})
     assert remix_staff_only["templateId"] == ""
 
-    # 5. export_studio_card (legacy-jump path) supports exportTarget='facepack' into approved facepackDir
+    # 5. export_modular_card (regen jump path) supports exportTarget='facepack' into approved facepackDir & forces PNG
     bridge._attach_window(_DirWin(facepack_dir))
     bridge.choose_directory("facepack")
-    exp_legacy_fp = bridge.export_studio_card(
+    exp_mod_fp = bridge.export_modular_card(
         {
+            "headAssetId": jumped["headAssetId"],
+            "wearMode": "club",
+            "clubId": "555000",
             "uid": "r-8801",
             "exportTarget": "facepack",
             "fmt": "jpg",
             "updateConfigXml": True,
         }
     )
-    assert Path(exp_legacy_fp["savedPath"]).resolve() == (facepack_dir / "r-8801.png").resolve()
+    assert Path(exp_mod_fp["savedPath"]).resolve() == (facepack_dir / "r-8801.png").resolve()
     assert (facepack_dir / "r-8801.png").is_file()
 
 

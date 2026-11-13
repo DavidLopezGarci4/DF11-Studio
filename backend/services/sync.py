@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import tempfile
 import threading
 import time
 import unicodedata
@@ -15,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from defusedxml import ElementTree as SafeET
-
+import numpy as np
 from PIL import Image
 
 from backend.core.compositor import (
@@ -24,9 +23,9 @@ from backend.core.compositor import (
     export_df11_bytes,
     has_df11_outer_ring,
     is_df11_pure_size,
+    pad_pure_to_df11_canvas,
     render_df11_card,
     render_df11_pure_card,
-    unfeather_pure_perimeter_rgba,
     unmix_df11_classic_bevel_rgba,
 )
 from backend.core.dsp import (
@@ -35,12 +34,10 @@ from backend.core.dsp import (
     is_genuinely_precut_window,
     resample_linear_subpixel_rgba,
 )
-from backend.core.fm_config import safe_ntfs_replace, upsert_fm_config_xml, validate_fm_uid
+from backend.core.fm_config import atomic_write_bytes, upsert_fm_config_xml, validate_fm_uid
 from backend.core.image_guard import load_guarded_image
-from backend.core.paths import get_default_vault_dir
 from backend.services.kits import (
     dress_or_frame_portrait,
-    get_active_save_id,
     init_state_db,
     load_merged_clubs,
     normalize_save_id,
@@ -70,20 +67,6 @@ class SyncResult:
     failed: int = 0
     cancelled: bool = False
     aborted_by_shrink_guard: bool = False
-
-
-def _ensure_sync_tables(db_path: Path | None) -> None:
-    with init_state_db(db_path):
-        pass
-
-
-def detect_ng_regens_app_config() -> Path:
-    """Read-only probe for NG_Regens (com.cprrylow) directory without mutating external files."""
-    for env_key in ("APPDATA", "LOCALAPPDATA"):
-        base = os.environ.get(env_key)
-        if base and (Path(base) / "com.cprrylow").is_dir():
-            return Path(base) / "com.cprrylow"
-    return get_default_vault_dir()
 
 
 def scan_ng_regens_vault(vault_dir: Path) -> dict[str, Path]:
@@ -117,8 +100,15 @@ def scan_ng_regens_vault(vault_dir: Path) -> dict[str, Path]:
 def check_fm_storage_health(target_path: Path) -> StorageHealthReport:
     """Detect OneDrive sync hazards and low system-drive space for FM26/FM27 facepacks."""
     parts_low = [p.lower() for p in target_path.parts]
-    od_env = os.environ.get("OneDrive", "").lower()
-    in_od = ("onedrive" in parts_low) or bool(od_env and str(target_path).lower().startswith(od_env))
+    resolved_target = target_path.resolve(strict=False)
+    od_roots = [
+        Path(v).resolve(strict=False)
+        for k in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial")
+        if (v := os.environ.get(k, "").strip())
+    ]
+    in_od = any(p.startswith("onedrive") for p in parts_low) or any(
+        resolved_target.is_relative_to(r) for r in od_roots
+    )
     probe = target_path
     while not probe.exists() and probe.parent != probe:
         probe = probe.parent
@@ -151,14 +141,15 @@ def assign_uids_to_club(
     db_path: Path | None = None,
     save_id: str | None = None,
 ) -> int:
-    _ensure_sync_tables(db_path)
-    active_sid = get_active_save_id(db_path)
-    eff_sid = normalize_save_id(save_id) if save_id else active_sid
     cid = str(club_id).strip()
     clean_uids = [validate_fm_uid(u) for u in uids]
     if not clean_uids:
         return 0
+    req_sid = normalize_save_id(save_id) if save_id else None
     with init_state_db(db_path) as conn:
+        row = conn.execute("SELECT save_id FROM save_profiles WHERE is_active=1 LIMIT 1").fetchone()
+        active_sid = str(row[0]) if row and row[0] else "default"
+        eff_sid = req_sid or active_sid
         for u in clean_uids:
             conn.execute(
                 "INSERT INTO save_squad_roster (save_id, uid, club_id, player_name, category) VALUES (?, ?, ?, '', 'player') "
@@ -176,10 +167,7 @@ def import_squad_club_mappings(
     save_id: str | None = None,
 ) -> int:
     """Hardened CSV / HTML / FM Ctrl+P table importer mapping UIDs to Club IDs without Age/Shirt false positives."""
-    _ensure_sync_tables(db_path)
-    active_sid = get_active_save_id(db_path)
-    eff_sid = normalize_save_id(save_id) if save_id else active_sid
-
+    req_sid = normalize_save_id(save_id) if save_id else None
     merged_clubs = load_merged_clubs(db_path)
     known_ids: set[str] = set(merged_clubs.keys())
     by_name: dict[str, str] = {}
@@ -279,6 +267,9 @@ def import_squad_club_mappings(
 
     if roster_rows:
         with init_state_db(db_path) as conn:
+            row = conn.execute("SELECT save_id FROM save_profiles WHERE is_active=1 LIMIT 1").fetchone()
+            active_sid = str(row[0]) if row and row[0] else "default"
+            eff_sid = req_sid or active_sid
             for u, cid, pname in roster_rows:
                 conn.execute(
                     "INSERT INTO save_squad_roster (save_id, uid, club_id, player_name, category) VALUES (?, ?, ?, ?, 'player') "
@@ -303,16 +294,7 @@ def _parse_manifest_sigs(raw_sig: str) -> tuple[str, str]:
 
 
 def _atomic_write_png(dst_dir: Path, uid: str, png_bytes: bytes) -> None:
-    dst_dir.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{uid}_", suffix=".tmp", dir=str(dst_dir))
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(png_bytes)
-        safe_ntfs_replace(tmp_path, dst_dir / f"{uid}.png")
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
+    atomic_write_bytes(dst_dir / f"{uid}.png", png_bytes, prefix=f".{uid}_")
 
 
 def _process_single_regen(
@@ -357,41 +339,36 @@ def _process_single_regen(
         raw_im = guarded.image
         if has_df11_outer_ring(raw_im):
             prep_im, is_precut = unmix_df11_classic_bevel_rgba(raw_im)
+            framed_im = Image.fromarray(
+                resample_linear_subpixel_rgba(prep_im, zoom=1.0, pan_x=0.0, pan_y=0.0, fit_mode="contain" if is_precut else "cover", clamp_to_inner=not is_precut),
+                mode="RGBA",
+            )
         elif is_df11_pure_size(raw_im.size):
-            p_alpha = raw_im.convert("RGBA").getchannel("A")
-            import numpy as np
-
-            p_arr = np.asarray(p_alpha, dtype=np.uint8)
+            p_arr = np.asarray(raw_im.convert("RGBA").getchannel("A"), dtype=np.uint8)
             if is_genuinely_precut_window(p_arr):
-                unfeathered = unfeather_pure_perimeter_rgba(raw_im)
-                win = Image.new("RGBA", (224, 278), (0, 0, 0, 0))
-                win.paste(unfeathered, (2, 1))
-                prep_im, is_precut = win, True
+                framed_im, is_precut = pad_pure_to_df11_canvas(raw_im, unfeather_edges=True), True
             else:
-                prep_im, is_precut = raw_im, False
+                framed_im = Image.fromarray(
+                    resample_linear_subpixel_rgba(raw_im, zoom=1.0, pan_x=0.0, pan_y=0.0, fit_mode="cover", clamp_to_inner=True),
+                    mode="RGBA",
+                )
+                is_precut = False
         else:
-            import numpy as np
-
             a_arr = np.asarray(raw_im.convert("RGBA"), dtype=np.uint8)[:, :, 3]
-            prep_im = raw_im
             is_precut = bool(guarded.is_pre_cutout and is_genuinely_precut_window(a_arr))
+            framed_im = Image.fromarray(
+                resample_linear_subpixel_rgba(raw_im, zoom=1.0, pan_x=0.0, pan_y=0.0, fit_mode="contain" if is_precut else "cover", clamp_to_inner=not is_precut),
+                mode="RGBA",
+            )
 
-        framed_arr = resample_linear_subpixel_rgba(
-            prep_im,
-            zoom=1.0,
-            pan_x=0.0,
-            pan_y=0.0,
-            fit_mode="contain" if is_precut else "cover",
-            clamp_to_inner=not is_precut,
-        )
-        framed_im = Image.fromarray(framed_arr, mode="RGBA")
         if harmonize:
             framed_im = harmonize_oklab_pure_optics(framed_im)
         cutout_im = framed_im if is_precut else clean_pure_contour_zero_ai(framed_im, is_known_precut=False)
         if use_kit and club_id:
             kit = resolve_club_kit(club_id, db_path=db_path)
+            tpl_sig = f":kit={kit.tier}:{kit.primary}:{kit.secondary}:{kit.pattern}"
             subject_rgba = dress_or_frame_portrait(cutout_im, kit_mode="club", kit_spec=kit)
-            subject_rgba = clean_pure_contour_zero_ai(subject_rgba)
+            subject_rgba = clean_pure_contour_zero_ai(subject_rgba, is_known_precut=True)
         else:
             subject_rgba = cutout_im
 
@@ -430,35 +407,38 @@ def sync_ng_regens_batch(
 
     if cancel_event is not None and cancel_event.is_set():
         return SyncResult(0, 0, 0, cancelled=True)
-    _ensure_sync_tables(db_path)
     entries = scan_ng_regens_vault(vault_dir)
     tpl_root = (templates_dir or get_tshirt_templates_dir()).resolve()
-    if apply_club_kits and tpl_root.is_dir() and any(tpl_root.iterdir()):
-        from backend.services.templates import sync_tshirt_templates_dir
+    from backend.services.templates import _season_sort_key, sync_tshirt_templates_dir
 
+    if apply_club_kits and tpl_root.is_dir():
         sync_tshirt_templates_dir(tpl_dir=tpl_root, db_path=db_path)
     with init_state_db(db_path) as conn:
         prev_manifest = {r[0]: (r[1], r[2], r[3]) for r in conn.execute("SELECT uid, mtime_ns, size, sig FROM regen_manifest")}
         squad_clubs = dict(conn.execute("SELECT uid, club_id FROM squad_map").fetchall())
-        club_tpls: dict[str, tuple[Path, str, str]] = {}
-        for cid_raw, fname_raw, collar_raw, sha_raw in conn.execute(
-            "SELECT club_id, filename, collar_json, sha256 FROM shirt_templates "
-            "WHERE club_id != '' AND COALESCE(category, 'player') = 'player' "
-            "ORDER BY COALESCE(is_active_for_club, 1) DESC, LOWER(template_id) ASC"
+        club_tpl_candidates: dict[str, list[tuple[tuple[int, int, int, int, str], Path, str, str]]] = {}
+        for cid_raw, tid_raw, fname_raw, collar_raw, sha_raw, season_raw, mtime_raw, act_raw in conn.execute(
+            "SELECT club_id, template_id, filename, collar_json, sha256, COALESCE(season, ''), COALESCE(mtime_ns, 0), COALESCE(is_active_for_club, 1) "
+            "FROM shirt_templates WHERE club_id != '' AND COALESCE(category, 'player') = 'player'"
         ).fetchall():
             cid_s, fname_s = str(cid_raw), str(fname_raw)
-            if cid_s in club_tpls or not fname_s or Path(fname_s).name != fname_s or ".." in fname_s:
+            if not fname_s or Path(fname_s).name != fname_s or ".." in fname_s:
                 continue
             cand = (tpl_root / fname_s).resolve()
             try:
                 cand.relative_to(tpl_root)
                 if cand.is_file():
-                    club_tpls[cid_s] = (cand, str(collar_raw), str(sha_raw))
+                    rank = (1 if int(act_raw) else 0, *_season_sort_key(str(season_raw), int(mtime_raw), str(tid_raw)))
+                    club_tpl_candidates.setdefault(cid_s, []).append((rank, cand, str(collar_raw), str(sha_raw)))
             except ValueError:
                 continue
+        club_tpls: dict[str, tuple[Path, str, str]] = {
+            cid_s: max(cands, key=lambda item: item[0])[1:] for cid_s, cands in club_tpl_candidates.items()
+        }
     if len(prev_manifest) >= 2 and len(entries) < len(prev_manifest) * 0.5 and not allow_shrink:
         return SyncResult(len(entries), 0, 0, aborted_by_shrink_guard=True)
 
+    proc_kit_sigs: dict[str, str] = {}
     todo: list[tuple[str, Path, str | None, tuple[Path, str, str] | None, bool, bool, str, str]] = []
     skipped = 0
     for uid, src_png in entries.items():
@@ -466,7 +446,15 @@ def sync_ng_regens_batch(
         ctpl = club_tpls.get(cid) if (apply_club_kits and cid) else None
         if ctpl is not None and not ctpl[0].is_file():
             ctpl = None
-        tpl_sig = f":tpl={ctpl[2][:10]}" if ctpl is not None else ""
+        if ctpl is not None:
+            tpl_sig = f":tpl={ctpl[2][:10]}"
+        elif apply_club_kits and cid:
+            if cid not in proc_kit_sigs:
+                ks = resolve_club_kit(cid, db_path=db_path)
+                proc_kit_sigs[cid] = f":kit={ks.tier}:{ks.primary}:{ks.secondary}:{ks.pattern}"
+            tpl_sig = proc_kit_sigs[cid]
+        else:
+            tpl_sig = ""
         target_c_sig = f"v2_p0ai:{cid or ''}:{int(apply_club_kits)}:{int(harmonize)}:{bg_mode}{tpl_sig}"
         target_p_sig = f"v2_p0ai:{cid or ''}:{int(apply_club_kits)}:{int(harmonize)}:pure{tpl_sig}"
         prev_row = prev_manifest.get(uid)
@@ -565,8 +553,8 @@ class QuiescentVaultWatcher:
                     fh.seek(max(0, st.st_size - 64))
                     if b"</record>" not in fh.read():
                         return False
-                self._fired_sig = sig
                 self.on_quiescent()
+                self._fired_sig = sig
                 return True
         except OSError:
             return False

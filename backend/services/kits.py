@@ -81,8 +81,8 @@ _SCHEMA_SQL = (
 def init_state_db(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
     target = (db_path or get_state_db_path()).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
-    cur_ctime = target.stat().st_ctime_ns if target.is_file() else -1
     with _DB_INIT_LOCK:
+        cur_ctime = target.stat().st_ctime_ns if target.is_file() else -1
         need_ddl = _INITIALIZED_DBS.get(target) != cur_ctime or not target.is_file()
         if need_ddl:
             boot_conn = sqlite3.connect(str(target), timeout=10.0)
@@ -158,8 +158,9 @@ def _switch_active_save_conn(conn: sqlite3.Connection, target_sid: str) -> None:
     if cur_row and str(cur_row[0]):
         cur_sid = str(cur_row[0])
         conn.execute(
-            "INSERT OR IGNORE INTO save_squad_roster (save_id, uid, club_id, player_name, category) "
-            "SELECT ?, uid, club_id, '', 'player' FROM squad_map",
+            "INSERT INTO save_squad_roster (save_id, uid, club_id, player_name, category) "
+            "SELECT ?, uid, club_id, '', 'player' FROM squad_map WHERE 1=1 "
+            "ON CONFLICT(save_id, uid) DO UPDATE SET club_id=excluded.club_id",
             (cur_sid,),
         )
     conn.execute("UPDATE save_profiles SET is_active = CASE WHEN save_id=? THEN 1 ELSE 0 END", (target_sid,))

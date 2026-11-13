@@ -29,10 +29,14 @@ import {
   callBridge,
   isTextEntryTarget,
   normalizeCategory,
+  parseSeasonKey,
+  readImageFileAsDataUrl,
   resolveDroppedImageTransfer,
+  resolveNextClubName,
 } from '../lib/ipc';
 
 interface Props {
+  isActive?: boolean;
   clubs: Record<string, ClubSeed>;
   templates: ShirtTemplateInfo[];
   initialCategory?: TemplateCategory;
@@ -69,30 +73,11 @@ export interface ShirtHistoryState {
   past: ShirtSnapshot[];
   present: ShirtSnapshot;
   future: ShirtSnapshot[];
+  activeField?: string | null;
 }
 
 type SliderField = 'zoom' | 'shoulderBoost' | 'detailCrispness';
 type CatalogFilter = 'all' | 'player' | 'goalkeeper' | 'staff' | 'active' | 'history' | 'unassigned';
-
-function parseSeasonKey(season?: string): [number, number] {
-  const s = (season || '').trim();
-  if (!s) return [-1, -1];
-  const m = s.match(/(\d{2,4})\D+(\d{2,4})/);
-  if (m) {
-    let y1 = parseInt(m[1], 10);
-    let y2 = parseInt(m[2], 10);
-    if (y1 < 100) y1 += 2000;
-    if (y2 < 100) y2 += Math.floor(y1 / 100) * 100;
-    if (y2 < y1) y2 += 100;
-    return [y1, y2];
-  }
-  const mSingle = s.match(/(\d{4})/);
-  if (mSingle) {
-    const y = parseInt(mSingle[1], 10);
-    return [y, y];
-  }
-  return [-1, -1];
-}
 
 function getRoleLabel(cat: TemplateCategory): string {
   if (cat === 'goalkeeper') return 'Portero (GK)';
@@ -111,8 +96,6 @@ interface EditDraft {
 }
 
 const MAX_SHIRT_HISTORY = 40;
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
-const NON_TEXT_INPUT_TYPES = new Set(['range', 'checkbox', 'radio', 'button', 'color', 'file']);
 
 const EMPTY_SNAPSHOT: ShirtSnapshot = {
   staged: null,
@@ -137,26 +120,6 @@ const EMPTY_SNAPSHOT: ShirtSnapshot = {
 
 function sanitizeDigitsId(raw: string): string {
   return raw.replace(/[^0-9]/g, '').slice(0, 12);
-}
-
-function resolveNextClubName(
-  prevCid: string,
-  prevName: string,
-  nextCid: string,
-  clubs: Record<string, ClubSeed>,
-  templates: ShirtTemplateInfo[],
-): string {
-  if (!nextCid) return '';
-  const knownNext = clubs[nextCid]?.name;
-  if (knownNext !== undefined) return knownNext;
-  const tplNext = templates.find((t) => t.clubId === nextCid && t.clubName)?.clubName;
-  if (tplNext) return tplNext;
-  const prevCatalogName =
-    (prevCid ? clubs[prevCid]?.name : undefined) ??
-    (prevCid ? templates.find((t) => t.clubId === prevCid && t.clubName)?.clubName : undefined);
-  if (prevCatalogName !== undefined && prevName === prevCatalogName) return '';
-  if (prevCid && !(nextCid.startsWith(prevCid) || prevCid.startsWith(nextCid))) return '';
-  return prevName;
 }
 
 export function pushStagedShirtToHistory(
@@ -245,6 +208,7 @@ function buildParamKey(
 }
 
 export default function ShirtExtractorTool({
+  isActive = true,
   clubs,
   templates,
   initialCategory = 'player',
@@ -410,8 +374,27 @@ export default function ShirtExtractorTool({
         past: [...h.past.slice(-(MAX_SHIRT_HISTORY - 1)), h.present],
         present: next,
         future: [],
+        activeField: null,
       };
     });
+  }, []);
+
+  const commitTextField = useCallback((fieldKey: string, updater: (cur: ShirtSnapshot) => ShirtSnapshot) => {
+    setHistory((h) => {
+      const next = updater(h.present);
+      if (isSameSnap(next, h.present)) return h;
+      const pushPast = h.activeField !== fieldKey;
+      return {
+        past: pushPast ? [...h.past.slice(-(MAX_SHIRT_HISTORY - 1)), h.present] : h.past,
+        present: next,
+        future: [],
+        activeField: fieldKey,
+      };
+    });
+  }, []);
+
+  const endTextFieldSession = useCallback(() => {
+    setHistory((h) => (h.activeField ? { ...h, activeField: null } : h));
   }, []);
 
   const replacePresent = useCallback((updater: (cur: ShirtSnapshot) => ShirtSnapshot) => {
@@ -439,6 +422,7 @@ export default function ShirtExtractorTool({
         past: h.past.slice(0, -1),
         present: previous,
         future: [h.present, ...h.future.slice(0, MAX_SHIRT_HISTORY - 1)],
+        activeField: null,
       };
     });
   }, [busy, cancelTransientInteractions]);
@@ -453,6 +437,7 @@ export default function ShirtExtractorTool({
         past: [...h.past.slice(-(MAX_SHIRT_HISTORY - 1)), h.present],
         present: next,
         future: rest,
+        activeField: null,
       };
     });
   }, [busy, cancelTransientInteractions]);
@@ -466,6 +451,7 @@ export default function ShirtExtractorTool({
   }, [busy, cancelTransientInteractions, commitChange]);
 
   useEffect(() => {
+    if (!isActive) return undefined;
     const onKeyDown = (e: KeyboardEvent) => {
       if (document.querySelector('[role="dialog"]')) return;
       if (isTextEntryTarget(e.target)) return;
@@ -485,7 +471,7 @@ export default function ShirtExtractorTool({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [handleUndo, handleRedo, handleClearCanvas]);
+  }, [isActive, handleUndo, handleRedo, handleClearCanvas]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -582,20 +568,11 @@ export default function ShirtExtractorTool({
   const handleFileBlob = useCallback(
     async (file: File) => {
       if (busy) return;
-      if (file.size > MAX_FILE_BYTES) {
-        setErr('El archivo supera el límite máximo permitido de 20 MB.');
-        return;
-      }
       setBusyLabel('Cargando imagen…');
       setBusy(true);
       setErr('');
       try {
-        const dataUrl = await new Promise<string>((resolve, reject) => {
-          const r = new FileReader();
-          r.onload = () => resolve(String(r.result));
-          r.onerror = () => reject(new Error('No se pudo leer el archivo.'));
-          r.readAsDataURL(file);
-        });
+        const dataUrl = await readImageFileAsDataUrl(file);
         const res = await callBridge<StagedShirtResponse>('load_raw_shirt_source', dataUrl, file.name);
         if (res?.rawDataUrl) applyStage(res);
       } catch (e) {
@@ -615,6 +592,7 @@ export default function ShirtExtractorTool({
   }, [incomingStage, applyStage]);
 
   useEffect(() => {
+    if (!isActive) return undefined;
     const onPaste = (ev: ClipboardEvent) => {
       if (busy || document.querySelector('[role="dialog"]') || isTextEntryTarget(ev.target)) return;
       const f = Array.from(ev.clipboardData?.items ?? [])
@@ -624,7 +602,7 @@ export default function ShirtExtractorTool({
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
-  }, [busy, handleFileBlob]);
+  }, [isActive, busy, handleFileBlob]);
 
   const handleExtractShirt = async () => {
     const cur = historyRef.current.present;
@@ -1351,21 +1329,21 @@ export default function ShirtExtractorTool({
             <div className="flex items-center gap-1" role="group" aria-label="Tipo de prenda para Paso 2">
               <button
                 type="button"
-                onClick={() => replacePresent((s) => ({ ...s, category: 'player', replacePreviousForClub: false }))}
+                onClick={() => commitChange((s) => ({ ...s, category: 'player', replacePreviousForClub: false }))}
                 className={segBtn(snap.category === 'player')}
               >
                 Campo
               </button>
               <button
                 type="button"
-                onClick={() => replacePresent((s) => ({ ...s, category: 'goalkeeper', replacePreviousForClub: false }))}
+                onClick={() => commitChange((s) => ({ ...s, category: 'goalkeeper', replacePreviousForClub: false }))}
                 className={segBtn(snap.category === 'goalkeeper')}
               >
                 Portero (GK)
               </button>
               <button
                 type="button"
-                onClick={() => replacePresent((s) => ({ ...s, category: 'staff', replacePreviousForClub: false }))}
+                onClick={() => commitChange((s) => ({ ...s, category: 'staff', replacePreviousForClub: false }))}
                 className={segBtn(snap.category === 'staff')}
               >
                 Staff
@@ -1397,14 +1375,16 @@ export default function ShirtExtractorTool({
             <input
               aria-label="Nombre de plantilla de camiseta"
               value={snap.displayName}
-              onChange={(e) => replacePresent((s) => ({ ...s, displayName: e.target.value }))}
+              onBlur={endTextFieldSession}
+              onChange={(e) => commitTextField('displayName', (s) => ({ ...s, displayName: e.target.value }))}
               placeholder="Nombre plantilla (ej: Rayo Titular)"
               className="sm:col-span-5 px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
             />
             <input
               aria-label="Temporada de la camiseta"
               value={snap.season}
-              onChange={(e) => replacePresent((s) => ({ ...s, season: e.target.value }))}
+              onBlur={endTextFieldSession}
+              onChange={(e) => commitTextField('season', (s) => ({ ...s, season: e.target.value }))}
               placeholder="Temporada (ej: 2026/27)"
               className="sm:col-span-3 px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 tabular-nums"
             />
@@ -1425,7 +1405,7 @@ export default function ShirtExtractorTool({
               onChange={(e) => {
                 const cid = e.target.value;
                 const knownName = cid ? clubs[cid]?.name ?? '' : '';
-                replacePresent((s) => ({
+                commitChange((s) => ({
                   ...s,
                   clubId: cid,
                   clubName: knownName,
@@ -1451,9 +1431,10 @@ export default function ShirtExtractorTool({
               aria-label="ID numérico del club"
               inputMode="numeric"
               value={snap.clubId}
+              onBlur={endTextFieldSession}
               onChange={(e) => {
                 const cid = sanitizeDigitsId(e.target.value);
-                replacePresent((s) => ({
+                commitTextField('clubId', (s) => ({
                   ...s,
                   clubId: cid,
                   clubName: resolveNextClubName(s.clubId, s.clubName, cid, clubs, templates),
@@ -1469,7 +1450,8 @@ export default function ShirtExtractorTool({
                 aria-label="Nombre del club"
                 value={snap.clubName}
                 disabled={!snap.clubId}
-                onChange={(e) => replacePresent((s) => ({ ...s, clubName: e.target.value }))}
+                onBlur={endTextFieldSession}
+                onChange={(e) => commitTextField('clubName', (s) => ({ ...s, clubName: e.target.value }))}
                 placeholder={snap.clubId ? 'Nombre del club' : 'Indica #ID primero'}
                 className="w-full px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 disabled:opacity-50"
               />
@@ -1494,7 +1476,7 @@ export default function ShirtExtractorTool({
                   type="checkbox"
                   checked={snap.isActiveForClub || snap.replacePreviousForClub}
                   disabled={snap.replacePreviousForClub}
-                  onChange={(e) => replacePresent((s) => ({ ...s, isActiveForClub: e.target.checked }))}
+                  onChange={(e) => commitChange((s) => ({ ...s, isActiveForClub: e.target.checked }))}
                   className="accent-emerald-600"
                 />
                 <span>
@@ -1507,7 +1489,7 @@ export default function ShirtExtractorTool({
                     type="checkbox"
                     checked={snap.replacePreviousForClub}
                     onChange={(e) =>
-                      replacePresent((s) => ({
+                      commitChange((s) => ({
                         ...s,
                         replacePreviousForClub: e.target.checked,
                         isActiveForClub: e.target.checked ? true : s.isActiveForClub,

@@ -4,7 +4,7 @@ import AboutModal from './components/AboutModal';
 import FaqModal from './components/FaqModal';
 import RegensSyncView from './components/RegensSyncView';
 import StudioView, { StudioJumpPayload, ToolTab } from './components/StudioView';
-import { BootstrapState, CaptureTarget, ClubSeed, ExportVariant, StorageHealth, callBridge } from './lib/ipc';
+import { BootstrapState, CAPTURE_MENU_ITEMS, CaptureTarget, ClubSeed, ExportVariant, StorageHealth, callBridge } from './lib/ipc';
 
 const AppArchitectureGraph = lazy(() => import('./components/AppArchitectureGraph'));
 
@@ -184,7 +184,7 @@ export default function App() {
               DF11 Face Studio
             </span>
             <span className="text-[11px] px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 tabular-nums">
-              v{boot?.version ?? '1.6.0'}
+              v{boot?.version ?? '1.6.1'}
             </span>
           </div>
 
@@ -258,52 +258,26 @@ export default function App() {
                   aria-label="Destinos independientes de captura"
                   className="absolute right-0 top-full mt-1.5 z-50 w-72 rounded-lg border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg py-1 text-xs text-slate-800 dark:text-slate-200"
                 >
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => triggerGlobalCapture('direct_photo', true, false)}
-                    className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-between"
-                  >
-                    <span>Foto Directa + Marco DF11</span>
-                    <span className="text-[10px] text-slate-400 dark:text-slate-500">Fondo original</span>
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => triggerGlobalCapture('direct_photo', true, true)}
-                    className="w-full px-3 py-1.5 text-left hover:bg-emerald-50 dark:hover:bg-slate-800 flex items-center justify-between text-emerald-700 dark:text-emerald-400"
-                  >
-                    <span>Foto Directa · Capa Blanca DF11</span>
-                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400">Capa blanca</span>
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => triggerGlobalCapture('raw_face', true)}
-                    className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-between"
-                  >
-                    <span>Recortar Cara</span>
-                    <span className="text-[10px] text-slate-400 dark:text-slate-500">Extractor</span>
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => triggerGlobalCapture('raw_shirt', true)}
-                    className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-between"
-                  >
-                    <span>Extraer Camiseta</span>
-                    <span className="text-[10px] text-slate-400 dark:text-slate-500">2× SSAA</span>
-                  </button>
-                  <div className="my-1 border-t border-slate-100 dark:border-white/5" />
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => triggerGlobalCapture('save_png', true)}
-                    className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-between"
-                  >
-                    <span>Guardar PNG como…</span>
-                    <span className="text-[10px] text-slate-400 dark:text-slate-500">.png</span>
-                  </button>
+                  {CAPTURE_MENU_ITEMS.map((item) => (
+                    <div key={`${item.target}-${String(item.directBgReplace ?? '')}`}>
+                      {item.dividerBefore && <div className="my-1 border-t border-slate-100 dark:border-white/5" />}
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => triggerGlobalCapture(item.target, true, item.directBgReplace)}
+                        className={`w-full px-3 py-1.5 text-left flex items-center justify-between ${
+                          item.accent
+                            ? 'hover:bg-emerald-50 dark:hover:bg-slate-800 text-emerald-700 dark:text-emerald-400'
+                            : 'hover:bg-slate-100 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        <span>{item.label}</span>
+                        <span className={`text-[10px] ${item.accent ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400 dark:text-slate-500'}`}>
+                          {item.hint}
+                        </span>
+                      </button>
+                    </div>
+                  ))}
                   <div className="my-1 border-t border-slate-100 dark:border-white/5" />
                   <button
                     type="button"
@@ -326,15 +300,26 @@ export default function App() {
             <button type="button" aria-label="Acerca de DF11 Face Studio" title="Acerca de" onClick={() => setModal('about')} className="p-1.5 rounded-lg border border-slate-200/80 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
               <Info className="w-4 h-4" />
             </button>
-            <button type="button" aria-label="Cambiar tema" title="Cambiar modo claro/oscuro" onClick={() => setDark((d) => { const next = !d; void callBridge('set_ui_theme', next ? 'dark' : 'light'); return next; })} className="p-1.5 rounded-lg border border-slate-200/80 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+            <button
+              type="button"
+              aria-label="Cambiar tema"
+              title="Cambiar modo claro/oscuro"
+              onClick={() => {
+                const next = !dark;
+                setDark(next);
+                void callBridge('set_ui_theme', next ? 'dark' : 'light').catch(() => {});
+              }}
+              className="p-1.5 rounded-lg border border-slate-200/80 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+            >
               {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
           </div>
         </div>
       </header>
       <main className="flex-1 w-full max-w-[1600px] mx-auto px-4 py-2.5 lg:h-[calc(100vh-3rem)] lg:overflow-hidden flex flex-col min-h-0">
-        {tab === 'studio' ? (
+        <div className={tab === 'studio' ? 'contents' : 'hidden'}>
           <StudioView
+            isActive={tab === 'studio'}
             clubs={clubs}
             onClubsUpdated={setClubs}
             exportDir={exportDir}
@@ -371,9 +356,12 @@ export default function App() {
             hideInternalToolbar
             initialHotkeyEnabled={captureHotkey}
             externalCaptureReq={externalCaptureReq}
+            onConsumeExternalCapture={() => setExternalCaptureReq(null)}
           />
-        ) : (
+        </div>
+        <div className={tab === 'sync' ? 'contents' : 'hidden'}>
           <RegensSyncView
+            isActive={tab === 'sync'}
             clubs={clubs}
             vaultDir={vaultDir}
             exportDir={exportDir}
@@ -397,7 +385,7 @@ export default function App() {
             onExportVariantChange={handleExportVariantChange}
             onJumpToStudio={(payload) => { setStudioJump(payload); setStudioToolTab('composer'); setTab('studio'); }}
           />
-        )}
+        </div>
       </main>
       {modal === 'faq' && <FaqModal onClose={() => setModal(null)} />}
       {modal === 'about' && <AboutModal onClose={() => setModal(null)} onOpenGraph={() => setModal('graph')} />}

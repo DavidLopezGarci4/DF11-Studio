@@ -91,50 +91,64 @@ def _restore_windows_after_capture(hidden_windows: list[Any]) -> None:
         try:
             if hasattr(win, "show"):
                 win.show()
-            if hasattr(win, "restore"):
-                win.restore()
         except Exception:
             pass
 
 
 def capture_screen_png(
-    hwnd: int | None = None,
     clipper_cmd: list[str] | None = None,
     host_window: Any = None,
     extra_windows: list[Any] | None = None,
     restore_after: bool = True,
 ) -> ScreenCaptureResult | None:
     """Launch PSF-signed PerMonitorV2 screen_clip_worker after DWM finishes hiding app windows."""
-    _ = hwnd
-    cmd = clipper_cmd or get_screen_clipper_cmd()
+    cmd = [*(clipper_cmd or get_screen_clipper_cmd()), "--watch-stdin"]
     all_wins = [w for w in [host_window, *(extra_windows or [])] if w is not None]
     hidden_wins = _hide_windows_for_capture(all_wins)
+    proc: subprocess.Popen[bytes] | None = None
+    timed_out = threading.Event()
+    watchdog: threading.Timer | None = None
+    stdout_bytes = b""
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             cwd=str(WORKSPACE_ROOT),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=300,
-            check=False,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
+        watchdog = threading.Timer(300.0, lambda: (timed_out.set(), proc.kill()))
+        watchdog.daemon = True
+        watchdog.start()
+        if proc.stdout is not None:
+            stdout_bytes = proc.stdout.read()
+        proc.wait(timeout=5.0)
     except subprocess.TimeoutExpired:
+        if proc is not None:
+            proc.kill()
         return None
     finally:
+        if watchdog is not None:
+            watchdog.cancel()
+        if proc is not None and proc.stdin is not None:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
         if restore_after:
             _restore_windows_after_capture(hidden_wins)
 
-    if proc.returncode == 1 or not proc.stdout:
+    if timed_out.is_set() or proc is None or proc.returncode == 1 or not stdout_bytes:
         return None
     if proc.returncode != 0:
         raise RuntimeError("El capturador nativo de pantalla devolvió un error inesperado.")
 
-    guarded = load_guarded_image(proc.stdout)
+    guarded = load_guarded_image(stdout_bytes)
     w, h = guarded.original_size
     drm_warn = detect_drm_black_frame(guarded.image)
     low_res = bool(min(w, h) < 150)
     return ScreenCaptureResult(
-        png_bytes=proc.stdout,
+        png_bytes=stdout_bytes,
         width=w,
         height=h,
         drm_black_warning=drm_warn,
@@ -189,15 +203,17 @@ class GlobalCaptureHotkey:
     def _loop(self) -> None:
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
+        msg = wintypes.MSG()
+        # Force Win32 thread message queue creation before exposing _thread_id / _ready to stop()
+        user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
         self._thread_id = int(kernel32.GetCurrentThreadId())
         ok = bool(user32.RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_X))
         self._registered = ok
         self._ready.set()
         if not ok:
             return
-        msg = wintypes.MSG()
         try:
-            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
                 if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
                     threading.Thread(target=self._on_trigger, daemon=True).start()
         finally:

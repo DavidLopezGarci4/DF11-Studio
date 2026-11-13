@@ -9,7 +9,7 @@ describe('FAQ and About human metadata modals', () => {
   it('renders adaptive FAQ split-view with DF11 Pure/Dual expanded by default and auto-expands matching items on search', () => {
     render(<FaqModal onClose={() => {}} />);
     expect(screen.getByText(/Centro de Ayuda & FAQ/i)).toBeInTheDocument();
-    expect(screen.getByText(/4 accesos directos/i)).toBeInTheDocument();
+    expect(screen.getByText(/3 accesos directos/i)).toBeInTheDocument();
     const search = screen.getByPlaceholderText(/Buscar dudas/i);
     fireEvent.change(search, { target: { value: 'OneDrive' } });
     expect(screen.getByText(/Game Pass/i)).toBeInTheDocument();
@@ -31,11 +31,11 @@ describe('FAQ and About human metadata modals', () => {
     expect(screen.getByText(/Inspeccionar Salud de la Arquitectura/i)).toBeInTheDocument();
   });
 
-  it('renders human-readable v1.6.0 release highlights and collapsible previous history without developer jargon', () => {
+  it('renders human-readable v1.6.1 release highlights and collapsible previous history without developer jargon', () => {
     render(<AboutModal onClose={() => {}} onOpenGraph={() => {}} />);
-    expect(screen.getAllByText(/v1\.6\.0/i).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/Build 10600/i)).toBeInTheDocument();
-    expect(screen.getByText(/Camisetas de Campo, Portero \(GK\) y Staff por club y temporada/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/v1\.6\.1/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Build 10601/i)).toBeInTheDocument();
+    expect(screen.getByText(/Cambio de pestaña sin perder tu montaje/i)).toBeInTheDocument();
     expect(screen.getAllByText(/100% Local/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/Historial de versiones anteriores/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Inspeccionar Salud de la Arquitectura/i })).toBeInTheDocument();

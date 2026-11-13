@@ -11,6 +11,8 @@ build/
 *.egg-info/
 *.onnx
 *.part
+.tmp*
+*.rar
 *.sqlite3*
 Thumbs.db
 Desktop.ini
